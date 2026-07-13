@@ -188,8 +188,12 @@ public sealed class LyricsMetadata
     /// <summary>제공자 식별자 (예: "LRCLIB", "NetEase")</summary>
     public string? ServiceName { get; set; }
 
-    /// <summary>검색 당시 요청 정보 — 랭킹 계산에 사용</summary>
-    public string? SearchTitle { get; set; }
-    public string? SearchArtist { get; set; }
-    public double? SearchDuration { get; set; }
+    /// <summary>제공자 내부 곡 식별 토큰 (재취득/캐시 키용)</summary>
+    public string? ServiceToken { get; set; }
+
+    /// <summary>앨범아트 URL</summary>
+    public Uri? ArtworkUrl { get; set; }
+
+    /// <summary>검색 당시 요청 — 랭킹 계산에 사용</summary>
+    public Search.LyricsSearchRequest? Request { get; set; }
 }
