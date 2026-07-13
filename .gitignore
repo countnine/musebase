@@ -1,0 +1,28 @@
+## .NET / Visual Studio
+bin/
+obj/
+out/
+publish/
+*.user
+*.suo
+.vs/
+.vscode/
+*.binlog
+
+## Build artifacts
+artifacts/
+TestResults/
+*.nupkg
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Porting reference checkouts (not part of this repo)
+external/
+
+## Local settings / secrets
+*.local.json
+appsettings.Development.json
+secrets.json
