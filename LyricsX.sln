@@ -7,6 +7,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "spikes", "spikes", "{6B1024
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spike.Smtc", "spikes\Spike.Smtc\Spike.Smtc.csproj", "{767ED419-F293-4407-86F6-A8071FE9B5F1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spike.Overlay", "spikes\Spike.Overlay\Spike.Overlay.csproj", "{470058C6-D42F-448D-8B07-47E5C2A8BB94}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +22,13 @@ Global
 		{767ED419-F293-4407-86F6-A8071FE9B5F1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{767ED419-F293-4407-86F6-A8071FE9B5F1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{767ED419-F293-4407-86F6-A8071FE9B5F1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{470058C6-D42F-448D-8B07-47E5C2A8BB94}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{470058C6-D42F-448D-8B07-47E5C2A8BB94}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{470058C6-D42F-448D-8B07-47E5C2A8BB94}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{470058C6-D42F-448D-8B07-47E5C2A8BB94}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{767ED419-F293-4407-86F6-A8071FE9B5F1} = {6B10242B-5617-4D10-8710-14F7FD8C2A2B}
+		{470058C6-D42F-448D-8B07-47E5C2A8BB94} = {6B10242B-5617-4D10-8710-14F7FD8C2A2B}
 	EndGlobalSection
 EndGlobal
