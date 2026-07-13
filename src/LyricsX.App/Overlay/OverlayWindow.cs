@@ -87,6 +87,9 @@ public sealed class OverlayWindow : Window
 
         Loaded += (_, _) =>
         {
+            // 소유 창은 항상 소유자 위에 유지됨 — 이동 모드에서 오버레이를
+            // 드래그해도 자물쇠 버튼이 아래로 깔려 클릭 불능이 되지 않는다
+            _lockButton.Owner = this;
             RestorePosition();
             UpdateTextLayout();
             _hoverTimer.Start();
