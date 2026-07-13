@@ -19,9 +19,23 @@ internal static class Program
         {
             var settings = AppSettings.Load();
             var nowPlaying = await NowPlayingService.CreateAsync();
+
+            // 번역: SQLite 라인 캐시 + DeepL(키 있을 때만)
+            var cacheDb = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LyricsX", "translations.db");
+            var translationCache = new LyricsX.Core.Translation.SqliteTranslationCache(cacheDb);
+            LyricsX.Core.Translation.LyricsTranslationService BuildTranslation() => new(
+                string.IsNullOrWhiteSpace(settings.DeeplApiKey)
+                    ? null
+                    : new LyricsX.Core.Translation.DeeplTranslator(settings.DeeplApiKey),
+                translationCache);
+
             var coordinator = new LyricsCoordinator(nowPlaying, app.Dispatcher)
             {
                 ManualOffsetSeconds = settings.ManualOffsetSeconds,
+                Translation = BuildTranslation(),
+                TargetLanguage = settings.EffectiveTargetLanguage,
             };
 
             var overlay = new OverlayWindow(settings);
@@ -35,7 +49,26 @@ internal static class Program
             var offsetPlus = new MenuItem { Header = "가사 빠르게 (+0.5초)" };
             var offsetMinus = new MenuItem { Header = "가사 느리게 (-0.5초)" };
             var offsetReset = new MenuItem { Header = "오프셋 초기화" };
+            var settingsItem = new MenuItem { Header = "설정…" };
             var exitItem = new MenuItem { Header = "종료" };
+
+            SettingsWindow? settingsWindow = null;
+            settingsItem.Click += (_, _) =>
+            {
+                if (settingsWindow is { IsLoaded: true })
+                {
+                    settingsWindow.Activate();
+                    return;
+                }
+                settingsWindow = new SettingsWindow(settings, onSaved: () =>
+                {
+                    coordinator.Translation = BuildTranslation();
+                    coordinator.TargetLanguage = settings.EffectiveTargetLanguage;
+                    overlay.ApplyFontSizes();
+                    Log.Write($"[settings] 저장됨: lang={settings.EffectiveTargetLanguage}, key={(settings.DeeplApiKey is null ? "없음" : "설정됨")}");
+                });
+                settingsWindow.Show();
+            };
 
             void UpdateOffsetLabel() =>
                 offsetLabel.Header = $"싱크 오프셋: {coordinator.ManualOffsetSeconds:+0.0;-0.0;0}초";
@@ -73,6 +106,7 @@ internal static class Program
             menu.Items.Add(offsetMinus);
             menu.Items.Add(offsetReset);
             menu.Items.Add(new Separator());
+            menu.Items.Add(settingsItem);
             menu.Items.Add(exitItem);
 
             var tray = new TaskbarIcon
@@ -134,7 +168,7 @@ internal static class Program
                 Log.Write("[demo] 데모 모드 시작");
             }
 
-            Log.Write("=== LyricsX 시작 (M3) ===");
+            Log.Write("=== LyricsX 시작 (M4) ===");
         };
         app.Run();
     }

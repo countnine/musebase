@@ -1,6 +1,7 @@
 using System.Windows.Threading;
 using LyricsX.Core;
 using LyricsX.Core.Search;
+using LyricsX.Core.Translation;
 
 namespace LyricsX.App.Services;
 
@@ -27,6 +28,14 @@ public sealed class LyricsCoordinator : IDisposable
 
     /// <summary>수동 싱크 오프셋(초). +면 가사가 빨라진다.</summary>
     public double ManualOffsetSeconds { get; set; }
+
+    /// <summary>기계번역 서비스 (키 미설정 시 IsEnabled=false로 무동작)</summary>
+    public LyricsTranslationService? Translation { get; set; }
+
+    /// <summary>DeepL target_lang (예: KO). 표시 우선순위 tr:{lang} → tr에도 사용.</summary>
+    public string TargetLanguage { get; set; } = "KO";
+
+    private string TargetLangLower => TargetLanguage.ToLowerInvariant();
 
     /// <summary>현재 라인 변경 (null = 가사 없음/재생 없음)</summary>
     public event Action<DisplayLine?>? CurrentLineChanged;
@@ -91,6 +100,7 @@ public sealed class LyricsCoordinator : IDisposable
                     CurrentLyrics = lyrics;
                     _lastLineIndex = int.MinValue; // 라인 재계산 강제
                     StatusChanged?.Invoke($"{track} — {lyrics.Metadata.ServiceName} (q={lyrics.Quality():0.00})");
+                    await TranslateAsync(lyrics, cts.Token);
                 }
             }
 
@@ -100,6 +110,22 @@ public sealed class LyricsCoordinator : IDisposable
         catch (OperationCanceledException)
         {
             // 다음 트랙으로 교체됨
+        }
+    }
+
+    /// <summary>대상 언어 MT 보장 후 현재 라인 갱신 (캐시 히트면 즉시, 미스면 API 1회)</summary>
+    private async Task TranslateAsync(Lyrics lyrics, CancellationToken ct)
+    {
+        if (Translation is not { IsEnabled: true } service) return;
+        try
+        {
+            var changed = await service.EnsureTranslatedAsync(lyrics, TargetLanguage, ct);
+            if (changed > 0 && ReferenceEquals(CurrentLyrics, lyrics))
+                _lastLineIndex = int.MinValue; // 번역 반영 위해 현재 라인 재발행
+        }
+        catch (OperationCanceledException)
+        {
+            // 트랙 교체됨
         }
     }
 
@@ -125,7 +151,9 @@ public sealed class LyricsCoordinator : IDisposable
             else
             {
                 var line = lyrics.Lines[index];
-                CurrentLineChanged?.Invoke(new DisplayLine(line.Content, line.Attachments.Translation()));
+                // 표시 우선순위: tr:{target}(MT) → tr(제공자) 폴백
+                CurrentLineChanged?.Invoke(new DisplayLine(
+                    line.Content, line.Attachments.Translation(TargetLangLower, null)));
             }
         }
 

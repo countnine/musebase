@@ -87,6 +87,13 @@ public sealed class OverlayWindow : Window
     /// <summary>현재 라인 진행 비율(0~1) — 카라오케 채움</summary>
     public void SetProgress(double progress) => _originalLine.KaraokeProgress = progress;
 
+    /// <summary>설정 변경 후 폰트 크기 즉시 반영</summary>
+    public void ApplyFontSizes()
+    {
+        _originalLine.FontSize = _settings.FontSize;
+        _translationLine.FontSize = _settings.TranslationFontSize;
+    }
+
     /// <summary>이동 모드 토글. 이동 모드에서는 배경을 살짝 표시해 위치를 보여준다.</summary>
     public void SetMoveMode(bool moveMode)
     {
