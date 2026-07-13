@@ -1,10 +1,10 @@
-// LyricsX for Windows — 엔트리포인트 + 트레이 스켈레톤 (M2)
-// 오버레이(M3) 전까지는 트레이 툴팁으로 현재 라인을 확인한다.
+// LyricsX for Windows — 엔트리포인트 (M3: 오버레이 + 트레이 제어)
 
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using H.NotifyIcon;
+using LyricsX.App.Overlay;
 using LyricsX.App.Services;
 
 namespace LyricsX.App;
@@ -17,15 +17,61 @@ internal static class Program
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Startup += async (_, _) =>
         {
+            var settings = AppSettings.Load();
             var nowPlaying = await NowPlayingService.CreateAsync();
-            var coordinator = new LyricsCoordinator(nowPlaying, app.Dispatcher);
+            var coordinator = new LyricsCoordinator(nowPlaying, app.Dispatcher)
+            {
+                ManualOffsetSeconds = settings.ManualOffsetSeconds,
+            };
 
+            var overlay = new OverlayWindow(settings);
+            if (settings.OverlayVisible) overlay.Show();
+
+            // ---- 트레이 메뉴 ----
             var trackItem = new MenuItem { Header = "재생 중인 곡 없음", IsEnabled = false };
+            var overlayToggle = new MenuItem { Header = "오버레이 표시", IsCheckable = true, IsChecked = settings.OverlayVisible };
+            var moveToggle = new MenuItem { Header = "오버레이 위치 이동 모드", IsCheckable = true };
+            var offsetLabel = new MenuItem { IsEnabled = false };
+            var offsetPlus = new MenuItem { Header = "가사 빠르게 (+0.5초)" };
+            var offsetMinus = new MenuItem { Header = "가사 느리게 (-0.5초)" };
+            var offsetReset = new MenuItem { Header = "오프셋 초기화" };
             var exitItem = new MenuItem { Header = "종료" };
+
+            void UpdateOffsetLabel() =>
+                offsetLabel.Header = $"싱크 오프셋: {coordinator.ManualOffsetSeconds:+0.0;-0.0;0}초";
+            UpdateOffsetLabel();
+
+            overlayToggle.Click += (_, _) =>
+            {
+                settings.OverlayVisible = overlayToggle.IsChecked;
+                if (overlayToggle.IsChecked) overlay.Show();
+                else overlay.Hide();
+                settings.Save();
+            };
+            moveToggle.Click += (_, _) => overlay.SetMoveMode(moveToggle.IsChecked);
+            offsetPlus.Click += (_, _) => AdjustOffset(0.5);
+            offsetMinus.Click += (_, _) => AdjustOffset(-0.5);
+            offsetReset.Click += (_, _) => AdjustOffset(null);
             exitItem.Click += (_, _) => app.Shutdown();
+
+            void AdjustOffset(double? delta)
+            {
+                coordinator.ManualOffsetSeconds = delta is { } d ? coordinator.ManualOffsetSeconds + d : 0;
+                settings.ManualOffsetSeconds = coordinator.ManualOffsetSeconds;
+                settings.Save();
+                UpdateOffsetLabel();
+            }
 
             var menu = new ContextMenu();
             menu.Items.Add(trackItem);
+            menu.Items.Add(new Separator());
+            menu.Items.Add(overlayToggle);
+            menu.Items.Add(moveToggle);
+            menu.Items.Add(new Separator());
+            menu.Items.Add(offsetLabel);
+            menu.Items.Add(offsetPlus);
+            menu.Items.Add(offsetMinus);
+            menu.Items.Add(offsetReset);
             menu.Items.Add(new Separator());
             menu.Items.Add(exitItem);
 
@@ -35,8 +81,13 @@ internal static class Program
                 ToolTipText = "LyricsX",
                 ContextMenu = menu,
             };
-            app.Exit += (_, _) => tray.Dispose();
+            app.Exit += (_, _) =>
+            {
+                tray.Dispose();
+                settings.Save();
+            };
 
+            // ---- 이벤트 배선 ----
             coordinator.StatusChanged += status =>
             {
                 trackItem.Header = status;
@@ -45,21 +96,51 @@ internal static class Program
             };
             coordinator.CurrentLineChanged += line =>
             {
+                overlay.SetLine(line);
                 if (line?.Content is { } content)
-                {
-                    var text = line.Translation is { } tr ? $"{content}\n{tr}" : content;
-                    tray.ToolTipText = $"LyricsX\n{text}";
                     Log.Write($"[line] {content}{(line.Translation is { } t ? $" / {t}" : "")}");
-                }
             };
+            coordinator.LineProgressChanged += overlay.SetProgress;
 
-            Log.Write("=== LyricsX 시작 ===");
+            // --demo: 내장 데모 가사를 3초 주기로 순환 (오버레이 검증/시연용, SMTC 불필요)
+            if (args.Contains("--demo"))
+            {
+                overlay.Show();
+                var demoLines = new (string Content, string Translation)[]
+                {
+                    ("沈むように溶けてゆくように", "가라앉듯이 녹아내리듯이"),
+                    ("二人だけの空が広がる夜に", "둘만의 하늘이 펼쳐지는 밤에"),
+                    ("「さよなら」だけだった", "「안녕」뿐이었어"),
+                };
+                var demoIndex = 0;
+                var started = DateTime.Now;
+                var demoTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(50),
+                };
+                demoTimer.Tick += (_, _) =>
+                {
+                    var elapsed = (DateTime.Now - started).TotalSeconds;
+                    var slot = (int)(elapsed / 3.0) % demoLines.Length;
+                    if (slot != demoIndex || elapsed < 0.1)
+                    {
+                        demoIndex = slot;
+                        var (c, t) = demoLines[slot];
+                        overlay.SetLine(new DisplayLine(c, t));
+                    }
+                    overlay.SetProgress(elapsed % 3.0 / 3.0);
+                };
+                demoTimer.Start();
+                Log.Write("[demo] 데모 모드 시작");
+            }
+
+            Log.Write("=== LyricsX 시작 (M3) ===");
         };
         app.Run();
     }
 }
 
-/// <summary>M2 검증용 경량 파일 로그 (%LOCALAPPDATA%\LyricsX\app.log)</summary>
+/// <summary>경량 파일 로그 (%LOCALAPPDATA%\LyricsX\app.log)</summary>
 internal static class Log
 {
     private static readonly string LogPath = InitPath();
