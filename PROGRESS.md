@@ -4,10 +4,13 @@
 > 재개 방법: 세션 리셋 후 "이어서"라고 입력.
 
 ## ▶ 다음 세션 첫 작업
-- [ ] **M3 시작**: 오버레이 승격 — `spikes/Spike.Overlay`의 `OutlinedTextElement`+클릭스루 창을
-  `src/LyricsX.App/Overlay/`로 이동, `LyricsCoordinator.CurrentLineChanged`에 연결
-  - 이후: 트레이 메뉴에 오버레이 토글/오프셋 ±, 다중 모니터, 전체화면 감지
-  - 사용자 육안 검증 필요: 클릭스루 실제 마우스 통과, 실제 음악(Spotify 등)으로 동기 확인
+- [ ] **M4 시작**: 번역 계층 — `TranslationService`(제공자 번역 → DeepL 폴백, 라인 캐시 SQLite 또는 JSON)
+  - AppSettings에 DeeplApiKey/TargetLanguage 필드 이미 존재 (기본 KO)
+  - DeepL API: POST https://api-free.deepl.com/v2/translate (free) / api.deepl.com (pro) — 키 형식으로 자동 판별(:fx 접미사 = free)
+  - 곡 단위 배치 번역(라인 배열 한 번에), 캐시 키 = (원문, target_lang)
+  - 이후: 설정 UI(트레이 → 설정 창, 키 입력/언어 선택/폰트 크기)
+- [ ] **사용자 육안 검증 대기**: 실제 음악(Spotify/YouTube Music 등)으로 오버레이 동기·클릭스루 확인.
+  데모: `LyricsX.exe --demo`로 언제든 오버레이 확인 가능
 
 ## 마일스톤 현황
 - [x] **M0** 스파이크 — 완료 (2026-07-13). 오버레이/렌더 스택 = **WPF 확정**
@@ -19,7 +22,10 @@
 - [x] **M2** NowPlaying + SyncScheduler + 트레이 — 완료 (2026-07-13)
   - NowPlayingService(SMTC+보간), LyricsCoordinator(스트리밍 검색+점진 교체+100ms 틱), 트레이 툴팁
   - 스모크 검증: 트랙 감지→검색→랭킹 교체 첫 결과 ~0.9s (스트리밍이 9.4s 배치 문제 완화)
-- [ ] **M3** 오버레이 완성 (Spike.Overlay 승격·확장) ← 다음
+- [x] **M3** 오버레이 완성 — 완료 (2026-07-13)
+  - OutlinedTextElement DP화, OverlayWindow(이중언어 2단+카라오케 채움+이동 모드+위치 영속화)
+  - 트레이 제어(토글/이동/오프셋±), --demo 모드, 스크린샷 검증 완료
+  - 남김: 전체화면 감지(P1), 실음악 육안 검증(사용자)
 - [ ] M4 번역 계층(DeepL 폴백, target_lang 설정, 기본 KO) + 설정 패널
 - [ ] M5 P1 (수동 검색, 캐시, 자동 실행, 업데이트, 패키징 + QQ/Kugou)
 
