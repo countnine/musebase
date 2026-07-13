@@ -196,4 +196,7 @@ public sealed class LyricsMetadata
 
     /// <summary>검색 당시 요청 — 랭킹 계산에 사용</summary>
     public Search.LyricsSearchRequest? Request { get; set; }
+
+    /// <summary>품질 점수 캐시 (LyricsQuality.Quality가 채운다)</summary>
+    public double? Quality { get; internal set; }
 }
