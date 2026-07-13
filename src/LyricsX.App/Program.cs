@@ -36,6 +36,7 @@ internal static class Program
                 ManualOffsetSeconds = settings.ManualOffsetSeconds,
                 Translation = BuildTranslation(),
                 TargetLanguage = settings.EffectiveTargetLanguage,
+                Cache = new LyricsX.Core.Search.LyricsCacheStore(cacheDb),
             };
 
             var overlay = new OverlayWindow(settings);
@@ -177,7 +178,8 @@ internal static class Program
                 Log.Write("[demo] 데모 모드 시작");
             }
 
-            Log.Write("=== LyricsX 시작 (M4) ===");
+            coordinator.Start(); // 배선 완료 후 시작 (캐시/번역/상태 이벤트 유효)
+            Log.Write("=== LyricsX 시작 (M5) ===");
         };
         app.Run();
     }

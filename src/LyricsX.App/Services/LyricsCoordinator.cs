@@ -32,6 +32,9 @@ public sealed class LyricsCoordinator : IDisposable
     /// <summary>기계번역 서비스 (키 미설정 시 IsEnabled=false로 무동작)</summary>
     public LyricsTranslationService? Translation { get; set; }
 
+    /// <summary>곡 단위 가사 캐시 (히트 시 네트워크 검색 생략)</summary>
+    public LyricsCacheStore? Cache { get; set; }
+
     /// <summary>DeepL target_lang (예: KO). 표시 우선순위 tr:{lang} → tr에도 사용.</summary>
     public string TargetLanguage { get; set; } = "KO";
 
@@ -65,6 +68,14 @@ public sealed class LyricsCoordinator : IDisposable
             else _timer.Stop();
         });
 
+    }
+
+    /// <summary>
+    /// 이벤트 구독·속성(Cache/Translation) 배선이 끝난 뒤 호출.
+    /// 생성자에서 시작하면 이니셜라이저 속성이 아직 null이라 캐시/번역이 무시된다.
+    /// </summary>
+    public void Start()
+    {
         if (_nowPlaying.CurrentTrack is { } current) OnTrackChanged(current);
         if (_nowPlaying.IsPlaying) _timer.Start();
     }
@@ -79,6 +90,18 @@ public sealed class LyricsCoordinator : IDisposable
         if (track is null)
         {
             StatusChanged?.Invoke("재생 중인 곡 없음");
+            return;
+        }
+
+        // 1) 캐시 히트면 네트워크 검색 생략 (번역 포함 저장분이라 오프라인도 동작)
+        if (Cache?.Get(track.Title, track.Artist) is { } cached)
+        {
+            CurrentLyrics = cached;
+            _lastLineIndex = int.MinValue;
+            StatusChanged?.Invoke($"{track} — 캐시 ({cached.Metadata.ServiceName})");
+            var cacheCts = new CancellationTokenSource();
+            _searchCts = cacheCts;
+            await TranslateAsync(cached, cacheCts.Token); // 언어 변경 시 보충 번역
             return;
         }
 
@@ -105,12 +128,46 @@ public sealed class LyricsCoordinator : IDisposable
             }
 
             if (CurrentLyrics is null)
+            {
                 StatusChanged?.Invoke($"{track} — 가사를 찾지 못함");
+            }
+            else if (!cts.Token.IsCancellationRequested)
+            {
+                // 2) 최종 선택본(번역 포함) 캐시 저장
+                try
+                {
+                    Cache?.Set(track.Title, track.Artist, CurrentLyrics);
+                    Log.Write($"[cache] 저장: {track}");
+                }
+                catch (Exception e)
+                {
+                    Log.Write($"[cache] 저장 실패: {e.Message}");
+                }
+            }
         }
         catch (OperationCanceledException)
         {
             // 다음 트랙으로 교체됨
         }
+        catch (Exception e)
+        {
+            Log.Write($"[search] 예외: {e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>수동 검색 등 외부에서 선택한 가사를 적용하고 캐시를 갱신한다.</summary>
+    public async Task UseLyricsAsync(Lyrics lyrics)
+    {
+        _searchCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
+        CurrentLyrics = lyrics;
+        _lastLineIndex = int.MinValue;
+        StatusChanged?.Invoke($"{CurrentTrack} — 수동 선택 ({lyrics.Metadata.ServiceName})");
+        await TranslateAsync(lyrics, cts.Token);
+        if (CurrentTrack is { } track && !cts.Token.IsCancellationRequested)
+            Cache?.Set(track.Title, track.Artist, lyrics);
     }
 
     /// <summary>대상 언어 MT 보장 후 현재 라인 갱신 (캐시 히트면 즉시, 미스면 API 1회)</summary>
