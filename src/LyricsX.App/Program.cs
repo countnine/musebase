@@ -111,10 +111,19 @@ internal static class Program
 
             var tray = new TaskbarIcon
             {
-                Icon = System.Drawing.SystemIcons.Application,
+                Icon = CreateTrayIcon(),
                 ToolTipText = "LyricsX",
                 ContextMenu = menu,
             };
+            // H.NotifyIcon 2.x는 명시적 생성이 필요할 수 있다 (없으면 아이콘 미표시)
+            try
+            {
+                tray.ForceCreate(enablesEfficiencyMode: false);
+            }
+            catch (Exception e)
+            {
+                Log.Write($"[tray] ForceCreate 실패: {e.Message}");
+            }
             app.Exit += (_, _) =>
             {
                 tray.Dispose();
@@ -171,6 +180,25 @@ internal static class Program
             Log.Write("=== LyricsX 시작 (M4) ===");
         };
         app.Run();
+    }
+
+    /// <summary>런타임 생성 트레이 아이콘: 녹색 원 + "L" (전용 .ico는 M5에서)</summary>
+    private static System.Drawing.Icon CreateTrayIcon()
+    {
+        using var bmp = new System.Drawing.Bitmap(32, 32);
+        using var g = System.Drawing.Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.Clear(System.Drawing.Color.Transparent);
+        using var brush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(0x1D, 0xB9, 0x54));
+        g.FillEllipse(brush, 1, 1, 30, 30);
+        using var font = new System.Drawing.Font("Segoe UI", 17, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
+        using var format = new System.Drawing.StringFormat
+        {
+            Alignment = System.Drawing.StringAlignment.Center,
+            LineAlignment = System.Drawing.StringAlignment.Center,
+        };
+        g.DrawString("L", font, System.Drawing.Brushes.White, new System.Drawing.RectangleF(0, 1, 32, 32), format);
+        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
     }
 }
 
