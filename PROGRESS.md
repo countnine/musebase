@@ -4,10 +4,10 @@
 > 재개 방법: 세션 리셋 후 "이어서"라고 입력.
 
 ## ▶ 다음 세션 첫 작업
-- [ ] **M2 시작**: `src/LyricsX.App` — NowPlayingService(SMTC) + SyncScheduler + 트레이 스켈레톤
-  - SMTC 코드는 `spikes/Spike.Smtc/Program.cs`의 보간 로직을 서비스로 승격
-  - 트레이: H.NotifyIcon.Wpf 패키지, WPF 앱(오버레이 스택 확정됨)
-  - M1-U3(QQ/Kugou 제공자)는 **의도적 후순위** — LRCLIB+NetEase로 MVP 커버리지 충분, 필요 시 M5에서
+- [ ] **M3 시작**: 오버레이 승격 — `spikes/Spike.Overlay`의 `OutlinedTextElement`+클릭스루 창을
+  `src/LyricsX.App/Overlay/`로 이동, `LyricsCoordinator.CurrentLineChanged`에 연결
+  - 이후: 트레이 메뉴에 오버레이 토글/오프셋 ±, 다중 모니터, 전체화면 감지
+  - 사용자 육안 검증 필요: 클릭스루 실제 마우스 통과, 실제 음악(Spotify 등)으로 동기 확인
 
 ## 마일스톤 현황
 - [x] **M0** 스파이크 — 완료 (2026-07-13). 오버레이/렌더 스택 = **WPF 확정**
@@ -16,8 +16,10 @@
   - [x] U2: LRCLIB + NetEase 제공자 (EAPI AES-ECB 포함, 라이브 검증)
   - [x] U4: 품질 랭킹 + LyricsSearchService 병렬 집계 (총 26 테스트, 라이브 검증: 번역 있는 NetEase q=0.990 > LRCLIB q=0.940)
   - [ ] U3: QQ/Kugou — 후순위로 이동 (위 참조)
-- [ ] **M2** NowPlaying + SyncScheduler + 트레이 ← 다음
-- [ ] M3 오버레이 완성 (Spike.Overlay 승격·확장)
+- [x] **M2** NowPlaying + SyncScheduler + 트레이 — 완료 (2026-07-13)
+  - NowPlayingService(SMTC+보간), LyricsCoordinator(스트리밍 검색+점진 교체+100ms 틱), 트레이 툴팁
+  - 스모크 검증: 트랙 감지→검색→랭킹 교체 첫 결과 ~0.9s (스트리밍이 9.4s 배치 문제 완화)
+- [ ] **M3** 오버레이 완성 (Spike.Overlay 승격·확장) ← 다음
 - [ ] M4 번역 계층(DeepL 폴백, target_lang 설정, 기본 KO) + 설정 패널
 - [ ] M5 P1 (수동 검색, 캐시, 자동 실행, 업데이트, 패키징 + QQ/Kugou)
 
