@@ -1,7 +1,15 @@
 # PROGRESS — LyricsX for Windows
 
-> **상태: v0.6.0 (2026-07-14)** — 자동 업데이트(Velopack + GitHub Releases)
+> **상태: v0.6.1 (2026-07-14)** — 트랙 메타 정제 검색 확장
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.6.1 추가분
+- **트랙 메타 정제 검색 확장** — `SearchTermCleaner`가 피처링/리마스터/라이브/버전 표기 등 잡음을 제거한 검색어 변형을 생성
+  - `LyricsSearchService`가 원본 검색어와 정제 변형을 **동시에** 검색(순차 재시도 대비 지연 없음) + (제공자, 곡 토큰) 기준 중복 결과 제거
+  - 제목만 정제(대시/괄호 잡음 + feat), 아티스트는 feat만 제거(`Simon & Garfunkel` 같은 다인 아티스트 보존)
+  - `Spider-Man`처럼 공백 없는 대시는 보존
+  - 신규 테스트 16종(전체 62 통과), 가짜 제공자로 확장·중복제거 검증
+  - LyricsKit `LyricsSearchRequestPlugin`(검색 확장) 취지를 메타 정제로 구현
 
 ## v0.6.0 추가분
 - **자동 업데이트** — Velopack 1.2.0 + GitHub Releases(`countnine/LyricsX-Windows`, 공개)
@@ -55,10 +63,13 @@
 - 배포: `artifacts\LyricsX-Windows-v0.1.0-win-x64.zip` (70MB, self-contained 단일 exe)
 
 ## 백로그 (다음 작업 후보, 우선순위 순)
-1. **첫 릴리스 배포(v0.6.0)** — `RELEASING.md` 절차로 vpk pack → GitHub Releases 업로드. 이후 자동 업데이트 실검증
-2. 검색 실패 시 재시도/트랙 메타 정제(feat. 표기 제거 등) 플러그인 (원본 LyricsSearchRequestPlugin 상당)
-3. **QQ Music 실응답 검증** — lyric_download.fcg XML 스키마/필드를 실제 응답으로 확인·튜닝 (현재 방어적 추정 구현)
-4. **실검색 통합 검증** — Kugou/QQ/NetEase(yrc/klyric) 실제 곡으로 글자 카라오케 표시 확인 (오프라인 검증분 보완)
+1. **QQ Music 실응답 검증** — lyric_download.fcg XML 스키마/필드를 실제 응답으로 확인·튜닝 (현재 방어적 추정 구현)
+2. **실검색 통합 검증** — Kugou/QQ/NetEase(yrc/klyric) 실제 곡으로 글자 카라오케 표시 확인 (오프라인 검증분 보완). 메타 정제 확장 실효과도 함께 확인
+3. **차기 릴리스(v0.6.1+)** — 누적 변경을 `RELEASING.md` 절차로 배포하고 자동 업데이트 실검증(이전 설치본 → 신버전)
+
+## 완료된 백로그
+- v0.6.0 첫 릴리스 배포 (GitHub Releases, Setup.exe + Velopack 자산)
+- 트랙 메타 정제 검색 확장 (v0.6.1)
 
 ## 기술 결정 기록
 - 스택: WPF 단일 (WinUI3/DirectWrite 불필요 판정 — M0 검증)
