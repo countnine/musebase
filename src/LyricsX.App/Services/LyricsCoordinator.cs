@@ -5,8 +5,15 @@ using LyricsX.Core.Translation;
 
 namespace LyricsX.App.Services;
 
-/// <summary>현재 표시할 가사 한 줄 (원문 + 번역)</summary>
-public sealed record DisplayLine(string? Content, string? Translation);
+/// <summary>
+/// 현재 표시할 가사 한 줄 (원문 + 번역).
+/// Karaoke: 글자 단위 타임태그(있으면 글자 채움), LineSpanSeconds: 라인 표시 구간(초, 라인 단위 폴백용).
+/// </summary>
+public sealed record DisplayLine(
+    string? Content,
+    string? Translation,
+    InlineTimeTags? Karaoke = null,
+    double LineSpanSeconds = 0);
 
 /// <summary>
 /// 원본 AppController의 핵심 역할 포팅:
@@ -43,7 +50,7 @@ public sealed class LyricsCoordinator : IDisposable
     /// <summary>현재 라인 변경 (null = 가사 없음/재생 없음)</summary>
     public event Action<DisplayLine?>? CurrentLineChanged;
 
-    /// <summary>현재 라인 진행 비율 0~1 (카라오케 채움용, 매 틱)</summary>
+    /// <summary>현재 라인 시작 이후 경과 시간(초, 매 틱). 글자/라인 단위 카라오케 채움에 사용.</summary>
     public event Action<double>? LineProgressChanged;
 
     /// <summary>가사 검색 상태 텍스트 (트레이 툴팁 등 상태 표시용)</summary>
@@ -198,6 +205,15 @@ public sealed class LyricsCoordinator : IDisposable
         var (current, next) = lyrics.LineIndexesAt(adjusted);
         var index = current ?? -1;
 
+        // 라인 표시 구간: 현재 라인 시작 ~ 다음 라인 시작(없으면 곡 끝/+5초)
+        double start = 0, span = 0;
+        if (index >= 0)
+        {
+            start = lyrics.Lines[index].Position;
+            var end = next is { } n ? lyrics.Lines[n].Position : lyrics.Length ?? start + 5.0;
+            span = end - start;
+        }
+
         if (index != _lastLineIndex)
         {
             _lastLineIndex = index;
@@ -210,19 +226,15 @@ public sealed class LyricsCoordinator : IDisposable
                 var line = lyrics.Lines[index];
                 // 표시 우선순위: tr:{target}(MT) → tr(제공자) 폴백
                 CurrentLineChanged?.Invoke(new DisplayLine(
-                    line.Content, line.Attachments.Translation(TargetLangLower, null)));
+                    line.Content,
+                    line.Attachments.Translation(TargetLangLower, null),
+                    line.Attachments.GetInlineTimeTags(),
+                    span));
             }
         }
 
-        // 라인 진행 비율: 다음 라인 시작(없으면 곡 끝/+5초)까지를 100%로
         if (index >= 0)
-        {
-            var start = lyrics.Lines[index].Position;
-            var end = next is { } n ? lyrics.Lines[n].Position
-                : lyrics.Length ?? start + 5.0;
-            var span = end - start;
-            LineProgressChanged?.Invoke(span > 0 ? Math.Clamp((adjusted - start) / span, 0.0, 1.0) : 0.0);
-        }
+            LineProgressChanged?.Invoke(adjusted - start); // 라인 시작 이후 경과(초)
     }
 
     public void Dispose()

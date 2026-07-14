@@ -208,9 +208,9 @@ internal static class Program
                     {
                         demoIndex = slot;
                         var (c, t) = demoLines[slot];
-                        overlay.SetLine(new DisplayLine(c, t));
+                        overlay.SetLine(new DisplayLine(c, t, null, 3.0));
                     }
-                    overlay.SetProgress(elapsed % 3.0 / 3.0);
+                    overlay.SetProgress(elapsed % 3.0); // 라인 시작 이후 경과(초)
                 };
                 demoTimer.Start();
                 Log.Write("[demo] 데모 모드 시작");

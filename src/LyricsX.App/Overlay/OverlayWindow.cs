@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using LyricsX.App.Services;
+using LyricsX.Core;
 
 namespace LyricsX.App.Overlay;
 
@@ -32,6 +33,9 @@ public sealed class OverlayWindow : Window
     private bool _userVisible = true;
     private bool _fullscreenSuppressed;
     private bool _pausedSuppressed;
+
+    private InlineTimeTags? _karaoke; // 현재 라인의 글자단위 태그 (null = 라인 단위 폴백)
+    private double _lineSpan;          // 현재 라인 표시 구간(초)
 
     /// <summary>이동 모드 여부 (true = 드래그 이동/크기 조절 가능)</summary>
     public bool IsMoveMode => !_clickThrough;
@@ -113,7 +117,12 @@ public sealed class OverlayWindow : Window
     public void SetLine(DisplayLine? line)
     {
         _originalLine.Text = line?.Content ?? string.Empty;
+        // 설정이 켜져 있고 라인에 글자단위 태그가 있을 때만 글자 채움, 아니면 라인 단위 폴백
+        _karaoke = _settings.CharacterKaraoke ? line?.Karaoke : null;
+        _lineSpan = line?.LineSpanSeconds ?? 0;
+        _originalLine.InlineKaraoke = _karaoke;
         _originalLine.KaraokeProgress = 0;
+        _originalLine.KaraokeTime = 0;
         _translationLine.Text = line?.Translation ?? string.Empty;
         _translationLine.Visibility = string.IsNullOrEmpty(line?.Translation)
             ? Visibility.Collapsed
@@ -121,7 +130,14 @@ public sealed class OverlayWindow : Window
         UpdateTextLayout();
     }
 
-    public void SetProgress(double progress) => _originalLine.KaraokeProgress = progress;
+    /// <summary>라인 시작 이후 경과 시간(초). 글자단위 태그가 있으면 글자 위치까지, 없으면 구간 비율로 채운다.</summary>
+    public void SetProgress(double elapsedSeconds)
+    {
+        if (_karaoke is not null)
+            _originalLine.KaraokeTime = elapsedSeconds;
+        else
+            _originalLine.KaraokeProgress = _lineSpan > 0 ? Math.Clamp(elapsedSeconds / _lineSpan, 0.0, 1.0) : 0.0;
+    }
 
     /// <summary>
     /// 텍스트 크기 재계산: 폰트는 오버레이 높이 비례,

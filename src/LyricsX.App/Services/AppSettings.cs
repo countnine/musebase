@@ -25,6 +25,9 @@ public sealed class AppSettings
     public string OutlineColor { get; set; } = "#000000";
     public double OutlineThickness { get; set; } = 3.0;
 
+    /// <summary>글자 단위 카라오케(인라인 타임태그 기반). 지원 곡(Kugou/QQ 등)에서만 동작.</summary>
+    public bool CharacterKaraoke { get; set; } = true;
+
     /// <summary>수동 싱크 오프셋(초). +면 가사가 빨라진다.</summary>
     public double ManualOffsetSeconds { get; set; }
 

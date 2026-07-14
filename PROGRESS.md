@@ -1,7 +1,23 @@
 # PROGRESS — LyricsX for Windows
 
-> **상태: v0.3.0 (2026-07-13)** — MVP + 오버레이 UX/스타일 완성판
+> **상태: v0.5.0 (2026-07-14)** — 글자 단위 카라오케
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.5.0 추가분
+- **글자 단위 카라오케** — 인라인 타임태그(`tt`)가 있는 라인은 글자 위치까지 정확히 채움, 없으면 기존 라인 단위 폴백
+  - `InlineTimeTags.CharIndexAt(time)` — 라인 상대 시각 → 소수 글자 인덱스(구간 선형보간), Core 순수 함수로 단위 테스트
+  - `OutlinedTextElement` — 글자별 누적 x 오프셋(`BuildHighlightGeometry`)을 캐시해 소수 글자 위치를 픽셀로 변환·채움
+  - `LineProgressChanged`가 0~1 비율 → **라인 시작 이후 경과(초)**로 변경 (글자/라인 단위 공용)
+  - 설정 토글 `글자 단위 카라오케`(기본 켬) 추가 — 타이밍이 어긋나는 곡에서 끌 수 있음
+  - 데이터 소스: Kugou/QQ(v0.4.0). NetEase yrc/klyric 파싱은 추후 연결 시 자동 적용
+
+## v0.4.0 추가분
+- **Kugou(酷狗) 제공자** — 검색(mobilecdn) → 후보(krcs) → KRC 다운로드 → XOR+zlib 복호 → 파싱. `[language:base64]` 헤더의 번역(type==1) 병합
+- **QQ Music(QQ音乐) 제공자** — smartbox+musicu 병렬 검색 → lyric_download.fcg XML → QRC(3중 DES: ddes/des/ddes, ECB) 복호 → 파싱. contentts 번역 병합
+- 두 제공자 모두 글자단위 인라인 타임태그(`tt`) 생성 → 품질 랭킹에서 +보너스 (백로그 2번 글자 카라오케의 데이터 소스)
+- `LyricsSearchService` 기본 목록에 등록(LRCLIB/NetEase/Kugou/QQMusic) — 수동 검색·자동 표시 자동 연결
+- 신규 유닛 테스트 8종: KRC/QRC 복호 라운드트립, DES 가역성, 파서, 중첩 XML 추출 (전체 40 통과)
+- **주의**: 복호기·파서는 라운드트립 검증 완료. QQ의 네트워크/XML 응답 스키마는 오프라인 검증 불가 → 실제 응답으로 필드 튜닝 필요할 수 있음
 
 ## v0.3.0 추가분
 - 일시정지/정지 중 오버레이 자동 숨김 (재생 재개 시 복원, 이동 모드 중엔 유지, --demo 제외)
@@ -24,10 +40,10 @@
 - 배포: `artifacts\LyricsX-Windows-v0.1.0-win-x64.zip` (70MB, self-contained 단일 exe)
 
 ## 백로그 (다음 작업 후보, 우선순위 순)
-1. **QQ Music/Kugou 제공자** — 중국 곡 커버리지 확대 (KRC/QRC 복호화 포팅, `external/LyricsKit/Sources/LyricsService/Parser/` 참조)
-2. **글자 단위 카라오케** — NetEase yrc/klyric 파싱 + InlineTimeTags 기반 채움 (현재는 라인 단위 진행률)
-3. **자동 업데이트** — Velopack + GitHub Releases
-4. 검색 실패 시 재시도/트랙 메타 정제(feat. 표기 제거 등) 플러그인 (원본 LyricsSearchRequestPlugin 상당)
+1. **NetEase yrc/klyric 파싱** — 글자단위 타임태그 소스 확대. NetEaseProvider가 lrc+tlyric만 파싱 중, yrc/klyric 응답 필드는 이미 수신(백로그 완료 시 v0.5.0 글자 카라오케에 자동 연결)
+2. **자동 업데이트** — Velopack + GitHub Releases
+3. 검색 실패 시 재시도/트랙 메타 정제(feat. 표기 제거 등) 플러그인 (원본 LyricsSearchRequestPlugin 상당)
+4. **QQ Music 실응답 검증** — lyric_download.fcg XML 스키마/필드를 실제 응답으로 확인·튜닝 (현재 방어적 추정 구현)
 
 ## 기술 결정 기록
 - 스택: WPF 단일 (WinUI3/DirectWrite 불필요 판정 — M0 검증)

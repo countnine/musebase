@@ -87,6 +87,13 @@ public sealed class SettingsWindow : Window
         outlineSlider.ValueChanged += (_, _) => UpdateOutlineLabel();
         UpdateOutlineLabel();
 
+        var karaokeCheck = new CheckBox
+        {
+            Content = "글자 단위 카라오케 (지원 곡: Kugou/QQ 등)",
+            IsChecked = settings.CharacterKaraoke,
+            Margin = new Thickness(0, 12, 0, 0),
+        };
+
         var saveButton = new Button
         {
             Content = "저장",
@@ -118,6 +125,7 @@ public sealed class SettingsWindow : Window
             settings.TranslationColor = NormalizeHex(translationColor.Box.Text, settings.TranslationColor);
             settings.OutlineColor = NormalizeHex(outlineColor.Box.Text, settings.OutlineColor);
             settings.OutlineThickness = outlineSlider.Value;
+            settings.CharacterKaraoke = karaokeCheck.IsChecked == true;
             settings.Save();
             onSaved();
             Close();
@@ -144,6 +152,7 @@ public sealed class SettingsWindow : Window
         panel.Children.Add(outlineColor.Row);
         panel.Children.Add(outlineLabel);
         panel.Children.Add(outlineSlider);
+        panel.Children.Add(karaokeCheck);
         panel.Children.Add(saveButton);
         Content = panel;
     }

@@ -114,6 +114,30 @@ public sealed record InlineTimeTags(IReadOnlyList<InlineTimeTags.Entry> Tags, do
         return new InlineTimeTags(tags, duration);
     }
 
+    /// <summary>
+    /// 라인 시작 기준 경과 시각(초)에 도달한 (소수) 글자 인덱스.
+    /// 태그 구간을 선형 보간한다. 마지막 태그 이후는 마지막 인덱스에 고정.
+    /// 글자 단위 카라오케 채움에서 채울 글자 위치를 구하는 데 쓴다.
+    /// </summary>
+    public double CharIndexAt(double time)
+    {
+        if (Tags.Count == 0) return 0;
+        if (time <= Tags[0].Time) return Tags[0].Index;
+
+        for (var i = 0; i < Tags.Count - 1; i++)
+        {
+            var a = Tags[i];
+            var b = Tags[i + 1];
+            if (time < b.Time)
+            {
+                var dt = b.Time - a.Time;
+                var f = dt > 0 ? (time - a.Time) / dt : 1.0;
+                return a.Index + (b.Index - a.Index) * Math.Clamp(f, 0.0, 1.0);
+            }
+        }
+        return Tags[^1].Index;
+    }
+
     public override string ToString()
     {
         var result = string.Concat(Tags.Select(t => $"<{(int)(t.Time * 1000)},{t.Index}>"));

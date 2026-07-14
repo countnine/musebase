@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
+using LyricsX.Core;
 
 namespace LyricsX.App.Overlay;
 
@@ -15,16 +16,21 @@ public sealed class OutlinedTextElement : FrameworkElement
         DependencyProperty.Register(nameof(Text), typeof(string), typeof(OutlinedTextElement),
             new FrameworkPropertyMetadata(string.Empty,
                 FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
-                (d, _) => ((OutlinedTextElement)d)._formatted = null));
+                (d, _) => ((OutlinedTextElement)d).InvalidateTextCache()));
 
     public static readonly DependencyProperty FontSizeProperty =
         DependencyProperty.Register(nameof(FontSize), typeof(double), typeof(OutlinedTextElement),
             new FrameworkPropertyMetadata(32.0,
                 FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
-                (d, _) => ((OutlinedTextElement)d)._formatted = null));
+                (d, _) => ((OutlinedTextElement)d).InvalidateTextCache()));
 
     public static readonly DependencyProperty KaraokeProgressProperty =
         DependencyProperty.Register(nameof(KaraokeProgress), typeof(double), typeof(OutlinedTextElement),
+            new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    /// <summary>글자 단위 카라오케 시각(초, 라인 시작 기준). InlineKaraoke가 있을 때 사용.</summary>
+    public static readonly DependencyProperty KaraokeTimeProperty =
+        DependencyProperty.Register(nameof(KaraokeTime), typeof(double), typeof(OutlinedTextElement),
             new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public string Text
@@ -39,11 +45,25 @@ public sealed class OutlinedTextElement : FrameworkElement
         set => SetValue(FontSizeProperty, value);
     }
 
-    /// <summary>0~1. 현재 라인 진행 비율 (왼쪽부터 강조색 채움)</summary>
+    /// <summary>0~1. 현재 라인 진행 비율 (왼쪽부터 강조색 채움). InlineKaraoke 없을 때 폴백.</summary>
     public double KaraokeProgress
     {
         get => (double)GetValue(KaraokeProgressProperty);
         set => SetValue(KaraokeProgressProperty, value);
+    }
+
+    /// <summary>라인 시작 기준 경과 시각(초). InlineKaraoke가 설정된 경우 글자 위치 계산에 쓰인다.</summary>
+    public double KaraokeTime
+    {
+        get => (double)GetValue(KaraokeTimeProperty);
+        set => SetValue(KaraokeTimeProperty, value);
+    }
+
+    /// <summary>글자 단위 타임태그. 설정 시 KaraokeTime으로 글자 위치까지 채운다(없으면 KaraokeProgress 폴백).</summary>
+    public InlineTimeTags? InlineKaraoke
+    {
+        get => _inlineKaraoke;
+        set { _inlineKaraoke = value; InvalidateVisual(); }
     }
 
     public Brush Fill { get; set; } = Brushes.White;
@@ -53,6 +73,17 @@ public sealed class OutlinedTextElement : FrameworkElement
     public FontFamily FontFamily { get; set; } = new("Segoe UI");
 
     private FormattedText? _formatted;
+    private InlineTimeTags? _inlineKaraoke;
+
+    // 글자별 누적 x 오프셋(글리프 우측 끝) 캐시 — 텍스트/폰트/외곽선 변경 시 무효화
+    private double[]? _charX;
+    private double _charXStroke = -1;
+
+    private void InvalidateTextCache()
+    {
+        _formatted = null;
+        _charX = null;
+    }
 
     public OutlinedTextElement()
     {
@@ -93,12 +124,47 @@ public sealed class OutlinedTextElement : FrameworkElement
         dc.DrawGeometry(null, pen, geometry);
         dc.DrawGeometry(Fill, null, geometry);
 
-        if (KaraokeFill is not null && KaraokeProgress > 0)
+        var fillWidth = KaraokeFillWidth(ft, origin);
+        if (KaraokeFill is not null && fillWidth > 0)
         {
-            var width = (ft.WidthIncludingTrailingWhitespace + StrokeThickness * 2) * Math.Clamp(KaraokeProgress, 0.0, 1.0);
-            dc.PushClip(new RectangleGeometry(new Rect(0, 0, width, Math.Max(RenderSize.Height, ft.Height + StrokeThickness * 2))));
+            dc.PushClip(new RectangleGeometry(new Rect(0, 0, fillWidth, Math.Max(RenderSize.Height, ft.Height + StrokeThickness * 2))));
             dc.DrawGeometry(KaraokeFill, null, geometry);
             dc.Pop();
         }
+    }
+
+    /// <summary>채울 픽셀 폭: 인라인 태그가 있으면 글자 위치까지, 없으면 라인 비율 폴백.</summary>
+    private double KaraokeFillWidth(FormattedText ft, Point origin)
+    {
+        if (_inlineKaraoke is { } tags && Text.Length > 0)
+        {
+            var charPos = Math.Clamp(tags.CharIndexAt(KaraokeTime), 0, Text.Length);
+            return CharXOffset(ft, origin, charPos);
+        }
+        if (KaraokeProgress > 0)
+            return (ft.WidthIncludingTrailingWhitespace + StrokeThickness * 2) * Math.Clamp(KaraokeProgress, 0.0, 1.0);
+        return 0;
+    }
+
+    /// <summary>소수 글자 위치의 픽셀 x(요소 좌표계). 글자별 누적 폭을 캐시해 보간한다.</summary>
+    private double CharXOffset(FormattedText ft, Point origin, double charPos)
+    {
+        var len = Text.Length;
+        if (_charX is null || _charX.Length != len + 1 || _charXStroke != StrokeThickness)
+        {
+            _charX = new double[len + 1];
+            _charX[0] = origin.X;
+            for (var i = 1; i <= len; i++)
+            {
+                var geo = ft.BuildHighlightGeometry(origin, 0, i);
+                _charX[i] = geo is not null && !geo.IsEmpty() ? geo.Bounds.Right : _charX[i - 1];
+            }
+            _charXStroke = StrokeThickness;
+        }
+
+        var lo = (int)Math.Floor(charPos);
+        if (lo >= len) return _charX[len];
+        if (lo < 0) return _charX[0];
+        return _charX[lo] + (_charX[lo + 1] - _charX[lo]) * (charPos - lo);
     }
 }
