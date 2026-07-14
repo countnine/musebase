@@ -11,10 +11,13 @@
     <AssemblyName>LyricsX</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
+    <!-- 릴리스 버전: Velopack 패키징(vpk pack packVersion 인자)과 in-app 표시에 사용 -->
+    <Version>0.6.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup>

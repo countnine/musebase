@@ -1,7 +1,16 @@
 # PROGRESS — LyricsX for Windows
 
-> **상태: v0.5.1 (2026-07-14)** — NetEase yrc/klyric 글자 단위 파싱
+> **상태: v0.6.0 (2026-07-14)** — 자동 업데이트(Velopack + GitHub Releases)
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.6.0 추가분
+- **자동 업데이트** — Velopack 1.2.0 + GitHub Releases(`countnine/LyricsX-Windows`, 공개)
+  - `UpdateService`(GithubSource, prerelease=false) + `Program.cs` 배선. 시작 시 백그라운드 확인(비침습), 트레이 "업데이트 확인…" 수동 확인
+  - 개발/디버그 실행은 `IsInstalled=false`로 무동작. 설치본에서만 확인·적용·재시작
+  - `VelopackApp.Build().Run()`을 `Main` 최상단에 배치(설치/업데이트/제거 훅)
+  - csproj `<Version>0.6.0>`, 트레이 툴팁·메뉴에 버전 표시
+  - 릴리스 절차 문서화: `RELEASING.md` (vpk pack → vpk upload github)
+- **원격 저장소 연결** — `origin` = https://github.com/countnine/LyricsX-Windows (공개), master 추적
 
 ## v0.5.1 추가분
 - **NetEase yrc/klyric 파싱** — `NetEaseLyricParser`(ParseYrc/ParseKLyric). FetchAsync가 yrc(신형 단어단위) → klyric(구형) → lrc 순으로 우선. 글자 단위 카라오케(v0.5.0)가 NetEase 곡에도 적용됨
@@ -46,7 +55,7 @@
 - 배포: `artifacts\LyricsX-Windows-v0.1.0-win-x64.zip` (70MB, self-contained 단일 exe)
 
 ## 백로그 (다음 작업 후보, 우선순위 순)
-1. **자동 업데이트** — Velopack + GitHub Releases
+1. **첫 릴리스 배포(v0.6.0)** — `RELEASING.md` 절차로 vpk pack → GitHub Releases 업로드. 이후 자동 업데이트 실검증
 2. 검색 실패 시 재시도/트랙 메타 정제(feat. 표기 제거 등) 플러그인 (원본 LyricsSearchRequestPlugin 상당)
 3. **QQ Music 실응답 검증** — lyric_download.fcg XML 스키마/필드를 실제 응답으로 확인·튜닝 (현재 방어적 추정 구현)
 4. **실검색 통합 검증** — Kugou/QQ/NetEase(yrc/klyric) 실제 곡으로 글자 카라오케 표시 확인 (오프라인 검증분 보완)

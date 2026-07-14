@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using H.NotifyIcon;
 using LyricsX.App.Overlay;
 using LyricsX.App.Services;
+using Velopack;
 
 namespace LyricsX.App;
 
@@ -14,6 +15,9 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // Velopack: 설치/업데이트/제거 훅 처리. 반드시 다른 앱 로직보다 먼저 실행해야 한다.
+        VelopackApp.Build().Run();
+
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Startup += async (_, _) =>
         {
@@ -89,6 +93,66 @@ internal static class Program
             var settingsItem = new MenuItem { Header = "설정…" };
             var exitItem = new MenuItem { Header = "종료" };
 
+            // ---- 자동 업데이트 (Velopack + GitHub Releases) ----
+            var updater = new UpdateService();
+            Velopack.UpdateInfo? pendingUpdate = null;
+            var updateItem = new MenuItem { Header = $"업데이트 확인… (v{updater.CurrentVersion})" };
+
+            async Task RunUpdateCheckAsync(bool userInitiated)
+            {
+                try
+                {
+                    if (!updater.IsInstalled)
+                    {
+                        if (userInitiated)
+                            MessageBox.Show(
+                                $"개발 빌드에서는 자동 업데이트를 사용할 수 없습니다.\n현재 버전: v{updater.CurrentVersion}",
+                                "LyricsX 업데이트", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
+                    }
+
+                    var info = pendingUpdate ?? await updater.CheckAsync();
+                    if (info is null)
+                    {
+                        if (userInitiated)
+                            MessageBox.Show(
+                                $"최신 버전입니다. (v{updater.CurrentVersion})",
+                                "LyricsX 업데이트", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
+                    }
+
+                    var newVersion = info.TargetFullRelease.Version.ToString();
+                    pendingUpdate = info;
+                    updateItem.Header = $"⬆ 업데이트 설치 (v{newVersion})";
+
+                    if (!userInitiated)
+                    {
+                        Log.Write($"[update] 새 버전 사용 가능: v{newVersion}");
+                        return; // 자동 확인은 메뉴 라벨만 갱신(비침습)
+                    }
+
+                    var answer = MessageBox.Show(
+                        $"새 버전 v{newVersion} 이(가) 있습니다. (현재 v{updater.CurrentVersion})\n지금 설치하고 재시작할까요?",
+                        "LyricsX 업데이트", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    if (answer == MessageBoxResult.Yes)
+                    {
+                        settings.Save();
+                        Log.Write($"[update] v{newVersion} 설치 후 재시작");
+                        await updater.DownloadAndApplyAsync(info); // 프로세스 재시작
+                    }
+                }
+                catch (Exception e)
+                {
+                    Log.Write($"[update] 확인 실패: {e.Message}");
+                    if (userInitiated)
+                        MessageBox.Show(
+                            $"업데이트 확인 중 오류가 발생했습니다.\n{e.Message}",
+                            "LyricsX 업데이트", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+
+            updateItem.Click += async (_, _) => await RunUpdateCheckAsync(userInitiated: true);
+
             SettingsWindow? settingsWindow = null;
             settingsItem.Click += (_, _) =>
             {
@@ -145,13 +209,14 @@ internal static class Program
             menu.Items.Add(offsetReset);
             menu.Items.Add(new Separator());
             menu.Items.Add(startupToggle);
+            menu.Items.Add(updateItem);
             menu.Items.Add(settingsItem);
             menu.Items.Add(exitItem);
 
             var tray = new TaskbarIcon
             {
                 Icon = CreateTrayIcon(),
-                ToolTipText = "LyricsX",
+                ToolTipText = $"LyricsX v{updater.CurrentVersion}",
                 ContextMenu = menu,
             };
             // H.NotifyIcon 2.x는 명시적 생성이 필요할 수 있다 (없으면 아이콘 미표시)
@@ -218,6 +283,9 @@ internal static class Program
 
             coordinator.Start(); // 배선 완료 후 시작 (캐시/번역/상태 이벤트 유효)
             Log.Write("=== LyricsX 시작 (M5) ===");
+
+            // 시작 시 백그라운드 업데이트 확인(비침습: 발견 시 트레이 메뉴 라벨만 갱신)
+            _ = RunUpdateCheckAsync(userInitiated: false);
         };
         app.Run();
     }
