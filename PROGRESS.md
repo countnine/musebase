@@ -1,7 +1,15 @@
 # PROGRESS — LyricsX for Windows
 
-> **상태: v0.6.1 (2026-07-14)** — 트랙 메타 정제 검색 확장
+> **상태: v0.6.2 (2026-07-14)** — QQ 실응답 수정 + 실검색 통합 검증 완료
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.6.2 추가분
+- **QQ Music 실응답 버그 수정** — `lyric_download.fcg` 실제 응답은 `<content type="file" ...><![CDATA[HEX]]>` 형태였음. `ExtractElement`가 속성 있는 태그 매칭 + CDATA 언랩을 하도록 수정 → QQ가 실제로 글자단위(QRC) 가사 반환
+- **실검색 통합 검증 완료** — 실제 API로 4개 제공자 전부 확인:
+  - Kugou: 글자단위(KRC XOR+zlib 복호 실동작), NetEase: 글자단위+번역(yrc/klyric), QQ: 글자단위(QRC 3중 DES 복호 실동작), LRCLIB: 라인단위
+  - 메타 정제 확장 실효과 확인("Bohemian Rhapsody - Remastered 2011" → 정제된 매치 다수)
+  - `LiveSearchProbe`(env `LYRICSX_LIVE=1` 게이트) 추가 — 오프라인 CI 안전, 수동 실검증용
+- **의의**: 오프라인으로 포팅한 3중 DES(비표준 S-Box 포함)가 실제 QQ QRC를 정확히 복호함을 입증
 
 ## v0.6.1 추가분
 - **트랙 메타 정제 검색 확장** — `SearchTermCleaner`가 피처링/리마스터/라이브/버전 표기 등 잡음을 제거한 검색어 변형을 생성
@@ -63,13 +71,14 @@
 - 배포: `artifacts\LyricsX-Windows-v0.1.0-win-x64.zip` (70MB, self-contained 단일 exe)
 
 ## 백로그 (다음 작업 후보, 우선순위 순)
-1. **QQ Music 실응답 검증** — lyric_download.fcg XML 스키마/필드를 실제 응답으로 확인·튜닝 (현재 방어적 추정 구현)
-2. **실검색 통합 검증** — Kugou/QQ/NetEase(yrc/klyric) 실제 곡으로 글자 카라오케 표시 확인 (오프라인 검증분 보완). 메타 정제 확장 실효과도 함께 확인
-3. **차기 릴리스(v0.6.1+)** — 누적 변경을 `RELEASING.md` 절차로 배포하고 자동 업데이트 실검증(이전 설치본 → 신버전)
+1. **차기 릴리스(v0.6.2) 배포** — 누적 변경(글자카라오케·제공자·메타정제·QQ수정)을 `RELEASING.md` 절차로 배포하고, 이전 설치본(0.6.0)→신버전으로 자동 업데이트 실검증
+2. **오버레이 실표시 검증** — 실제 재생 중 Kugou/QQ/NetEase 글자 카라오케가 오버레이에서 채워지는지 화면 확인(제공자 데이터는 실검증됨, 렌더 관찰만 남음)
+3. 글자단위 외 UX 개선 여지 — 검색 결과 미리보기/수동 선택 UX, 오프셋 미세조정 등
 
 ## 완료된 백로그
 - v0.6.0 첫 릴리스 배포 (GitHub Releases, Setup.exe + Velopack 자산)
 - 트랙 메타 정제 검색 확장 (v0.6.1)
+- QQ 실응답 수정 + 실검색 통합 검증 — 4개 제공자 전부 실API 확인 (v0.6.2)
 
 ## 기술 결정 기록
 - 스택: WPF 단일 (WinUI3/DirectWrite 불필요 판정 — M0 검증)

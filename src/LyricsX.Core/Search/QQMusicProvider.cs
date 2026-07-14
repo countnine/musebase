@@ -122,11 +122,19 @@ public sealed partial class QQMusicProvider : LyricsProviderBase<QQMusicProvider
 
     // ---- QRC/XML 복호 (QQMusicXMLDecoder.swift 상당, 경량화) ----
 
-    /// <summary>&lt;name&gt;...&lt;/name&gt; 요소 내부 텍스트를 추출한다(첫 매치).</summary>
+    /// <summary>
+    /// &lt;name ...속성...&gt;내용&lt;/name&gt; 요소의 내부 텍스트 추출(첫 매치).
+    /// 실제 QQ 응답은 `&lt;content type="file" ...&gt;&lt;![CDATA[HEX]]&gt;` 형태라
+    /// 속성을 허용하고 CDATA 래퍼를 벗긴다.
+    /// </summary>
     private static string? ExtractElement(string xml, string name)
     {
-        var m = Regex.Match(xml, $"<{name}>(.*?)</{name}>", RegexOptions.Singleline);
-        return m.Success ? m.Groups[1].Value : null;
+        var m = Regex.Match(xml, $@"<{name}\b[^>]*>(.*?)</{name}>", RegexOptions.Singleline);
+        if (!m.Success) return null;
+
+        var inner = m.Groups[1].Value;
+        var cdata = Regex.Match(inner, @"<!\[CDATA\[(.*?)\]\]>", RegexOptions.Singleline);
+        return cdata.Success ? cdata.Groups[1].Value : inner;
     }
 
     /// <summary>
