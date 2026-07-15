@@ -25,6 +25,21 @@ public sealed class AppSettings
     public string OutlineColor { get; set; } = "#000000";
     public double OutlineThickness { get; set; } = 3.0;
 
+    /// <summary>가사가 나타나고 사라질 때 부드럽게 페이드 인/아웃한다.</summary>
+    public bool FadeAnimation { get; set; } = true;
+
+    /// <summary>오버레이 배경(반투명 판)을 표시한다.</summary>
+    public bool OverlayBackgroundEnabled { get; set; }
+
+    /// <summary>오버레이 배경 색(#RRGGBB). 투명도는 OverlayBackgroundOpacity로 조절.</summary>
+    public string OverlayBackgroundColor { get; set; } = "#000000";
+
+    /// <summary>오버레이 배경 불투명도(0=완전 투명 ~ 1=불투명).</summary>
+    public double OverlayBackgroundOpacity { get; set; } = 0.4;
+
+    /// <summary>오버레이 위에 마우스를 올리면 가사·오버레이를 잠시 숨긴다(가림 방지).</summary>
+    public bool HideOnMouseOver { get; set; }
+
     /// <summary>글자 단위 노래방(인라인 타임태그 기반). 지원 곡(Kugou/QQ 등)에서만 동작.</summary>
     public bool CharacterKaraoke { get; set; } = true;
 

@@ -40,35 +40,99 @@ public sealed class NowPlayingService : IDisposable
     {
         var service = new NowPlayingService();
         service._manager = await SessionManager.RequestAsync();
-        service._manager.CurrentSessionChanged += (_, _) => service.AttachCurrentSession();
-        service.AttachCurrentSession();
+        service._manager.CurrentSessionChanged += (_, _) => service.SelectBestSession();
+        service._manager.SessionsChanged += (_, _) => service.SelectBestSession();
+        service.SelectBestSession();
 
         // SMTC의 PlaybackInfoChanged 이벤트가 앱(예: Spotify)에 따라 지연되어
         // 정지 후에도 가사가 남는 문제 방지 — 재생 상태를 주기적으로 폴링해 즉시 반영.
+        // 아울러 매 폴링마다 최적 세션을 재선택한다: Windows 10에서 Spotify가
+        // "현재 세션"으로 잡히지 않아(다른 앱이 current) 인식이 안 되던 문제를 해결.
         service._pollTimer = new Timer(
-            _ => service.RefreshPlayback(), null,
+            _ => { service.SelectBestSession(); service.RefreshPlayback(); }, null,
             TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
         return service;
     }
 
-    private void AttachCurrentSession()
+    /// <summary>
+    /// 부착할 SMTC 세션을 재선택한다. GetCurrentSession()만 믿지 않고 전체 세션을
+    /// 열거해 '재생 중'인 세션을 우선한다(Win10에서 Spotify가 current로 안 잡히는 문제 대응).
+    /// 선택이 바뀔 때만 재구독한다.
+    /// </summary>
+    private void SelectBestSession()
     {
+        bool changed;
         lock (_lock)
         {
+            var manager = _manager;
+            if (manager is null) return;
+
+            var best = PickBestSession(manager);
+            if (SameSession(best, _session)) return;
+
             if (_session is not null)
             {
                 _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
                 _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
             }
-            _session = _manager?.GetCurrentSession();
+            _session = best;
             if (_session is not null)
             {
                 _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
                 _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
             }
+            changed = true;
         }
-        _ = RefreshTrackAsync();
-        RefreshPlayback();
+
+        if (changed)
+        {
+            _ = RefreshTrackAsync();
+            RefreshPlayback();
+        }
+    }
+
+    /// <summary>current 세션이 재생 중이면 그대로, 아니면 재생 중인 아무 세션, 그래도 없으면 current/첫 세션.</summary>
+    private static Session? PickBestSession(SessionManager manager)
+    {
+        Session? current = null;
+        try { current = manager.GetCurrentSession(); } catch { /* 레이스 */ }
+        if (current is not null && IsSessionPlaying(current)) return current;
+
+        try
+        {
+            var sessions = manager.GetSessions();
+            Session? first = null;
+            foreach (var s in sessions)
+            {
+                first ??= s;
+                if (IsSessionPlaying(s)) return s;
+            }
+            return current ?? first;
+        }
+        catch
+        {
+            return current;
+        }
+    }
+
+    private static bool IsSessionPlaying(Session session)
+    {
+        try
+        {
+            return session.GetPlaybackInfo().PlaybackStatus
+                == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool SameSession(Session? a, Session? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        return string.Equals(a.SourceAppUserModelId, b.SourceAppUserModelId, StringComparison.OrdinalIgnoreCase);
     }
 
     private void OnMediaPropertiesChanged(Session sender, MediaPropertiesChangedEventArgs args) =>

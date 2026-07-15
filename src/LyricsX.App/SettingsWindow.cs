@@ -156,6 +156,38 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(0, 6, 0, 0),
         };
 
+        var fadeCheck = new CheckBox
+        {
+            Content = "가사 나타남/사라짐 페이드 효과",
+            IsChecked = settings.FadeAnimation,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+
+        var hideOnHoverCheck = new CheckBox
+        {
+            Content = "마우스를 올리면 오버레이 숨기기(가림 방지)",
+            IsChecked = settings.HideOnMouseOver,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+
+        // ---- 오버레이 배경 ----
+        var bgEnableCheck = new CheckBox
+        {
+            Content = "오버레이 배경 표시",
+            IsChecked = settings.OverlayBackgroundEnabled,
+            Margin = new Thickness(0, 12, 0, 4),
+        };
+        var bgColor = MakeColorRow("배경 색", settings.OverlayBackgroundColor);
+        var bgOpacityLabel = new TextBlock { Margin = new Thickness(0, 4, 0, 0) };
+        var bgOpacitySlider = new Slider
+        {
+            Minimum = 0, Maximum = 1, Value = Math.Clamp(settings.OverlayBackgroundOpacity, 0, 1),
+            TickFrequency = 0.05, IsSnapToTickEnabled = true,
+        };
+        void UpdateBgOpacityLabel() => bgOpacityLabel.Text = $"배경 불투명도: {bgOpacitySlider.Value * 100:0}%";
+        bgOpacitySlider.ValueChanged += (_, _) => UpdateBgOpacityLabel();
+        UpdateBgOpacityLabel();
+
         var saveButton = new Button
         {
             Content = "저장",
@@ -189,6 +221,11 @@ public sealed class SettingsWindow : Window
             settings.OutlineThickness = outlineSlider.Value;
             settings.CharacterKaraoke = karaokeCheck.IsChecked == true;
             settings.HideSameTranslation = hideSameTransCheck.IsChecked == true;
+            settings.FadeAnimation = fadeCheck.IsChecked == true;
+            settings.HideOnMouseOver = hideOnHoverCheck.IsChecked == true;
+            settings.OverlayBackgroundEnabled = bgEnableCheck.IsChecked == true;
+            settings.OverlayBackgroundColor = NormalizeHex(bgColor.Box.Text, settings.OverlayBackgroundColor);
+            settings.OverlayBackgroundOpacity = bgOpacitySlider.Value;
             settings.Save();
             onSaved();
             Close();
@@ -217,6 +254,12 @@ public sealed class SettingsWindow : Window
         panel.Children.Add(outlineSlider);
         panel.Children.Add(karaokeCheck);
         panel.Children.Add(hideSameTransCheck);
+        panel.Children.Add(fadeCheck);
+        panel.Children.Add(hideOnHoverCheck);
+        panel.Children.Add(bgEnableCheck);
+        panel.Children.Add(bgColor.Row);
+        panel.Children.Add(bgOpacityLabel);
+        panel.Children.Add(bgOpacitySlider);
         panel.Children.Add(saveButton);
         Content = panel;
     }

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using LyricsX.App.Services;
 using LyricsX.Core;
@@ -29,10 +30,14 @@ public sealed class OverlayWindow : Window
     private readonly LockButtonWindow _lockButton;
     private readonly DispatcherTimer _hoverTimer;
 
+    private static readonly Duration FadeDuration = new(TimeSpan.FromMilliseconds(180));
+
     private bool _clickThrough = true;
     private bool _userVisible = true;
     private bool _fullscreenSuppressed;
     private bool _pausedSuppressed;
+    private bool _mouseOverSuppressed; // 마우스 오버 시 숨김(설정)
+    private string _shownContent = string.Empty; // 페이드 크로스페이드 판단용
 
     private InlineTimeTags? _karaoke; // 현재 라인의 글자단위 태그 (null = 라인 단위 폴백)
     private double _lineSpan;          // 현재 라인 표시 구간(초)
@@ -87,7 +92,7 @@ public sealed class OverlayWindow : Window
         {
             Interval = TimeSpan.FromMilliseconds(150),
         };
-        _hoverTimer.Tick += (_, _) => UpdateLockButton();
+        _hoverTimer.Tick += (_, _) => OnHoverTick();
 
         Loaded += (_, _) =>
         {
@@ -116,6 +121,29 @@ public sealed class OverlayWindow : Window
     // ---- 표시 내용 ----
 
     public void SetLine(DisplayLine? line)
+    {
+        var newContent = line?.Content ?? string.Empty;
+        // 페이드 옵션: 내용이 실제로 바뀔 때만 크로스페이드(진행 갱신은 SetProgress가 처리)
+        if (_settings.FadeAnimation && IsLoaded && newContent != _shownContent)
+        {
+            var fadeOut = new DoubleAnimation { From = _panel.Opacity, To = 0, Duration = FadeDuration };
+            fadeOut.Completed += (_, _) =>
+            {
+                ApplyLineContent(line);
+                _shownContent = newContent;
+                _panel.BeginAnimation(OpacityProperty, new DoubleAnimation { From = 0, To = 1, Duration = FadeDuration });
+            };
+            _panel.BeginAnimation(OpacityProperty, fadeOut);
+            return;
+        }
+
+        _panel.BeginAnimation(OpacityProperty, null);
+        _panel.Opacity = 1;
+        ApplyLineContent(line);
+        _shownContent = newContent;
+    }
+
+    private void ApplyLineContent(DisplayLine? line)
     {
         _originalLine.Text = line?.Content ?? string.Empty;
         // 설정이 켜져 있고 라인에 글자단위 태그가 있을 때만 글자 채움, 아니면 라인 단위 폴백
@@ -187,7 +215,7 @@ public sealed class OverlayWindow : Window
 
         Background = moveMode
             ? new SolidColorBrush(Color.FromArgb(0x50, 0x20, 0x20, 0x20))
-            : Brushes.Transparent;
+            : ComputeBackgroundBrush();
         if (moveMode && string.IsNullOrEmpty(_originalLine.Text))
         {
             _originalLine.Text = "드래그: 이동 · 가장자리: 크기 조절";
@@ -198,6 +226,28 @@ public sealed class OverlayWindow : Window
         if (!moveMode) SaveBounds();
         MoveModeChanged?.Invoke(moveMode);
         ApplyVisibility(); // 억제 상태여도 이동 모드 진입 시 표시
+        UpdateLockButton();
+    }
+
+    /// <summary>호버 타이머(150ms): 마우스 오버 숨김 처리 + 자물쇠 버튼 표시 갱신.</summary>
+    private void OnHoverTick()
+    {
+        // 마우스 오버 시 숨김 옵션 — 이동 모드 중에는 무시(사용자가 조작 중)
+        if (_settings.HideOnMouseOver && !IsMoveMode)
+        {
+            var over = IsCursorOverOverlay();
+            if (over != _mouseOverSuppressed)
+            {
+                _mouseOverSuppressed = over;
+                ApplyVisibility();
+            }
+        }
+        else if (_mouseOverSuppressed)
+        {
+            _mouseOverSuppressed = false;
+            ApplyVisibility();
+        }
+
         UpdateLockButton();
     }
 
@@ -215,18 +265,29 @@ public sealed class OverlayWindow : Window
         else _lockButton.Hide();
     }
 
+    // 오버레이의 화면 영역(물리 px). 보이는 동안 갱신해 두면 '마우스 오버 시 숨김'으로
+    // 창이 숨겨진 뒤에도(PresentationSource 변환에 의존하지 않고) 커서 이탈을 판정할 수 있다.
+    private Rect _cachedScreenBounds = Rect.Empty;
+
     private bool IsCursorOverOverlay()
     {
+        if (IsVisible && PresentationSource.FromVisual(this) is not null)
+        {
+            try
+            {
+                var tl = PointToScreen(new Point(0, 0));
+                var br = PointToScreen(new Point(ActualWidth, ActualHeight));
+                _cachedScreenBounds = new Rect(tl, br);
+            }
+            catch
+            {
+                // PresentationSource 미준비 — 마지막 캐시 사용
+            }
+        }
+
+        if (_cachedScreenBounds.IsEmpty) return false;
         if (!NativeMethods.GetCursorPos(out var pt)) return false;
-        try
-        {
-            var p = PointFromScreen(new Point(pt.X, pt.Y));
-            return p.X >= 0 && p.X <= ActualWidth && p.Y >= 0 && p.Y <= ActualHeight;
-        }
-        catch
-        {
-            return false; // PresentationSource 미준비
-        }
+        return _cachedScreenBounds.Contains(pt.X, pt.Y);
     }
 
     private void PositionLockButton()
@@ -256,20 +317,47 @@ public sealed class OverlayWindow : Window
         ApplyVisibility();
     }
 
+    /// <summary>이동 모드 중에는 억제(전체화면/일시정지/마우스오버)를 무시 — 사용자가 조작 중.</summary>
+    private bool ShouldBeVisible() =>
+        _userVisible
+        && (IsMoveMode || (!_fullscreenSuppressed && !_pausedSuppressed && !_mouseOverSuppressed));
+
     private void ApplyVisibility()
     {
-        // 이동 모드 중에는 억제(전체화면/일시정지)를 무시 — 사용자가 조작 중
-        var visible = _userVisible
-            && (IsMoveMode || (!_fullscreenSuppressed && !_pausedSuppressed));
-        if (visible)
+        if (ShouldBeVisible()) ShowOverlay();
+        else HideOverlay();
+    }
+
+    private void ShowOverlay()
+    {
+        if (_settings.FadeAnimation)
         {
-            Show();
+            if (!IsVisible) { Opacity = 0; Show(); }
+            BeginAnimation(OpacityProperty, new DoubleAnimation { From = Opacity, To = 1, Duration = FadeDuration });
         }
         else
         {
-            Hide();
-            _lockButton.Hide();
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+            Show();
         }
+    }
+
+    private void HideOverlay()
+    {
+        if (_settings.FadeAnimation && IsVisible)
+        {
+            var fade = new DoubleAnimation { From = Opacity, To = 0, Duration = FadeDuration };
+            // 페이드 도중 다시 표시로 바뀌면 숨기지 않는다(마지막 상태를 재확인).
+            fade.Completed += (_, _) => { if (!ShouldBeVisible()) Hide(); };
+            BeginAnimation(OpacityProperty, fade);
+        }
+        else
+        {
+            BeginAnimation(OpacityProperty, null);
+            Hide();
+        }
+        _lockButton.Hide();
     }
 
     /// <summary>설정의 색상/외곽선 스타일 적용 (설정 저장 후에도 호출)</summary>
@@ -286,9 +374,25 @@ public sealed class OverlayWindow : Window
         _translationLine.Stroke = outline;
         _translationLine.StrokeThickness = thickness;
 
+        // 배경(반투명 판) — 이동 모드 중에는 그 어두운 배경을 유지
+        if (!IsMoveMode) Background = ComputeBackgroundBrush();
+
         _originalLine.InvalidateVisual();
         _translationLine.InvalidateVisual();
         if (IsLoaded) UpdateTextLayout(); // 외곽선 두께가 측정 크기에 영향
+    }
+
+    /// <summary>설정의 배경 색·불투명도로 브러시 생성(비활성 시 투명).</summary>
+    private Brush ComputeBackgroundBrush()
+    {
+        if (!_settings.OverlayBackgroundEnabled) return Brushes.Transparent;
+        Color color;
+        try { color = (Color)ColorConverter.ConvertFromString(_settings.OverlayBackgroundColor); }
+        catch { color = Colors.Black; }
+        color.A = (byte)(Math.Clamp(_settings.OverlayBackgroundOpacity, 0.0, 1.0) * 255);
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     private static SolidColorBrush ParseBrush(string hex, Color fallback, byte? alpha = null)

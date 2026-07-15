@@ -1,7 +1,15 @@
 # PROGRESS — LyricsX for Windows
 
-> **상태: v0.7.2 (2026-07-14)** — 틀린 가사 표시 + 검색 UX + 내보내기/자물쇠 개선
+> **상태: v0.8.0 (2026-07-15)** — 오버레이 UX 옵션 5종
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.8.0 추가분 (오버레이 UX 옵션 5종)
+1. **페이드 인/아웃** — 가사 줄이 바뀔 때 크로스페이드, 오버레이가 나타나고 사라질 때 창 불투명도 페이드(180ms). 설정 `FadeAnimation`(기본 켬). 진행 갱신(SetProgress)은 페이드 없이, 내용 변경 시에만 크로스페이드. `OverlayWindow.SetLine/ApplyLineContent/ShowOverlay/HideOverlay`
+2. **오버레이 배경(반투명 판)** — 색+불투명도(0~1) 조절해 가사 뒤에 배경 판 표시. 설정 `OverlayBackgroundEnabled/Color/Opacity`(기본 끔, #000000, 0.4). 이동 모드의 어두운 배경과 공존(이동 모드 우선). `OverlayWindow.ComputeBackgroundBrush`
+3. **Win10 Spotify 인식 수정** — `GetCurrentSession()`만 믿지 않고 전체 SMTC 세션 열거 후 '재생 중' 세션 우선 선택(Win10에서 Spotify가 current로 안 잡히던 문제). `SessionsChanged` 구독 + 250ms 폴링마다 재선택, 선택 바뀔 때만 재구독. `NowPlayingService.SelectBestSession/PickBestSession`
+4. **자물쇠 아이콘 단순화** — 이모지(🔒/🔓) → 벡터 라인 스타일 자물쇠. 잠금=회색 닫힌 걸쇠, 해제(이동 모드)=녹색 열린 걸쇠로 상태를 모양+색으로 명확히 구분. `LockButtonWindow`(Path 기반)
+5. **마우스 오버 시 숨김** — 오버레이 위에 커서를 올리면 가사·오버레이를 잠시 숨겨 화면 가림 방지. 설정 `HideOnMouseOver`(기본 끔). 숨긴 뒤에도 커서 이탈을 판정하도록 화면 영역(물리 px)을 캐시. 이동 모드 중에는 무시. `OverlayWindow.OnHoverTick/IsCursorOverOverlay`
+- 빌드 Debug/Release 통과, 유닛 테스트 73 통과(App은 UI라 테스트 없음). 데모 모드 실행으로 배경·자물쇠 아이콘 시각 확인.
 
 ## v0.7.2 추가분
 1. **틀린 가사 표시** (트레이 → "가사 없음으로 표시 (틀린 가사)") — macOS `wrongLyrics` 참고. 표시 중단 + 캐시 제거 + 해당 곡 재검색·표시 억제(설정에 영속). 수동 검색/편집 시 억제 해제. `LyricsCoordinator.MarkWrongLyrics`, `AppSettings.SuppressedTracks`
