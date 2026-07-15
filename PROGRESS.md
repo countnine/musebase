@@ -142,6 +142,7 @@
 3. 글자단위 외 UX 개선 여지 — 검색 결과 미리보기/수동 선택 UX, 오프셋 미세조정 등
 
 ## 완료된 백로그
+- **v0.9.1 릴리스 배포** — 델타(0.9.0→0.9.1, 6파일) + full + Setup, GitHub Releases Latest. "대상 언어 번역만 표시"(기본 켬) + 중국어 예외.
 - **v0.9.0 릴리스 배포** — 델타(0.8.0→0.9.0) + full + Setup, GitHub Releases Latest(prerelease 아님). UI 다국어 19개어 + DeepL 키 DPAPI 암호화 + 설정 UI 개편 자동 업데이트 반영. ※ 업데이트 시 기존 평문 DeepL 키가 자동 암호화됨(구 0.8.0에선 키 미인식).
 - **v0.8.0 릴리스 배포** — 델타(0.7.2→0.8.0, 6파일 패치) + full + Setup, GitHub Releases Latest(prerelease 아님). 오버레이 UX 옵션 5종 자동 업데이트 반영
 - **v0.7.2 릴리스 배포** — 델타(0.6.2→0.7.2, 6파일 패치) + full, GitHub Releases Latest. 0.7.x 개선 전체 자동 업데이트 반영
