@@ -1,5 +1,7 @@
 # Translating LyricsX / LyricsX 번역하기
 
+[English](TRANSLATING.en.md) · **한국어**
+
 LyricsX의 UI는 로케일별 JSON 카탈로그로 번역됩니다. 별도 번역 플랫폼 없이 **GitHub에서 직접**
 기여할 수 있습니다 — 파일을 고쳐 Pull Request를 열거나, 이슈로 수정을 제안하세요.
 
