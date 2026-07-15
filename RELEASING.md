@@ -51,6 +51,16 @@ vpk upload github \
 `vpk upload github`은 태그 `$VERSION`으로 릴리스를 만들고 `RELEASES`, 델타 `.nupkg`,
 `LyricsX-win-Setup.exe`를 첨부한다. 앱의 `GithubSource(prerelease: false)`가 이 릴리스를 읽는다.
 
+```powershell
+# 4) (선택) 홈페이지 버전 표기 즉시 갱신
+#    홈페이지(countnine/lyricsx-home)의 "Latest release: vX.Y.Z" 문구를 새 버전으로
+#    바로 갱신한다. 실행하지 않아도 홈페이지는 매일 06:00 UTC 크론으로 최신화된다.
+.\scripts\notify-homepage.ps1
+```
+
+> 홈페이지는 다운로드 버튼을 `releases/latest/download/...` 직링크로 걸어 두므로
+> 버전과 무관하게 항상 최신 설치파일을 받는다. 이 단계는 표시 문구 갱신만 담당한다.
+
 ## 동작 규칙
 
 - **버전 비교는 SemVer** — 태그가 `0.6.0` 형식이어야 한다. 현재 설치 버전보다 높을 때만 업데이트로 인식.
@@ -64,4 +74,5 @@ vpk upload github \
 - [ ] `dotnet test` 통과
 - [ ] 위 1~3 단계 실행
 - [ ] GitHub Releases에 태그·자산 확인
+- [ ] `.\scripts\notify-homepage.ps1` 실행(홈페이지 버전 표기 즉시 갱신)
 - [ ] (권장) 이전 버전 설치본에서 "업데이트 확인"으로 실제 업데이트 검증
