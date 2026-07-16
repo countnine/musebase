@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LyricsX.Core.Search;
+using LyricsX.Engine;
 
 namespace LyricsX.App.Services;
 
@@ -12,6 +13,10 @@ namespace LyricsX.App.Services;
 /// </summary>
 public sealed class AppSettings
 {
+    /// <summary>비밀값(번역 API 키) 보호 저장소. 플랫폼별 교체 가능(기본 Windows DPAPI).</summary>
+    [JsonIgnore]
+    private ISecretStore _secretStore = new DpapiSecretStore();
+
     public bool OverlayVisible { get; set; } = true;
     public double? OverlayX { get; set; }
     public double? OverlayY { get; set; }
@@ -151,13 +156,15 @@ public sealed class AppSettings
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, // null 필드(구 평문 키 등) 미기록
     };
 
-    public static AppSettings Load()
+    public static AppSettings Load(ISecretStore? secretStore = null)
     {
+        var store = secretStore ?? new DpapiSecretStore();
         try
         {
             if (File.Exists(SettingsPath))
             {
                 var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions) ?? new AppSettings();
+                settings._secretStore = store;
                 settings.ResolveSecrets();
                 return settings;
             }
@@ -166,14 +173,14 @@ public sealed class AppSettings
         {
             // 손상된 설정은 기본값으로
         }
-        return new AppSettings();
+        return new AppSettings { _secretStore = store };
     }
 
     /// <summary>암호문 복호화 또는 구버전 평문 키 마이그레이션 → 평문 DeeplApiKey 확정.</summary>
     private void ResolveSecrets()
     {
         if (!string.IsNullOrEmpty(DeeplApiKeyEncrypted))
-            DeeplApiKey = Secret.Unprotect(DeeplApiKeyEncrypted);
+            DeeplApiKey = _secretStore.Unprotect(DeeplApiKeyEncrypted);
         else if (!string.IsNullOrWhiteSpace(LegacyDeeplApiKey))
             DeeplApiKey = LegacyDeeplApiKey; // 구버전 평문 → 다음 Save에서 암호화
         LegacyDeeplApiKey = null;            // 평문 필드는 더 이상 보관/기록하지 않음
@@ -183,8 +190,8 @@ public sealed class AppSettings
     {
         try
         {
-            // 평문 키는 파일에 쓰지 않고, DPAPI 암호문만 저장
-            DeeplApiKeyEncrypted = Secret.Protect(DeeplApiKey);
+            // 평문 키는 파일에 쓰지 않고, 암호문만 저장(플랫폼 시크릿 저장소)
+            DeeplApiKeyEncrypted = _secretStore.Protect(DeeplApiKey);
             LegacyDeeplApiKey = null;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));

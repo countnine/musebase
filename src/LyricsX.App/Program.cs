@@ -31,31 +31,25 @@ internal static class Program
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LyricsX", "translations.db");
             var translationCache = new LyricsX.Core.Translation.SqliteTranslationCache(cacheDb);
-            LyricsX.Core.Translation.LyricsTranslationService BuildTranslation()
-            {
-                var options = new LyricsX.Core.Translation.TranslatorOptions(
+
+            // 설정 → 플랫폼 무관 엔진 구성(소스/엔진/키/캐시). 저장 시 최신값으로 다시 읽는다.
+            EngineConfig CurrentConfig() => new(
+                settings.EnabledLyricsSources,
+                settings.EffectiveTranslationEngine,
+                new LyricsX.Core.Translation.TranslatorOptions(
                     DeeplApiKey: settings.DeeplApiKey,
-                    LibreEndpoint: settings.LibreTranslateEndpoint);
-                var translator = LyricsX.Core.Translation.TranslatorRegistry.Build(
-                    settings.EffectiveTranslationEngine, options);
-                Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}, 활성={(translator is not null)}");
-                return new LyricsX.Core.Translation.LyricsTranslationService(translator, translationCache);
-            }
+                    LibreEndpoint: settings.LibreTranslateEndpoint),
+                settings.EffectiveTargetLanguage,
+                settings.ShowOnlyTargetTranslation,
+                settings.ManualOffsetSeconds,
+                cacheDb);
 
-            // 가사 소스: 레지스트리에서 활성 소스만 조합해 검색 서비스 구성
-            var search = new LyricsX.Core.Search.LyricsSearchService(
-                LyricsX.Core.Search.LyricsSourceRegistry.Build(settings.EnabledLyricsSources));
             Log.Write($"[sources] 활성 가사 소스: {string.Join(", ", settings.EnabledLyricsSources)}");
+            Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}");
 
-            var coordinator = new LyricsCoordinator(nowPlaying, new WpfEngineDispatcher(app.Dispatcher), search)
-            {
-                ManualOffsetSeconds = settings.ManualOffsetSeconds,
-                Translation = BuildTranslation(),
-                TargetLanguage = settings.EffectiveTargetLanguage,
-                ShowOnlyTargetTranslation = settings.ShowOnlyTargetTranslation,
-                Cache = new LyricsX.Core.Search.LyricsCacheStore(cacheDb),
-                Log = Log.Write,
-            };
+            // 공유 조합 팩토리로 코디네이터 조립(동일 조합을 Android/서버가 재사용)
+            var coordinator = LyricsEngineFactory.Create(
+                nowPlaying, new WpfEngineDispatcher(app.Dispatcher), CurrentConfig(), translationCache, Log.Write);
 
             // "틀린 가사" 억제 목록을 설정에서 복원하고 변경 시 영속화
             foreach (var key in settings.SuppressedTracks) coordinator.SuppressedTrackKeys.Add(key);
@@ -307,12 +301,13 @@ internal static class Program
                 }
                 settingsWindow = new SettingsWindow(settings, onSaved: () =>
                 {
-                    coordinator.Translation = BuildTranslation();
-                    coordinator.TargetLanguage = settings.EffectiveTargetLanguage;
-                    coordinator.ShowOnlyTargetTranslation = settings.ShowOnlyTargetTranslation;
+                    var cfg = CurrentConfig();
+                    coordinator.Translation = LyricsEngineFactory.BuildTranslation(cfg, translationCache);
+                    coordinator.TargetLanguage = cfg.TargetLanguage;
+                    coordinator.ShowOnlyTargetTranslation = cfg.ShowOnlyTargetTranslation;
                     coordinator.RefreshCurrentLine(); // 표시 정책 변경 즉시 반영
                     overlay.ApplyStyle();
-                    Log.Write($"[settings] 저장됨: lang={settings.EffectiveTargetLanguage}, key={(settings.DeeplApiKey is null ? "없음" : "설정됨")}");
+                    Log.Write($"[settings] 저장됨: engine={cfg.TranslationEngineId}, lang={cfg.TargetLanguage}");
                 });
                 settingsWindow.Show();
             };
