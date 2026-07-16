@@ -20,6 +20,10 @@
     <!-- 스파이크는 사이드로드용 APK만 산출(AAB 불필요). -->
     <AndroidPackageFormats>apk</AndroidPackageFormats>
     <AndroidManifest>AndroidManifest.xml</AndroidManifest>
+
+    <!-- 사이드로드 필수: Debug 기본값(Fast Deployment)은 어셈블리를 APK에 넣지 않아
+         수동 설치 시 첫 화면에서 즉시 크래시한다. 항상 APK에 포함. -->
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
   </PropertyGroup>
 
   <ItemGroup>
