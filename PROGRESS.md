@@ -1,7 +1,14 @@
 # PROGRESS — LyricsX for Windows
 
-> **상태: v0.9.1 (2026-07-15)** — 대상 언어 번역만 표시(중국어 예외) + v0.9.0(다국어/보안/설정 UI)
+> **상태: v0.9.2 (2026-07-16)** — 재생 소스 선택(브라우저 오인식 해결) + 오버레이 미디어 컨트롤 + 엔진 리팩터(Core/Engine 분리, 소스·번역 레지스트리)
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.9.2 추가분 (재생 소스 + 미디어 컨트롤 + 엔진 리팩터)
+- **재생 소스 선택** — 트레이 "재생 소스" 서브메뉴(자동/특정 플레이어)와 설정. 자동 모드는 브라우저(SMTC) 세션 제외(`BrowserTokens`)로 Firefox/YouTube 오인식 해결, 특정 소스 잠금 시 해당 앱 세션만 사용. `NowPlayingService.PickBestSession` 재작성 + `[smtc] 세션 목록:` 진단 로그.
+- **정지 시 오버레이 완전 숨김** — 가사뿐 아니라 배경판까지 숨김.
+- **오버레이 미디어 컨트롤** — 마우스오버 시 좌측에 이전/재생·일시정지/다음 버튼(`MediaControlWindow`), SMTC `PlaybackControls` 반영.
+- **엔진 리팩터(steps 1–6)** — UI 무관 `LyricsX.Engine` 신설: `INowPlayingSource`/`IEngineDispatcher`/`LyricsStatus`/`PlaybackViewState`(직렬화 표시계약)/`PlaybackViewModel`/`ISecretStore`/`EngineConfig`+`LyricsEngineFactory`. 멀티플랫폼(Android/브라우저) 재사용 기반. ADR 0001(코어 언어 .NET 유지)/0002(플러그형 소스·번역).
+- **소스/번역 레지스트리** — `LyricsSourceRegistry`(LRCLIB만 공식 API 표시)+`EnabledLyricsSources`, `TranslatorRegistry`+무키 무료 `LibreTranslateTranslator`(DeepL 키 없으면 기본). 설정창 [일반] 탭에 소스 체크박스·번역 엔진 콤보·엔드포인트 노출. Core 테스트 82개.
 
 ## v0.9.1 추가분 (번역 표시 정책)
 - **"대상 언어 번역만 표시" 설정(기본 켬)** — 제공자(Kugou/QQ/NetEase)가 끼워 넣는 다른 언어 번역(주로 중국어)을 숨기고, DeepL 대상 언어 번역(`tr:{target}`)만 표시. **최초 설치·DeepL 키 없는 사용자는 원문만** 표시. `AppSettings.ShowOnlyTargetTranslation`, `LyricsCoordinator.ResolveDisplayTranslation`.
