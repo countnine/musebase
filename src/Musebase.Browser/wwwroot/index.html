@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Musebase Display</title>
+<style>
+  /* contracts/playback-view-state.md v1 만 보고 렌더하는 표시 전용 페이지 (코어 참조 없음) */
+  :root {
+    --bg: #0b0d12;
+    --text: #f5f6f8;
+    --dim: rgba(245, 246, 248, 0.32);
+    --accent: #7cc4ff;
+    --shadow: rgba(0, 0, 0, 0.65);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(1200px 700px at 50% 42%, #151b2a 0%, var(--bg) 72%);
+    color: var(--text);
+    font-family: "Segoe UI", "Malgun Gothic", "Noto Sans KR", "Yu Gothic UI", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #stage {
+    text-align: center;
+    max-width: 96vw;
+    opacity: 1;
+    transition: opacity 0.45s ease;
+  }
+  #stage.hidden { opacity: 0; }
+  #meta {
+    font-size: clamp(14px, 2vw, 21px);
+    color: var(--dim);
+    margin-bottom: 1.3em;
+  }
+  #meta #title { color: rgba(245, 246, 248, 0.78); font-weight: 600; }
+  #line-wrap {
+    position: relative;
+    display: inline-block;
+    white-space: nowrap;
+    font-size: clamp(28px, 5.2vw, 64px);
+    font-weight: 700;
+    line-height: 1.25;
+    text-shadow: 0 2px 20px var(--shadow);
+    transform-origin: center center;
+  }
+  #line-base { color: var(--dim); }
+  /* Karaoke=null → 계약 규칙 3: 줄 전체 단색 */
+  #line-wrap.solid #line-base { color: var(--text); }
+  #line-wrap.solid #line-fill { display: none; }
+  #line-fill {
+    position: absolute; left: 0; top: 0;
+    color: var(--accent);
+    white-space: nowrap;
+    clip-path: inset(0 100% 0 0);
+    pointer-events: none;
+    text-shadow: 0 0 22px rgba(124, 196, 255, 0.35);
+  }
+  #translation {
+    margin-top: 0.9em;
+    font-size: clamp(16px, 2.6vw, 30px);
+    color: rgba(245, 246, 248, 0.82);
+    text-shadow: 0 1px 12px var(--shadow);
+  }
+  #status {
+    position: fixed; right: 14px; bottom: 10px;
+    font-size: 12px;
+    color: rgba(245, 246, 248, 0.28);
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+  <div id="stage" class="hidden">
+    <div id="meta"><span id="title"></span><span id="artist"></span></div>
+    <div id="line-wrap">
+      <span id="line-base"></span><span id="line-fill" aria-hidden="true"></span>
+    </div>
+    <div id="translation"></div>
+  </div>
+  <div id="status">connecting…</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const stage = document.getElementById("stage");
+  const titleEl = document.getElementById("title");
+  const artistEl = document.getElementById("artist");
+  const wrapEl = document.getElementById("line-wrap");
+  const baseEl = document.getElementById("line-base");
+  const fillEl = document.getElementById("line-fill");
+  const transEl = document.getElementById("translation");
+  const statusEl = document.getElementById("status");
+
+  const measureCtx = document.createElement("canvas").getContext("2d");
+
+  /** 현재 상태(PascalCase 계약 그대로) + 파생값. */
+  let state = null;
+  /** 카라오케 보간용 앵커 폴리라인 [{Index, Time}] (시간 오름차순, 끝점 포함). */
+  let points = null;
+  /** 클라이언트-서버 시계 오프셋(ms). elapsed 계산 시 로컬 now에서 뺀다. */
+  let clockSkewMs = 0;
+  let skewCalibrated = false;
+  let lastLineStartedAtMs = null;
+
+  function setStatus(text) { statusEl.textContent = text; }
+
+  // ---------- WebSocket (자동 재접속) ----------
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    let closed = false;
+    ws.onopen = () => setStatus("connected");
+    ws.onmessage = (ev) => {
+      const receivedAt = Date.now();
+      let s;
+      try { s = JSON.parse(ev.data); } catch { return; }
+      applyState(s, receivedAt);
+    };
+    ws.onclose = () => {
+      if (closed) return;
+      closed = true;
+      setStatus("reconnecting…");
+      setTimeout(connect, 1500);
+    };
+    ws.onerror = () => { try { ws.close(); } catch { /* noop */ } };
+  }
+
+  // ---------- 상태 반영 ----------
+  function applyState(s, receivedAt) {
+    const startedAtMs = s.LineStartedAt ? Date.parse(s.LineStartedAt) : null;
+
+    // 시계 오차 1회 보정(계약 §보간 규칙): 줄이 라이브로 바뀌는 메시지는
+    // 발행 시각 ≈ LineStartedAt 이므로 (수신 시각 − LineStartedAt)을 오프셋으로 삼는다.
+    // 접속 직후 받는 스냅샷은 줄 중간일 수 있어 보정에 쓰지 않는다.
+    if (!skewCalibrated && startedAtMs !== null &&
+        lastLineStartedAtMs !== null && startedAtMs !== lastLineStartedAtMs) {
+      clockSkewMs = receivedAt - startedAtMs;
+      skewCalibrated = true;
+    }
+    if (startedAtMs !== null) lastLineStartedAtMs = startedAtMs;
+
+    state = s;
+    state._startedAtMs = startedAtMs;
+    points = buildPoints(s);
+    renderStatic();
+  }
+
+  /** Karaoke 마크 → 보간 폴리라인. 앞(0,0)·뒤(len, duration) 끝점을 보강한다. */
+  function buildPoints(s) {
+    const marks = s.Karaoke;
+    if (!marks || marks.length === 0) return null;
+    const len = (s.LineContent || "").length;
+    const pts = [];
+    if (marks[0].Time > 0 || marks[0].Index > 0) pts.push({ Index: 0, Time: 0 });
+    for (const m of marks) pts.push({ Index: m.Index, Time: m.Time });
+    const last = pts[pts.length - 1];
+    const dur = s.KaraokeDurationSeconds;
+    if (typeof dur === "number" && dur > last.Time && len > last.Index) {
+      pts.push({ Index: len, Time: dur });
+    }
+    return pts;
+  }
+
+  function renderStatic() {
+    if (!state || !state.IsPlaying) {
+      // IsPlaying=false → 전체 숨김(페이드). 보간은 frame()에서 자연 중지.
+      stage.classList.add("hidden");
+      return;
+    }
+    stage.classList.remove("hidden");
+
+    titleEl.textContent = state.TrackTitle || "";
+    artistEl.textContent = state.TrackArtist ? " — " + state.TrackArtist : "";
+
+    const line = state.LineContent || "";
+    baseEl.textContent = line;
+    fillEl.textContent = line;
+    wrapEl.classList.toggle("solid", !points);
+    fillEl.style.clipPath = "inset(0 100% 0 0)";
+
+    transEl.textContent = state.LineTranslation || "";
+    transEl.style.display = state.LineTranslation ? "" : "none";
+
+    fitLine();
+  }
+
+  /** 긴 줄이 화면을 넘치면 축소(transform은 clip-path 픽셀 계산에 영향 없음). */
+  function fitLine() {
+    wrapEl.style.transform = "";
+    const max = window.innerWidth * 0.96;
+    const w = wrapEl.getBoundingClientRect().width;
+    if (w > max) wrapEl.style.transform = `scale(${max / w})`;
+  }
+  window.addEventListener("resize", () => { if (state && state.IsPlaying) fitLine(); });
+
+  // ---------- 카라오케 로컬 보간 (계약 §보간 규칙) ----------
+  /** elapsed(초) → 채워진 문자 위치(소수 포함, 0..len). */
+  function charPosAt(elapsed) {
+    const pts = points;
+    if (elapsed <= pts[0].Time) return pts[0].Index;
+    const dur = state.KaraokeDurationSeconds;
+    const len = (state.LineContent || "").length;
+    if (typeof dur === "number" && elapsed >= dur) return len; // 규칙 3: 전부 채움
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      if (elapsed <= b.Time) {
+        const t = b.Time === a.Time ? 1 : (elapsed - a.Time) / (b.Time - a.Time);
+        return a.Index + (b.Index - a.Index) * t;
+      }
+    }
+    return pts[pts.length - 1].Index;
+  }
+
+  /** 문자 위치(소수) → 채움 픽셀 폭. canvas measureText로 실제 폰트 폭 측정. */
+  function pixelsForCharPos(pos) {
+    const line = state.LineContent || "";
+    const whole = Math.min(Math.floor(pos), line.length);
+    const frac = pos - whole;
+    measureCtx.font = getComputedStyle(baseEl).font;
+    let px = measureCtx.measureText(line.slice(0, whole)).width;
+    if (frac > 0 && whole < line.length) {
+      px += measureCtx.measureText(line[whole]).width * frac;
+    }
+    return px;
+  }
+
+  function frame() {
+    requestAnimationFrame(frame);
+    if (!state || !state.IsPlaying || !points || state._startedAtMs === null) return;
+    const elapsed = (Date.now() - clockSkewMs - state._startedAtMs) / 1000;
+    const px = pixelsForCharPos(charPosAt(elapsed));
+    fillEl.style.clipPath = `inset(0 calc(100% - ${px}px) 0 0)`;
+  }
+
+  connect();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

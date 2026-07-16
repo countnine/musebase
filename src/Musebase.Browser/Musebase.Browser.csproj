@@ -10,4 +10,9 @@
     <ProjectReference Include="..\Musebase.Engine\Musebase.Engine.csproj" />
   </ItemGroup>
 
+  <!-- 빌드 출력(bin)에서 exe를 직접 실행해도 정적 웹 디스플레이가 서빙되도록 복사 -->
+  <ItemGroup>
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
