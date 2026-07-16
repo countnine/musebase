@@ -3,6 +3,8 @@ using Android.Media;
 using Android.Media.Session;
 using Android.OS;
 using Musebase.Engine;
+// 암시적 using의 Android.Widget.MediaController와 모호 참조(CS0104) 방지
+using MediaController = Android.Media.Session.MediaController;
 
 namespace Musebase.Android.Services;
 
