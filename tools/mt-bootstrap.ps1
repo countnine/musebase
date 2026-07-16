@@ -9,16 +9,16 @@
   - 결과는 사람이 검토·수정하도록 Weblate에 올리는 '시드'다(최종본 아님).
 
 .PARAMETER Key
-  DeepL Auth Key. 생략 시 %LOCALAPPDATA%\LyricsX\settings.json의 deeplApiKey 사용.
+  DeepL Auth Key. 생략 시 %LOCALAPPDATA%\Musebase\settings.json의 deeplApiKey 사용.
 #>
 param([string]$Key)
 
 $ErrorActionPreference = 'Stop'
-$i18n = Join-Path $PSScriptRoot '..\src\LyricsX.App\i18n'
+$i18n = Join-Path $PSScriptRoot '..\src\Musebase.Windows\i18n'
 $enPath = Join-Path $i18n 'en.json'
 
 if (-not $Key) {
-    $sp = Join-Path $env:LOCALAPPDATA 'LyricsX\settings.json'
+    $sp = Join-Path $env:LOCALAPPDATA 'Musebase\settings.json'
     $Key = (Get-Content $sp -Raw | ConvertFrom-Json).deeplApiKey
 }
 if (-not $Key) { throw 'DeepL 키가 없습니다. -Key 로 전달하거나 settings.json에 설정하세요.' }

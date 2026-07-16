@@ -1,7 +1,12 @@
-# PROGRESS — LyricsX for Windows
+# PROGRESS — Musebase for Windows (구 LyricsX for Windows)
 
-> **상태: v0.9.2 (2026-07-16)** — 재생 소스 선택(브라우저 오인식 해결) + 오버레이 미디어 컨트롤 + 엔진 리팩터(Core/Engine 분리, 소스·번역 레지스트리)
+> **상태: v0.9.2 (2026-07-16) + Phase 0 진행 중** — 제품 개명(LyricsX→Musebase, 프로젝트/네임스페이스/데이터 경로 포함) + 멀티플랫폼 거버넌스 셋업 + LICENSE(MPL-2.0)
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## Phase 0 (개명 + 거버넌스, 2026-07-16)
+- **개명 LyricsX→Musebase**: 프로젝트 `Musebase.{Core,Engine,Windows}`(구 App→Windows)·`Musebase.sln`·네임스페이스·AssemblyName(`Musebase.exe`) 일괄. `%LOCALAPPDATA%\LyricsX`→`Musebase` 자동 이전(`MigrateLegacyAppData`), DPAPI entropy는 호환 위해 `"LyricsX.DeepL.v1"` 유지, 시작프로그램 레지스트리 값 `Musebase`(+구 값 정리). Velopack packId `Musebase` = 구 설치본 자동 업데이트 단절(클린 브레이크, RELEASING.md 참고).
+- **LICENSE(MPL-2.0) + 출처 표기**: 원본 LyricsX/LyricsKit(ddddxxx, MPL-2.0) 기반 명시. README 라이선스 절의 GPLv3 오기 수정.
+- **거버넌스**: CI 게이트(ci.yml), 루트 CLAUDE.md(소유권 지도+골든룰), .claude/agents/*, CODEOWNERS, contracts/playback-view-state.md, ADR-0003.
 
 ## v0.9.2 추가분 (재생 소스 + 미디어 컨트롤 + 엔진 리팩터)
 - **재생 소스 선택** — 트레이 "재생 소스" 서브메뉴(자동/특정 플레이어)와 설정. 자동 모드는 브라우저(SMTC) 세션 제외(`BrowserTokens`)로 Firefox/YouTube 오인식 해결, 특정 소스 잠금 시 해당 앱 세션만 사용. `NowPlayingService.PickBestSession` 재작성 + `[smtc] 세션 목록:` 진단 로그.

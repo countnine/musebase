@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\LyricsX.Core\LyricsX.Core.csproj" />
+    <ProjectReference Include="..\..\src\Musebase.Core\Musebase.Core.csproj" />
   </ItemGroup>
 
 </Project>

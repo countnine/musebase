@@ -1,0 +1,4 @@
+# 공유 기반(코어/엔진/계약)은 코어 담당의 확인을 거친다 — "코어는 코어 에이전트만 수정" 골든룰의 안전망.
+/src/Musebase.Core/    @countnine
+/src/Musebase.Engine/  @countnine
+/contracts/            @countnine

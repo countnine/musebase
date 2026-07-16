@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Musebase.Windows</RootNamespace>
+    <AssemblyName>Musebase</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
+    <!-- 릴리스 버전: Velopack 패키징(vpk pack packVersion 인자)과 in-app 표시에 사용 -->
+    <Version>0.9.2</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
+    <PackageReference Include="MessageFormat" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Musebase.Core\Musebase.Core.csproj" />
+    <ProjectReference Include="..\Musebase.Engine\Musebase.Engine.csproj" />
+  </ItemGroup>
+
+  <!-- UI 다국어 카탈로그: 로케일별 JSON을 어셈블리에 임베드 (Musebase.Windows.i18n.<code>.json) -->
+  <ItemGroup>
+    <EmbeddedResource Include="i18n\*.json" />
+  </ItemGroup>
+
+</Project>

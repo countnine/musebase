@@ -1,0 +1,19 @@
+{
+  "IsPlaying": true,
+  "TrackTitle": "unravel",
+  "TrackArtist": "TK from 凛として時雨",
+  "LineContent": "教えて 教えてよ その仕組みを",
+  "LineTranslation": "가르쳐 줘 가르쳐 줘 그 구조를",
+  "Karaoke": [
+    { "Index": 0, "Time": 0.0 },
+    { "Index": 3, "Time": 0.62 },
+    { "Index": 8, "Time": 1.48 },
+    { "Index": 15, "Time": 2.9 }
+  ],
+  "KaraokeDurationSeconds": 3.4,
+  "LineStartedAt": "2026-07-16T12:34:56.789+00:00",
+  "LineSpanSeconds": 4.1,
+  "CanPrevious": true,
+  "CanPlayPause": true,
+  "CanNext": true
+}

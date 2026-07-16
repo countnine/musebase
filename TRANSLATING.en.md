@@ -1,11 +1,11 @@
-# Translating LyricsX
+# Translating Musebase
 
 **English** · [한국어](TRANSLATING.md)
 
-LyricsX's UI is translated via per-locale JSON catalogs. You can contribute **directly on GitHub** —
+Musebase's UI is translated via per-locale JSON catalogs. You can contribute **directly on GitHub** —
 edit a file and open a pull request, or suggest a fix via an issue. No translation platform needed.
 
-- Catalogs: **[`src/LyricsX.App/i18n/`](https://github.com/countnine/LyricsX-Windows/tree/master/src/LyricsX.App/i18n)** (e.g. `ko.json`, `ja.json`, `de.json`)
+- Catalogs: **[`src/Musebase.Windows/i18n/`](https://github.com/countnine/musebase/tree/master/src/Musebase.Windows/i18n)** (e.g. `ko.json`, `ja.json`, `de.json`)
 - Reference (source) language: **English (`en.json`)** — the basis for all other languages
 - Format: flat `key → string` JSON. Arguments/plurals use **ICU MessageFormat** (`{value}`, `{count, plural, ...}`)
 
@@ -19,7 +19,7 @@ edit a file and open a pull request, or suggest a fix via an issue. No translati
 
 ## Option 2) Suggest via an issue (if you're not comfortable with Git)
 
-[**Open a translation suggestion issue**](https://github.com/countnine/LyricsX-Windows/issues/new?template=translation.yml) —
+[**Open a translation suggestion issue**](https://github.com/countnine/musebase/issues/new?template=translation.yml) —
 just fill in the language, key, and suggested text. A maintainer will apply it.
 
 ## Translation notes
@@ -31,9 +31,9 @@ just fill in the language, key, and suggested text. A maintainer will apply it.
 
 ## Adding a new language
 
-The supported-language list is in [`Services/Localization.cs`](https://github.com/countnine/LyricsX-Windows/blob/master/src/LyricsX.App/Services/Localization.cs)
+The supported-language list is in [`Services/Localization.cs`](https://github.com/countnine/musebase/blob/master/src/Musebase.Windows/Services/Localization.cs)
 (`SupportedLanguages`). To add one, add a `LanguageOption(code, nativeName)` entry there and create
-`src/LyricsX.App/i18n/<code>.json` (a missing file falls back to English).
+`src/Musebase.Windows/i18n/<code>.json` (a missing file falls back to English).
 
 ## Maintainer notes
 

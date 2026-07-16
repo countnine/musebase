@@ -1,4 +1,4 @@
-# LyricsX for Windows 배포 패키지 생성
+# Musebase for Windows 배포 패키지 생성
 # 사용법: .\scripts\publish.ps1 [-Version 0.1.0]
 param(
     [string]$Version = "0.1.0"
@@ -6,9 +6,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot
-$project = Join-Path $root "src\LyricsX.App\LyricsX.App.csproj"
+$project = Join-Path $root "src\Musebase.Windows\Musebase.Windows.csproj"
 $publishDir = Join-Path $root "artifacts\publish"
-$zipPath = Join-Path $root "artifacts\LyricsX-Windows-v$Version-win-x64.zip"
+$zipPath = Join-Path $root "artifacts\musebase-windows-v$Version-win-x64.zip"
 
 Write-Host "== 빌드 및 게시 (win-x64, self-contained, single-file) =="
 dotnet publish $project -c Release -r win-x64 --self-contained true `
@@ -24,7 +24,7 @@ Write-Host "== zip 패키징 =="
 if (Test-Path $zipPath) { Remove-Item $zipPath }
 Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $zipPath
 
-$exe = Get-Item (Join-Path $publishDir "LyricsX.exe")
+$exe = Get-Item (Join-Path $publishDir "Musebase.exe")
 $zip = Get-Item $zipPath
 Write-Host ""
 Write-Host "완료:"

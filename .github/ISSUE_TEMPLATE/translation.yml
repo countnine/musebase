@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        UI 문자열 번역 제안 양식입니다. 카탈로그: `src/LyricsX.App/i18n/`, 원문 기준: `en.json`.
+        UI 문자열 번역 제안 양식입니다. 카탈로그: `src/Musebase.Windows/i18n/`, 원문 기준: `en.json`.
         Git이 익숙하면 파일을 직접 편집해 PR을 열어도 됩니다 (TRANSLATING.md 참고).
   - type: input
     id: language

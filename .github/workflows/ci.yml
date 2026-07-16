@@ -1,0 +1,27 @@
+# CI 게이트: PR/push마다 전체 .NET 솔루션 빌드 + 유닛 테스트.
+# 모노레포 원칙 — 코어/엔진이 바뀌면 모든 .NET 헤드가 같은 솔루션으로 함께 빌드되어
+# 깨짐이 자동 발견된다. (Apple(Swift) 헤드가 생기면 macos 러너 잡을 추가한다.)
+name: CI
+
+on:
+  pull_request:
+    branches: [master, beta]
+  push:
+    branches: [master, beta]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    runs-on: windows-latest # WPF 헤드(net8.0-windows) 포함 빌드에 필요
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build
+        run: dotnet build Musebase.sln -c Release
+      - name: Test
+        run: dotnet test tests/Musebase.Core.Tests -c Release --no-build

@@ -32,7 +32,7 @@ foreach ($size in $sizes) {
 }
 
 # ICO 컨테이너 조립
-$outPath = Join-Path $PSScriptRoot "..\src\LyricsX.App\assets\app.ico"
+$outPath = Join-Path $PSScriptRoot "..\src\Musebase.Windows\assets\app.ico"
 New-Item -ItemType Directory -Force (Split-Path $outPath) | Out-Null
 $stream = [System.IO.File]::Create($outPath)
 $writer = New-Object System.IO.BinaryWriter($stream)

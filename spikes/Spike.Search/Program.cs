@@ -1,8 +1,8 @@
 // M1 라이브 스모크: 실제 API에 검색을 날려 제공자 동작을 확인한다.
 // 사용법: dotnet run -- [제목] [아티스트]  (기본: 夜に駆ける YOASOBI)
 
-using LyricsX.Core;
-using LyricsX.Core.Search;
+using Musebase.Core;
+using Musebase.Core.Search;
 
 var title = args.Length > 0 ? args[0] : "夜に駆ける";
 var artist = args.Length > 1 ? args[1] : "YOASOBI";
