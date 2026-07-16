@@ -7,6 +7,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using LyricsX.App.Services;
 using LyricsX.Core;
+using LyricsX.Engine;
 
 namespace LyricsX.App.Overlay;
 

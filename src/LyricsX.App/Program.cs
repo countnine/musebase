@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using H.NotifyIcon;
 using LyricsX.App.Overlay;
 using LyricsX.App.Services;
+using LyricsX.Engine;
 using Velopack;
 
 namespace LyricsX.App;
@@ -36,13 +37,14 @@ internal static class Program
                     : new LyricsX.Core.Translation.DeeplTranslator(settings.DeeplApiKey),
                 translationCache);
 
-            var coordinator = new LyricsCoordinator(nowPlaying, app.Dispatcher)
+            var coordinator = new LyricsCoordinator(nowPlaying, new WpfEngineDispatcher(app.Dispatcher))
             {
                 ManualOffsetSeconds = settings.ManualOffsetSeconds,
                 Translation = BuildTranslation(),
                 TargetLanguage = settings.EffectiveTargetLanguage,
                 ShowOnlyTargetTranslation = settings.ShowOnlyTargetTranslation,
                 Cache = new LyricsX.Core.Search.LyricsCacheStore(cacheDb),
+                Log = Log.Write,
             };
 
             // "틀린 가사" 억제 목록을 설정에서 복원하고 변경 시 영속화
@@ -382,11 +384,27 @@ internal static class Program
             };
 
             // ---- 이벤트 배선 ----
+            // 엔진은 구조화된 LyricsStatus를 발행 → 여기서 현지화(UI 분리)
+            static string LocalizeStatus(LyricsStatus s) => s.Kind switch
+            {
+                LyricsStatusKind.NoTrack => Loc.T("status.noTrack"),
+                LyricsStatusKind.HiddenByUser => Loc.T("status.hidden.user", ("track", s.Track ?? "")),
+                LyricsStatusKind.Cache => Loc.T("status.cache", ("track", s.Track ?? ""), ("service", s.Service ?? "")),
+                LyricsStatusKind.Searching => Loc.T("status.searching", ("track", s.Track ?? "")),
+                LyricsStatusKind.Found => Loc.T("status.found", ("track", s.Track ?? ""), ("service", s.Service ?? ""), ("quality", (s.Quality ?? 0).ToString("0.00"))),
+                LyricsStatusKind.NotFound => Loc.T("status.notFound", ("track", s.Track ?? "")),
+                LyricsStatusKind.Wrong => Loc.T("status.wrong", ("track", s.Track ?? "")),
+                LyricsStatusKind.Manual => Loc.T("status.manual", ("track", s.Track ?? ""), ("service", s.Service ?? "")),
+                LyricsStatusKind.Edited => Loc.T("status.edited", ("track", s.Track ?? "")),
+                _ => "",
+            };
+
             coordinator.StatusChanged += status =>
             {
-                trackItem.Header = status;
-                tray.ToolTipText = Loc.T("tray.tooltip.status", ("status", status));
-                Log.Write($"[status] {status}");
+                var text = LocalizeStatus(status);
+                trackItem.Header = text;
+                tray.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
+                Log.Write($"[status] {text}");
             };
             coordinator.CurrentLineChanged += line =>
             {

@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using LyricsX.App.Services;
+using LyricsX.Engine;
 
 namespace LyricsX.App.Overlay;
 

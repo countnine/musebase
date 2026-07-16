@@ -1,30 +1,19 @@
 using System.Threading;
 using Windows.Media.Control;
+using LyricsX.Engine;
 
 using SessionManager = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager;
 using Session = Windows.Media.Control.GlobalSystemMediaTransportControlsSession;
 
 namespace LyricsX.App.Services;
 
-/// <summary>현재 재생 곡 정보</summary>
-public sealed record TrackInfo(string Title, string Artist, string Album, TimeSpan? Duration, string SourceAppId)
-{
-    public override string ToString() =>
-        string.IsNullOrEmpty(Artist) ? Title : $"{Artist} - {Title}";
-}
-
-/// <summary>현재 세션이 지원하는 재생 컨트롤 가용 여부(버튼 활성화 판단용).</summary>
-public sealed record PlaybackControls(bool CanPrevious, bool CanPlayPause, bool CanNext)
-{
-    public static readonly PlaybackControls None = new(false, false, false);
-}
-
 /// <summary>
-/// SMTC(GlobalSystemMediaTransportControls) 래퍼.
+/// SMTC(GlobalSystemMediaTransportControls) 래퍼 — <see cref="INowPlayingSource"/>의 Windows 구현.
 /// 트랙/재생상태 변경 이벤트와 보간된 재생 위치를 제공한다.
 /// 이벤트는 임의 스레드에서 발생하므로 구독자가 UI 마샬링을 책임진다.
+/// (TrackInfo/PlaybackControls 계약은 LyricsX.Engine에 있다)
 /// </summary>
-public sealed class NowPlayingService : IDisposable
+public sealed class NowPlayingService : INowPlayingSource, IDisposable
 {
     private SessionManager? _manager;
     private Session? _session;

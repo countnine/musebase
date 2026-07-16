@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LyricsX.Core\LyricsX.Core.csproj" />
+    <ProjectReference Include="..\LyricsX.Engine\LyricsX.Engine.csproj" />
   </ItemGroup>
 
   <!-- UI 다국어 카탈로그: 로케일별 JSON을 어셈블리에 임베드 (LyricsX.App.i18n.<code>.json) -->

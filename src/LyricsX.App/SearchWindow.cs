@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using LyricsX.App.Services;
 using LyricsX.Core;
 using LyricsX.Core.Search;
+using LyricsX.Engine;
 
 namespace LyricsX.App;
 
