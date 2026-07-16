@@ -26,18 +26,28 @@ internal static class Program
             Loc.Initialize(settings.UiLanguage); // UI 다국어: 창 생성 전에 언어 확정
             var nowPlaying = await NowPlayingService.CreateAsync();
 
-            // 번역: SQLite 라인 캐시 + DeepL(키 있을 때만)
+            // 번역: SQLite 라인 캐시 + 레지스트리에서 선택된 엔진(키 없으면 무키 무료로 폴백)
             var cacheDb = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LyricsX", "translations.db");
             var translationCache = new LyricsX.Core.Translation.SqliteTranslationCache(cacheDb);
-            LyricsX.Core.Translation.LyricsTranslationService BuildTranslation() => new(
-                string.IsNullOrWhiteSpace(settings.DeeplApiKey)
-                    ? null
-                    : new LyricsX.Core.Translation.DeeplTranslator(settings.DeeplApiKey),
-                translationCache);
+            LyricsX.Core.Translation.LyricsTranslationService BuildTranslation()
+            {
+                var options = new LyricsX.Core.Translation.TranslatorOptions(
+                    DeeplApiKey: settings.DeeplApiKey,
+                    LibreEndpoint: settings.LibreTranslateEndpoint);
+                var translator = LyricsX.Core.Translation.TranslatorRegistry.Build(
+                    settings.EffectiveTranslationEngine, options);
+                Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}, 활성={(translator is not null)}");
+                return new LyricsX.Core.Translation.LyricsTranslationService(translator, translationCache);
+            }
 
-            var coordinator = new LyricsCoordinator(nowPlaying, new WpfEngineDispatcher(app.Dispatcher))
+            // 가사 소스: 레지스트리에서 활성 소스만 조합해 검색 서비스 구성
+            var search = new LyricsX.Core.Search.LyricsSearchService(
+                LyricsX.Core.Search.LyricsSourceRegistry.Build(settings.EnabledLyricsSources));
+            Log.Write($"[sources] 활성 가사 소스: {string.Join(", ", settings.EnabledLyricsSources)}");
+
+            var coordinator = new LyricsCoordinator(nowPlaying, new WpfEngineDispatcher(app.Dispatcher), search)
             {
                 ManualOffsetSeconds = settings.ManualOffsetSeconds,
                 Translation = BuildTranslation(),

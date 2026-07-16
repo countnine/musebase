@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LyricsX.Core.Search;
 
 namespace LyricsX.App.Services;
 
@@ -67,6 +68,32 @@ public sealed class AppSettings
 
     /// <summary>자동 모드에서 브라우저(Firefox/Chrome 등)를 음악 소스로 포함할지. 기본 제외(영상 오인식 방지).</summary>
     public bool IncludeBrowsers { get; set; }
+
+    // ---- 가사 소스 선택 (레지스트리 기반, [[0002-pluggable-sources-and-translation]]) ----
+
+    /// <summary>
+    /// 활성 가사 소스 id 목록(LyricsSourceRegistry 기준). 기본=전부.
+    /// 공개 배포 시 비공식 소스를 빼려면 LyricsSourceRegistry.OfficialIds로 좁힌다.
+    /// </summary>
+    public List<string> EnabledLyricsSources { get; set; } = LyricsSourceRegistry.AllIds.ToList();
+
+    // ---- 번역 엔진 선택 ----
+
+    /// <summary>번역 엔진 id(TranslatorRegistry). 비면 EffectiveTranslationEngine으로 자동 결정.</summary>
+    public string? TranslationEngine { get; set; }
+
+    /// <summary>LibreTranslate 엔드포인트(자체호스팅 등). 비면 레지스트리 기본값 사용.</summary>
+    public string? LibreTranslateEndpoint { get; set; }
+
+    /// <summary>
+    /// 실효 번역 엔진. 명시값이 있으면 그대로, 없으면 DeepL 키가 있으면 deepl(기존 사용자 보존),
+    /// 없으면 libretranslate(무키 무료로 설치 후 바로 동작).
+    /// </summary>
+    [JsonIgnore]
+    public string EffectiveTranslationEngine =>
+        !string.IsNullOrWhiteSpace(TranslationEngine)
+            ? TranslationEngine!.Trim().ToLowerInvariant()
+            : (string.IsNullOrWhiteSpace(DeeplApiKey) ? "libretranslate" : "deepl");
 
     /// <summary>DeepL API 키(평문) — 앱 내에서만 사용, 파일엔 저장하지 않는다(암호화본만 저장).</summary>
     [JsonIgnore]
