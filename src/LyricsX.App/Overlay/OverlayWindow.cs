@@ -7,6 +7,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using LyricsX.App.Services;
 using LyricsX.Core;
+using LyricsX.Engine;
 
 namespace LyricsX.App.Overlay;
 
@@ -29,6 +30,11 @@ public sealed class OverlayWindow : Window
     private readonly StackPanel _panel;
     private readonly LockButtonWindow _lockButton;
     private readonly DispatcherTimer _hoverTimer;
+
+    // 좌측 재생 컨트롤(마우스 오버 시 표시). EnableMediaControls로 배선되면 생성된다.
+    private MediaControlWindow? _mediaControls;
+    private Func<PlaybackControls>? _controlsProvider;
+    private Func<bool>? _playingProvider;
 
     private static readonly Duration FadeDuration = new(TimeSpan.FromMilliseconds(180));
 
@@ -99,12 +105,13 @@ public sealed class OverlayWindow : Window
             // 소유 창은 항상 소유자 위에 유지됨 — 이동 모드에서 오버레이를
             // 드래그해도 자물쇠 버튼이 아래로 깔려 클릭 불능이 되지 않는다
             _lockButton.Owner = this;
+            if (_mediaControls is not null) _mediaControls.Owner = this;
             RestorePosition();
             UpdateTextLayout();
             _hoverTimer.Start();
         };
         SizeChanged += (_, _) => UpdateTextLayout();
-        LocationChanged += (_, _) => PositionLockButton();
+        LocationChanged += (_, _) => { PositionLockButton(); UpdateMediaControls(); };
         SourceInitialized += (_, _) =>
         {
             var hwnd = new WindowInteropHelper(this).Handle;
@@ -115,7 +122,23 @@ public sealed class OverlayWindow : Window
         {
             _hoverTimer.Stop();
             _lockButton.Close();
+            _mediaControls?.Close();
         };
+    }
+
+    /// <summary>
+    /// 좌측 재생 컨트롤(이전/재생·정지/다음)을 활성화한다. 마우스 오버 시에만 표시된다.
+    /// provider는 매 표시 갱신마다 현재 상태를 조회하는 데 쓰인다(항상 최신 반영).
+    /// </summary>
+    public void EnableMediaControls(
+        Func<PlaybackControls> controlsProvider,
+        Func<bool> playingProvider,
+        Action onPrevious, Action onPlayPause, Action onNext)
+    {
+        _controlsProvider = controlsProvider;
+        _playingProvider = playingProvider;
+        _mediaControls = new MediaControlWindow(onPrevious, onPlayPause, onNext);
+        if (IsLoaded) _mediaControls.Owner = this;
     }
 
     // ---- 표시 내용 ----
@@ -227,6 +250,7 @@ public sealed class OverlayWindow : Window
         MoveModeChanged?.Invoke(moveMode);
         ApplyVisibility(); // 억제 상태여도 이동 모드 진입 시 표시
         UpdateLockButton();
+        UpdateMediaControls();
     }
 
     /// <summary>호버 타이머(150ms): 마우스 오버 숨김 처리 + 자물쇠 버튼 표시 갱신.</summary>
@@ -249,6 +273,38 @@ public sealed class OverlayWindow : Window
         }
 
         UpdateLockButton();
+        UpdateMediaControls();
+    }
+
+    /// <summary>재생 컨트롤 표시/숨김·상태 갱신. 잠금 상태에서 오버레이(또는 컨트롤) 위 호버 시 표시.</summary>
+    private void UpdateMediaControls()
+    {
+        if (_mediaControls is null) return;
+
+        // 이동 모드나 숨김 상태에서는 표시하지 않음
+        if (!IsVisible || IsMoveMode)
+        {
+            _mediaControls.Hide();
+            return;
+        }
+
+        var show = _mediaControls.IsMouseOver || IsCursorOverOverlay();
+        if (!show)
+        {
+            _mediaControls.Hide();
+            return;
+        }
+
+        if (_playingProvider is { } playing) _mediaControls.SetPlaying(playing());
+        if (_controlsProvider is { } controls) _mediaControls.SetControls(controls());
+        PositionMediaControls();
+    }
+
+    private void PositionMediaControls()
+    {
+        if (_mediaControls is null || !IsVisible) return;
+        var top = Top + Math.Max(6, (ActualHeight - _mediaControls.Height) / 2);
+        _mediaControls.ShowAt(Left + 6, top);
     }
 
     private void UpdateLockButton()
@@ -358,6 +414,7 @@ public sealed class OverlayWindow : Window
             Hide();
         }
         _lockButton.Hide();
+        _mediaControls?.Hide();
     }
 
     /// <summary>설정의 색상/외곽선 스타일 적용 (설정 저장 후에도 호출)</summary>

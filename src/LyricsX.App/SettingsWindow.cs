@@ -8,6 +8,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Navigation;
 using LyricsX.App.Services;
+using LyricsX.Core.Search;
+using LyricsX.Core.Translation;
 
 namespace LyricsX.App;
 
@@ -58,6 +60,9 @@ public sealed class SettingsWindow : Window
 
     /// <summary>언어 선택 항목(코드 + 표시명). "system"은 시스템 언어를 따른다.</summary>
     private sealed record LanguageChoice(string Code, string Display);
+
+    /// <summary>번역 엔진 선택 항목(id + 표시명).</summary>
+    private sealed record EngineChoice(string Id, string Display);
 
     // 줄바꿈되는 섹션 헤더
     private static TextBlock Header(string key) => new()
@@ -174,6 +179,42 @@ public sealed class SettingsWindow : Window
             general.Children.Add(Header("settings.deepl.lang.header"));
             general.Children.Add(langBox);
 
+            // 번역 엔진 선택 (레지스트리) + LibreTranslate 엔드포인트(자체호스팅)
+            var engineChoices = new List<EngineChoice> { new("none", Loc.T("settings.translation.none")) };
+            engineChoices.AddRange(TranslatorRegistry.All.Select(d => new EngineChoice(d.Id, d.DisplayName)));
+            var engineBox = new ComboBox
+            {
+                ItemsSource = engineChoices,
+                DisplayMemberPath = nameof(EngineChoice.Display),
+                SelectedValuePath = nameof(EngineChoice.Id),
+                SelectedValue = settings.EffectiveTranslationEngine,
+                Width = 260,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 2, 0, 6),
+            };
+            if (engineBox.SelectedValue is null) engineBox.SelectedIndex = 0;
+
+            var endpointBox = new TextBox
+            {
+                Text = settings.LibreTranslateEndpoint ?? "",
+                Width = 300,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 2, 0, 6),
+                VerticalContentAlignment = VerticalAlignment.Center,
+            };
+            var endpointPanel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left };
+            endpointPanel.Children.Add(Header("settings.translation.libre.endpoint"));
+            endpointPanel.Children.Add(endpointBox);
+            void UpdateEndpointVisibility() =>
+                endpointPanel.Visibility = (engineBox.SelectedValue as string) == "libretranslate"
+                    ? Visibility.Visible : Visibility.Collapsed;
+            engineBox.SelectionChanged += (_, _) => UpdateEndpointVisibility();
+            UpdateEndpointVisibility();
+
+            general.Children.Add(Header("settings.translation.engine.header"));
+            general.Children.Add(engineBox);
+            general.Children.Add(endpointPanel);
+
             // 번역 표시 정책: 대상 언어 번역만 표시(제공자의 다른 언어 번역 숨김)
             var onlyTargetTransCheck = WrapCheck("settings.onlyTargetTranslation", settings.ShowOnlyTargetTranslation, new Thickness(0, 8, 0, 0));
             general.Children.Add(onlyTargetTransCheck);
@@ -187,6 +228,37 @@ public sealed class SettingsWindow : Window
             general.Children.Add(hideSameTransCheck);
             general.Children.Add(fadeCheck);
             general.Children.Add(hideOnHoverCheck);
+
+            // 가사 소스 선택 (레지스트리). 공식/비공식 표시 — 비공식은 공개 배포 리스크 안내.
+            general.Children.Add(Header("settings.sources.header"));
+            general.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.sources.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 2),
+            });
+            var sourceChecks = new List<(string Id, CheckBox Box)>();
+            foreach (var d in LyricsSourceRegistry.All)
+            {
+                var tag = Loc.T(d.IsOfficialApi ? "settings.sources.official" : "settings.sources.unofficial");
+                var cb = new CheckBox
+                {
+                    Content = new TextBlock { Text = $"{d.DisplayName} — {tag}", TextWrapping = TextWrapping.Wrap },
+                    IsChecked = settings.EnabledLyricsSources.Contains(d.Id, StringComparer.OrdinalIgnoreCase),
+                    Margin = new Thickness(0, 4, 0, 0),
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                };
+                sourceChecks.Add((d.Id, cb));
+                general.Children.Add(cb);
+            }
+            general.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.sources.restart"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
 
             // ================= [오버레이 스타일] 탭 =================
             var appearance = new StackPanel { Margin = new Thickness(16), Width = 410, HorizontalAlignment = HorizontalAlignment.Left };
@@ -344,6 +416,9 @@ public sealed class SettingsWindow : Window
                 var enteredKey = CurrentKey();
                 settings.DeeplApiKey = string.IsNullOrWhiteSpace(enteredKey) ? null : enteredKey.Trim();
                 settings.TargetLanguage = string.IsNullOrWhiteSpace(langBox.Text) ? AppSettings.DefaultTargetLanguage() : langBox.Text.Trim().ToUpperInvariant();
+                settings.TranslationEngine = engineBox.SelectedValue as string;
+                settings.LibreTranslateEndpoint = string.IsNullOrWhiteSpace(endpointBox.Text) ? null : endpointBox.Text.Trim();
+                settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
                 settings.TextColor = NormalizeHex(textColor.Box.Text, settings.TextColor);
                 settings.KaraokeColor = NormalizeHex(karaokeColor.Box.Text, settings.KaraokeColor);
                 settings.TranslationColor = NormalizeHex(translationColor.Box.Text, settings.TranslationColor);

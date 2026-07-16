@@ -2,6 +2,8 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LyricsX.Core.Search;
+using LyricsX.Engine;
 
 namespace LyricsX.App.Services;
 
@@ -11,6 +13,10 @@ namespace LyricsX.App.Services;
 /// </summary>
 public sealed class AppSettings
 {
+    /// <summary>비밀값(번역 API 키) 보호 저장소. 플랫폼별 교체 가능(기본 Windows DPAPI).</summary>
+    [JsonIgnore]
+    private ISecretStore _secretStore = new DpapiSecretStore();
+
     public bool OverlayVisible { get; set; } = true;
     public double? OverlayX { get; set; }
     public double? OverlayY { get; set; }
@@ -58,6 +64,41 @@ public sealed class AppSettings
 
     /// <summary>수동 싱크 오프셋(초). +면 가사가 빨라진다.</summary>
     public double ManualOffsetSeconds { get; set; }
+
+    /// <summary>
+    /// 재생 소스 선택. "auto" = 자동 감지, 그 외 = 특정 플레이어의 SourceAppUserModelId로 고정.
+    /// (macOS 버전의 플레이어 선택에 대응 — Windows에서는 SMTC 세션 단위로 고정)
+    /// </summary>
+    public string PlaybackSource { get; set; } = "auto";
+
+    /// <summary>자동 모드에서 브라우저(Firefox/Chrome 등)를 음악 소스로 포함할지. 기본 제외(영상 오인식 방지).</summary>
+    public bool IncludeBrowsers { get; set; }
+
+    // ---- 가사 소스 선택 (레지스트리 기반, [[0002-pluggable-sources-and-translation]]) ----
+
+    /// <summary>
+    /// 활성 가사 소스 id 목록(LyricsSourceRegistry 기준). 기본=전부.
+    /// 공개 배포 시 비공식 소스를 빼려면 LyricsSourceRegistry.OfficialIds로 좁힌다.
+    /// </summary>
+    public List<string> EnabledLyricsSources { get; set; } = LyricsSourceRegistry.AllIds.ToList();
+
+    // ---- 번역 엔진 선택 ----
+
+    /// <summary>번역 엔진 id(TranslatorRegistry). 비면 EffectiveTranslationEngine으로 자동 결정.</summary>
+    public string? TranslationEngine { get; set; }
+
+    /// <summary>LibreTranslate 엔드포인트(자체호스팅 등). 비면 레지스트리 기본값 사용.</summary>
+    public string? LibreTranslateEndpoint { get; set; }
+
+    /// <summary>
+    /// 실효 번역 엔진. 명시값이 있으면 그대로, 없으면 DeepL 키가 있으면 deepl(기존 사용자 보존),
+    /// 없으면 libretranslate(무키 무료로 설치 후 바로 동작).
+    /// </summary>
+    [JsonIgnore]
+    public string EffectiveTranslationEngine =>
+        !string.IsNullOrWhiteSpace(TranslationEngine)
+            ? TranslationEngine!.Trim().ToLowerInvariant()
+            : (string.IsNullOrWhiteSpace(DeeplApiKey) ? "libretranslate" : "deepl");
 
     /// <summary>DeepL API 키(평문) — 앱 내에서만 사용, 파일엔 저장하지 않는다(암호화본만 저장).</summary>
     [JsonIgnore]
@@ -115,13 +156,15 @@ public sealed class AppSettings
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, // null 필드(구 평문 키 등) 미기록
     };
 
-    public static AppSettings Load()
+    public static AppSettings Load(ISecretStore? secretStore = null)
     {
+        var store = secretStore ?? new DpapiSecretStore();
         try
         {
             if (File.Exists(SettingsPath))
             {
                 var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions) ?? new AppSettings();
+                settings._secretStore = store;
                 settings.ResolveSecrets();
                 return settings;
             }
@@ -130,14 +173,14 @@ public sealed class AppSettings
         {
             // 손상된 설정은 기본값으로
         }
-        return new AppSettings();
+        return new AppSettings { _secretStore = store };
     }
 
     /// <summary>암호문 복호화 또는 구버전 평문 키 마이그레이션 → 평문 DeeplApiKey 확정.</summary>
     private void ResolveSecrets()
     {
         if (!string.IsNullOrEmpty(DeeplApiKeyEncrypted))
-            DeeplApiKey = Secret.Unprotect(DeeplApiKeyEncrypted);
+            DeeplApiKey = _secretStore.Unprotect(DeeplApiKeyEncrypted);
         else if (!string.IsNullOrWhiteSpace(LegacyDeeplApiKey))
             DeeplApiKey = LegacyDeeplApiKey; // 구버전 평문 → 다음 Save에서 암호화
         LegacyDeeplApiKey = null;            // 평문 필드는 더 이상 보관/기록하지 않음
@@ -147,8 +190,8 @@ public sealed class AppSettings
     {
         try
         {
-            // 평문 키는 파일에 쓰지 않고, DPAPI 암호문만 저장
-            DeeplApiKeyEncrypted = Secret.Protect(DeeplApiKey);
+            // 평문 키는 파일에 쓰지 않고, 암호문만 저장(플랫폼 시크릿 저장소)
+            DeeplApiKeyEncrypted = _secretStore.Protect(DeeplApiKey);
             LegacyDeeplApiKey = null;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));

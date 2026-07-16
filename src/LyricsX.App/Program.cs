@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using H.NotifyIcon;
 using LyricsX.App.Overlay;
 using LyricsX.App.Services;
+using LyricsX.Engine;
 using Velopack;
 
 namespace LyricsX.App;
@@ -25,25 +26,30 @@ internal static class Program
             Loc.Initialize(settings.UiLanguage); // UI 다국어: 창 생성 전에 언어 확정
             var nowPlaying = await NowPlayingService.CreateAsync();
 
-            // 번역: SQLite 라인 캐시 + DeepL(키 있을 때만)
+            // 번역: SQLite 라인 캐시 + 레지스트리에서 선택된 엔진(키 없으면 무키 무료로 폴백)
             var cacheDb = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LyricsX", "translations.db");
             var translationCache = new LyricsX.Core.Translation.SqliteTranslationCache(cacheDb);
-            LyricsX.Core.Translation.LyricsTranslationService BuildTranslation() => new(
-                string.IsNullOrWhiteSpace(settings.DeeplApiKey)
-                    ? null
-                    : new LyricsX.Core.Translation.DeeplTranslator(settings.DeeplApiKey),
-                translationCache);
 
-            var coordinator = new LyricsCoordinator(nowPlaying, app.Dispatcher)
-            {
-                ManualOffsetSeconds = settings.ManualOffsetSeconds,
-                Translation = BuildTranslation(),
-                TargetLanguage = settings.EffectiveTargetLanguage,
-                ShowOnlyTargetTranslation = settings.ShowOnlyTargetTranslation,
-                Cache = new LyricsX.Core.Search.LyricsCacheStore(cacheDb),
-            };
+            // 설정 → 플랫폼 무관 엔진 구성(소스/엔진/키/캐시). 저장 시 최신값으로 다시 읽는다.
+            EngineConfig CurrentConfig() => new(
+                settings.EnabledLyricsSources,
+                settings.EffectiveTranslationEngine,
+                new LyricsX.Core.Translation.TranslatorOptions(
+                    DeeplApiKey: settings.DeeplApiKey,
+                    LibreEndpoint: settings.LibreTranslateEndpoint),
+                settings.EffectiveTargetLanguage,
+                settings.ShowOnlyTargetTranslation,
+                settings.ManualOffsetSeconds,
+                cacheDb);
+
+            Log.Write($"[sources] 활성 가사 소스: {string.Join(", ", settings.EnabledLyricsSources)}");
+            Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}");
+
+            // 공유 조합 팩토리로 코디네이터 조립(동일 조합을 Android/서버가 재사용)
+            var coordinator = LyricsEngineFactory.Create(
+                nowPlaying, new WpfEngineDispatcher(app.Dispatcher), CurrentConfig(), translationCache, Log.Write);
 
             // "틀린 가사" 억제 목록을 설정에서 복원하고 변경 시 영속화
             foreach (var key in settings.SuppressedTracks) coordinator.SuppressedTrackKeys.Add(key);
@@ -64,18 +70,87 @@ internal static class Program
                 Log.Write($"[fullscreen] {(full ? "감지 → 오버레이 숨김" : "해제 → 오버레이 복원")}");
             };
 
+            // 재생 소스 선택 적용 (자동/특정 플레이어, 브라우저 제외 기본)
+            nowPlaying.SetSource(settings.PlaybackSource, settings.IncludeBrowsers);
+
             // 일시정지 중 오버레이 자동 숨김 (--demo에서는 재생 상태가 없으므로 제외)
             if (!args.Contains("--demo"))
             {
                 overlay.SetPausedSuppressed(!nowPlaying.IsPlaying);
                 nowPlaying.IsPlayingChanged += playing =>
                     app.Dispatcher.BeginInvoke(() => overlay.SetPausedSuppressed(!playing));
+
+                // 오버레이 좌측 재생 컨트롤(이전/재생·정지/다음). 마우스 오버 시에만 표시.
+                overlay.EnableMediaControls(
+                    controlsProvider: () => nowPlaying.GetControls(),
+                    playingProvider: () => nowPlaying.IsPlaying,
+                    onPrevious: () => _ = nowPlaying.SkipPreviousAsync(),
+                    onPlayPause: () => _ = nowPlaying.TogglePlayPauseAsync(),
+                    onNext: () => _ = nowPlaying.SkipNextAsync());
             }
 
             // ---- 트레이 메뉴 ----
             var trackItem = new MenuItem { Header = Loc.T("status.noTrack"), IsEnabled = false };
             var overlayToggle = new MenuItem { Header = Loc.T("tray.overlay.show"), IsCheckable = true, IsChecked = settings.OverlayVisible };
             var moveToggle = new MenuItem { Header = Loc.T("tray.overlay.moveMode"), IsCheckable = true };
+            var sourceMenu = new MenuItem { Header = Loc.T("tray.source") };
+
+            void ApplySource(string mode, bool includeBrowsers)
+            {
+                settings.PlaybackSource = mode;
+                settings.IncludeBrowsers = includeBrowsers;
+                settings.Save();
+                nowPlaying.SetSource(mode, includeBrowsers);
+                Log.Write($"[source] 소스={mode}, 브라우저포함={includeBrowsers}");
+            }
+
+            // 트레이 열릴 때마다 현재 감지된 SMTC 세션으로 소스 하위 메뉴를 재구성한다.
+            void RebuildSourceMenu()
+            {
+                sourceMenu.Items.Clear();
+                var mode = nowPlaying.SourceMode;
+
+                var autoItem = new MenuItem
+                {
+                    Header = Loc.T("tray.source.auto"),
+                    IsCheckable = true,
+                    IsChecked = string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase),
+                };
+                autoItem.Click += (_, _) => ApplySource("auto", settings.IncludeBrowsers);
+                sourceMenu.Items.Add(autoItem);
+
+                var browsersItem = new MenuItem
+                {
+                    Header = Loc.T("tray.source.includeBrowsers"),
+                    IsCheckable = true,
+                    IsChecked = settings.IncludeBrowsers,
+                };
+                browsersItem.Click += (_, _) => ApplySource(nowPlaying.SourceMode, browsersItem.IsChecked);
+                sourceMenu.Items.Add(browsersItem);
+
+                sourceMenu.Items.Add(new Separator());
+
+                var sources = nowPlaying.GetAvailableSources();
+                if (sources.Count == 0)
+                {
+                    sourceMenu.Items.Add(new MenuItem { Header = Loc.T("tray.source.none"), IsEnabled = false });
+                }
+                else
+                {
+                    foreach (var id in sources)
+                    {
+                        var captured = id;
+                        var item = new MenuItem
+                        {
+                            Header = NowPlayingService.IsBrowser(id) ? $"{id}  🌐" : id,
+                            IsCheckable = true,
+                            IsChecked = string.Equals(mode, id, StringComparison.OrdinalIgnoreCase),
+                        };
+                        item.Click += (_, _) => ApplySource(captured, settings.IncludeBrowsers);
+                        sourceMenu.Items.Add(item);
+                    }
+                }
+            }
             var offsetLabel = new MenuItem { IsEnabled = false };
             var offsetPlus = new MenuItem { Header = Loc.T("tray.offset.faster") };
             var offsetMinus = new MenuItem { Header = Loc.T("tray.offset.slower") };
@@ -226,12 +301,13 @@ internal static class Program
                 }
                 settingsWindow = new SettingsWindow(settings, onSaved: () =>
                 {
-                    coordinator.Translation = BuildTranslation();
-                    coordinator.TargetLanguage = settings.EffectiveTargetLanguage;
-                    coordinator.ShowOnlyTargetTranslation = settings.ShowOnlyTargetTranslation;
+                    var cfg = CurrentConfig();
+                    coordinator.Translation = LyricsEngineFactory.BuildTranslation(cfg, translationCache);
+                    coordinator.TargetLanguage = cfg.TargetLanguage;
+                    coordinator.ShowOnlyTargetTranslation = cfg.ShowOnlyTargetTranslation;
                     coordinator.RefreshCurrentLine(); // 표시 정책 변경 즉시 반영
                     overlay.ApplyStyle();
-                    Log.Write($"[settings] 저장됨: lang={settings.EffectiveTargetLanguage}, key={(settings.DeeplApiKey is null ? "없음" : "설정됨")}");
+                    Log.Write($"[settings] 저장됨: engine={cfg.TranslationEngineId}, lang={cfg.TargetLanguage}");
                 });
                 settingsWindow.Show();
             };
@@ -269,6 +345,7 @@ internal static class Program
                 editItem.IsEnabled = hasLyrics;
                 exportItem.IsEnabled = hasLyrics;
                 wrongItem.IsEnabled = hasLyrics;
+                RebuildSourceMenu();
             };
             menu.Items.Add(trackItem);
             menu.Items.Add(searchItem);
@@ -278,6 +355,7 @@ internal static class Program
             menu.Items.Add(new Separator());
             menu.Items.Add(overlayToggle);
             menu.Items.Add(moveToggle);
+            menu.Items.Add(sourceMenu);
             menu.Items.Add(new Separator());
             menu.Items.Add(offsetLabel);
             menu.Items.Add(offsetPlus);
@@ -311,11 +389,27 @@ internal static class Program
             };
 
             // ---- 이벤트 배선 ----
+            // 엔진은 구조화된 LyricsStatus를 발행 → 여기서 현지화(UI 분리)
+            static string LocalizeStatus(LyricsStatus s) => s.Kind switch
+            {
+                LyricsStatusKind.NoTrack => Loc.T("status.noTrack"),
+                LyricsStatusKind.HiddenByUser => Loc.T("status.hidden.user", ("track", s.Track ?? "")),
+                LyricsStatusKind.Cache => Loc.T("status.cache", ("track", s.Track ?? ""), ("service", s.Service ?? "")),
+                LyricsStatusKind.Searching => Loc.T("status.searching", ("track", s.Track ?? "")),
+                LyricsStatusKind.Found => Loc.T("status.found", ("track", s.Track ?? ""), ("service", s.Service ?? ""), ("quality", (s.Quality ?? 0).ToString("0.00"))),
+                LyricsStatusKind.NotFound => Loc.T("status.notFound", ("track", s.Track ?? "")),
+                LyricsStatusKind.Wrong => Loc.T("status.wrong", ("track", s.Track ?? "")),
+                LyricsStatusKind.Manual => Loc.T("status.manual", ("track", s.Track ?? ""), ("service", s.Service ?? "")),
+                LyricsStatusKind.Edited => Loc.T("status.edited", ("track", s.Track ?? "")),
+                _ => "",
+            };
+
             coordinator.StatusChanged += status =>
             {
-                trackItem.Header = status;
-                tray.ToolTipText = Loc.T("tray.tooltip.status", ("status", status));
-                Log.Write($"[status] {status}");
+                var text = LocalizeStatus(status);
+                trackItem.Header = text;
+                tray.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
+                Log.Write($"[status] {text}");
             };
             coordinator.CurrentLineChanged += line =>
             {
@@ -362,6 +456,7 @@ internal static class Program
             {
                 overlayToggle.Header = Loc.T("tray.overlay.show");
                 moveToggle.Header = Loc.T("tray.overlay.moveMode");
+                sourceMenu.Header = Loc.T("tray.source");
                 offsetPlus.Header = Loc.T("tray.offset.faster");
                 offsetMinus.Header = Loc.T("tray.offset.slower");
                 offsetReset.Header = Loc.T("tray.offset.reset");

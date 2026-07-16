@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\LyricsX.Core\LyricsX.Core.csproj" />
+    <ProjectReference Include="..\..\src\LyricsX.Engine\LyricsX.Engine.csproj" />
   </ItemGroup>
 
 </Project>

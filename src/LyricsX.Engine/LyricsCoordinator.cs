@@ -1,9 +1,8 @@
-using System.Windows.Threading;
 using LyricsX.Core;
 using LyricsX.Core.Search;
 using LyricsX.Core.Translation;
 
-namespace LyricsX.App.Services;
+namespace LyricsX.Engine;
 
 /// <summary>
 /// 현재 표시할 가사 한 줄 (원문 + 번역).
@@ -18,23 +17,38 @@ public sealed record DisplayLine(
 /// <summary>
 /// 원본 AppController의 핵심 역할 포팅:
 /// 트랙 변경 → 가사 검색 → 재생 위치 틱 → 현재 라인 이벤트.
-/// UI 스레드(Dispatcher)에서 이벤트를 발생시킨다.
+/// 플랫폼 무관: 재생 소스는 <see cref="INowPlayingSource"/>, 스레드 마샬링·타이머는
+/// <see cref="IEngineDispatcher"/>로 추상화되어 Windows/Android/macOS/서버가 공유한다.
+/// 이벤트는 IEngineDispatcher가 게시하는 스레드(WPF=UI 스레드)에서 발생한다.
 /// </summary>
 public sealed class LyricsCoordinator : IDisposable
 {
-    private readonly NowPlayingService _nowPlaying;
+    private readonly INowPlayingSource _nowPlaying;
+    private readonly IEngineDispatcher _dispatcher;
     private readonly LyricsSearchService _search;
-    private readonly Dispatcher _dispatcher;
-    private readonly DispatcherTimer _timer;
+    private readonly IEngineTimer _timer;
 
     private CancellationTokenSource? _searchCts;
     private int _lastLineIndex = int.MinValue;
 
+    // 직렬화 표시 상태(StateChanged)용 현재 라인 스냅샷
+    private DisplayLine? _currentLine;
+    private DateTimeOffset? _currentLineStartedAt;
+
     public Lyrics? CurrentLyrics { get; private set; }
     public TrackInfo? CurrentTrack => _nowPlaying.CurrentTrack;
 
+    /// <summary>직렬화 가능한 현재 표시 상태(원격 디스플레이·바인딩용).</summary>
+    public PlaybackViewState CurrentState { get; private set; } = PlaybackViewState.Empty;
+
+    /// <summary>표시 상태 변경(라인/재생상태). 원격 브로드캐스트·VM 바인딩 대상.</summary>
+    public event Action<PlaybackViewState>? StateChanged;
+
     /// <summary>수동 싱크 오프셋(초). +면 가사가 빨라진다.</summary>
     public double ManualOffsetSeconds { get; set; }
+
+    /// <summary>진단 로그 싱크(선택). 소비자가 Log.Write 등을 주입.</summary>
+    public Action<string>? Log { get; set; }
 
     /// <summary>기계번역 서비스 (키 미설정 시 IsEnabled=false로 무동작)</summary>
     public LyricsTranslationService? Translation { get; set; }
@@ -75,34 +89,30 @@ public sealed class LyricsCoordinator : IDisposable
     /// <summary>현재 라인 시작 이후 경과 시간(초, 매 틱). 글자/라인 단위 카라오케 채움에 사용.</summary>
     public event Action<double>? LineProgressChanged;
 
-    /// <summary>가사 검색 상태 텍스트 (트레이 툴팁 등 상태 표시용)</summary>
-    public event Action<string>? StatusChanged;
+    /// <summary>가사 검색 상태(구조화). 소비자가 현지화한다.</summary>
+    public event Action<LyricsStatus>? StatusChanged;
 
-    /// <summary>"틀린 가사"로 표시된 트랙 키 집합(검색·표시 억제). Program이 설정과 동기화.</summary>
+    /// <summary>"틀린 가사"로 표시된 트랙 키 집합(검색·표시 억제). 소비자가 설정과 동기화.</summary>
     public HashSet<string> SuppressedTrackKeys { get; } = new();
 
     /// <summary>억제 목록 변경 알림(설정 영속화용)</summary>
     public event Action? SuppressedTracksChanged;
 
-    public LyricsCoordinator(NowPlayingService nowPlaying, Dispatcher dispatcher, LyricsSearchService? search = null)
+    public LyricsCoordinator(INowPlayingSource nowPlaying, IEngineDispatcher dispatcher, LyricsSearchService? search = null)
     {
         _nowPlaying = nowPlaying;
         _dispatcher = dispatcher;
         _search = search ?? new LyricsSearchService();
 
-        _timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(100),
-        };
-        _timer.Tick += (_, _) => Tick();
+        _timer = _dispatcher.CreateTimer(TimeSpan.FromMilliseconds(100), Tick);
 
-        _nowPlaying.TrackChanged += track => _dispatcher.BeginInvoke(() => OnTrackChanged(track));
-        _nowPlaying.IsPlayingChanged += playing => _dispatcher.BeginInvoke(() =>
+        _nowPlaying.TrackChanged += track => _dispatcher.Post(() => OnTrackChanged(track));
+        _nowPlaying.IsPlayingChanged += playing => _dispatcher.Post(() =>
         {
             if (playing) _timer.Start();
             else _timer.Stop();
+            EmitState(); // 재생상태 변화를 표시 상태에 반영
         });
-
     }
 
     /// <summary>
@@ -120,18 +130,21 @@ public sealed class LyricsCoordinator : IDisposable
         _searchCts?.Cancel();
         CurrentLyrics = null;
         _lastLineIndex = int.MinValue;
+        _currentLine = null;
+        _currentLineStartedAt = null;
         CurrentLineChanged?.Invoke(null);
+        EmitState(); // 새 트랙(제목) 반영, 라인은 아직 없음
 
         if (track is null)
         {
-            StatusChanged?.Invoke(Loc.T("status.noTrack"));
+            StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.NoTrack));
             return;
         }
 
         // "틀린 가사"로 표시된 곡은 검색·표시하지 않는다
         if (SuppressedTrackKeys.Contains(LyricsCacheStore.MakeKey(track.Title, track.Artist)))
         {
-            StatusChanged?.Invoke(Loc.T("status.hidden.user", ("track", track.ToString())));
+            StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.HiddenByUser, track.ToString()));
             return;
         }
 
@@ -140,14 +153,14 @@ public sealed class LyricsCoordinator : IDisposable
         {
             CurrentLyrics = cached;
             _lastLineIndex = int.MinValue;
-            StatusChanged?.Invoke(Loc.T("status.cache", ("track", track.ToString()), ("service", cached.Metadata.ServiceName ?? "")));
+            StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.Cache, track.ToString(), cached.Metadata.ServiceName ?? ""));
             var cacheCts = new CancellationTokenSource();
             _searchCts = cacheCts;
             await TranslateAsync(cached, cacheCts.Token); // 언어 변경 시 보충 번역
             return;
         }
 
-        StatusChanged?.Invoke(Loc.T("status.searching", ("track", track.ToString())));
+        StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.Searching, track.ToString()));
         var cts = new CancellationTokenSource();
         _searchCts = cts;
 
@@ -164,17 +177,15 @@ public sealed class LyricsCoordinator : IDisposable
                 {
                     CurrentLyrics = lyrics;
                     _lastLineIndex = int.MinValue; // 라인 재계산 강제
-                    StatusChanged?.Invoke(Loc.T("status.found",
-                        ("track", track.ToString()),
-                        ("service", lyrics.Metadata.ServiceName ?? ""),
-                        ("quality", lyrics.Quality().ToString("0.00"))));
+                    StatusChanged?.Invoke(new LyricsStatus(
+                        LyricsStatusKind.Found, track.ToString(), lyrics.Metadata.ServiceName ?? "", lyrics.Quality()));
                     await TranslateAsync(lyrics, cts.Token);
                 }
             }
 
             if (CurrentLyrics is null)
             {
-                StatusChanged?.Invoke(Loc.T("status.notFound", ("track", track.ToString())));
+                StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.NotFound, track.ToString()));
             }
             else if (!cts.Token.IsCancellationRequested)
             {
@@ -182,11 +193,11 @@ public sealed class LyricsCoordinator : IDisposable
                 try
                 {
                     Cache?.Set(track.Title, track.Artist, CurrentLyrics);
-                    Log.Write($"[cache] 저장: {track}");
+                    Log?.Invoke($"[cache] 저장: {track}");
                 }
                 catch (Exception e)
                 {
-                    Log.Write($"[cache] 저장 실패: {e.Message}");
+                    Log?.Invoke($"[cache] 저장 실패: {e.Message}");
                 }
             }
         }
@@ -196,7 +207,7 @@ public sealed class LyricsCoordinator : IDisposable
         }
         catch (Exception e)
         {
-            Log.Write($"[search] 예외: {e.GetType().Name}: {e.Message}");
+            Log?.Invoke($"[search] 예외: {e.GetType().Name}: {e.Message}");
         }
     }
 
@@ -210,13 +221,16 @@ public sealed class LyricsCoordinator : IDisposable
 
         SuppressedTrackKeys.Add(LyricsCacheStore.MakeKey(track.Title, track.Artist));
         try { Cache?.Remove(track.Title, track.Artist); }
-        catch (Exception e) { Log.Write($"[wrong] 캐시 제거 실패: {e.Message}"); }
+        catch (Exception e) { Log?.Invoke($"[wrong] 캐시 제거 실패: {e.Message}"); }
 
         _searchCts?.Cancel();
         CurrentLyrics = null;
         _lastLineIndex = int.MinValue;
+        _currentLine = null;
+        _currentLineStartedAt = null;
         CurrentLineChanged?.Invoke(null);
-        StatusChanged?.Invoke(Loc.T("status.wrong", ("track", track.ToString())));
+        EmitState();
+        StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.Wrong, track.ToString()));
         SuppressedTracksChanged?.Invoke();
     }
 
@@ -238,9 +252,8 @@ public sealed class LyricsCoordinator : IDisposable
 
         CurrentLyrics = lyrics;
         _lastLineIndex = int.MinValue;
-        StatusChanged?.Invoke(Loc.T("status.manual",
-            ("track", CurrentTrack?.ToString() ?? ""),
-            ("service", lyrics.Metadata.ServiceName ?? "")));
+        StatusChanged?.Invoke(new LyricsStatus(
+            LyricsStatusKind.Manual, CurrentTrack?.ToString() ?? "", lyrics.Metadata.ServiceName ?? ""));
         await TranslateAsync(lyrics, cts.Token);
         if (CurrentTrack is { } track && !cts.Token.IsCancellationRequested)
             Cache?.Set(track.Title, track.Artist, lyrics);
@@ -257,11 +270,11 @@ public sealed class LyricsCoordinator : IDisposable
         try
         {
             Cache?.Set(track.Title, track.Artist, lyrics);
-            Log.Write($"[edit] 저장: {track}");
+            Log?.Invoke($"[edit] 저장: {track}");
         }
         catch (Exception e)
         {
-            Log.Write($"[edit] 저장 실패: {e.Message}");
+            Log?.Invoke($"[edit] 저장 실패: {e.Message}");
         }
 
         if (CurrentTrack is { } cur && cur.Title == track.Title && cur.Artist == track.Artist)
@@ -269,7 +282,7 @@ public sealed class LyricsCoordinator : IDisposable
             _searchCts?.Cancel(); // 진행 중 검색이 편집본을 덮어쓰지 않도록
             CurrentLyrics = lyrics;
             _lastLineIndex = int.MinValue; // 현재 라인 재발행
-            StatusChanged?.Invoke(Loc.T("status.edited", ("track", track.ToString())));
+            StatusChanged?.Invoke(new LyricsStatus(LyricsStatusKind.Edited, track.ToString()));
         }
     }
 
@@ -317,21 +330,55 @@ public sealed class LyricsCoordinator : IDisposable
             _lastLineIndex = index;
             if (index < 0)
             {
+                _currentLine = null;
+                _currentLineStartedAt = null;
                 CurrentLineChanged?.Invoke(null);
             }
             else
             {
                 var line = lyrics.Lines[index];
-                CurrentLineChanged?.Invoke(new DisplayLine(
+                var display = new DisplayLine(
                     line.Content,
                     ResolveDisplayTranslation(line.Attachments),
                     line.Attachments.GetInlineTimeTags(),
-                    span));
+                    span);
+                _currentLine = display;
+                // 라인이 재생상 시작된 절대 시각(표시측 보간 앵커): 현재 - 라인 내 경과
+                _currentLineStartedAt = DateTimeOffset.Now - TimeSpan.FromSeconds(Math.Max(0, adjusted - start));
+                CurrentLineChanged?.Invoke(display);
             }
+            EmitState();
         }
 
         if (index >= 0)
             LineProgressChanged?.Invoke(adjusted - start); // 라인 시작 이후 경과(초)
+    }
+
+    /// <summary>현재 스냅샷으로 직렬화 표시 상태를 갱신·발행한다.</summary>
+    private void EmitState()
+    {
+        var track = _nowPlaying.CurrentTrack;
+        var controls = _nowPlaying.GetControls();
+        var line = _currentLine;
+
+        IReadOnlyList<KaraokeMark>? karaoke = null;
+        double? karaokeDuration = null;
+        if (line?.Karaoke is { } k)
+        {
+            karaoke = k.Tags.Select(t => new KaraokeMark(t.Index, t.Time)).ToList();
+            karaokeDuration = k.Duration;
+        }
+
+        CurrentState = new PlaybackViewState(
+            _nowPlaying.IsPlaying,
+            track?.Title, track?.Artist,
+            line?.Content, line?.Translation,
+            karaoke, karaokeDuration,
+            _currentLineStartedAt,
+            line?.LineSpanSeconds ?? 0,
+            controls.CanPrevious, controls.CanPlayPause, controls.CanNext);
+
+        StateChanged?.Invoke(CurrentState);
     }
 
     public void Dispose()
