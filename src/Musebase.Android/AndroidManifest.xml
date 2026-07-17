@@ -11,6 +11,9 @@
     직접 켜는 특수 권한이므로 <uses-permission>이 필요 없다.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- 가사 검색·번역 API 호출용(Release 빌드에는 자동 추가되지 않으므로 명시). -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- android:name(커스텀 Application)은 MusebaseApp.cs의 [Application] 특성에서 병합된다. -->
   <application
       android:label="Musebase"
       android:allowBackup="true"

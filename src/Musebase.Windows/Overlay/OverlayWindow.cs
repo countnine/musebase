@@ -28,6 +28,7 @@ public sealed class OverlayWindow : Window
     private readonly OutlinedTextElement _originalLine;
     private readonly OutlinedTextElement _translationLine;
     private readonly StackPanel _panel;
+    private readonly Border _backgroundBorder; // 라운드 배경판(창은 투명 유지, 배경은 이 Border가 담당)
     private readonly LockButtonWindow _lockButton;
     private readonly DispatcherTimer _hoverTimer;
 
@@ -80,7 +81,6 @@ public sealed class OverlayWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
             Margin = new Thickness(0, 4, 0, 0),
         };
-        ApplyStyle();
         _panel = new StackPanel
         {
             Orientation = Orientation.Vertical,
@@ -89,7 +89,16 @@ public sealed class OverlayWindow : Window
         };
         _panel.Children.Add(_originalLine);
         _panel.Children.Add(_translationLine);
-        Content = new Grid { Children = { _panel } };
+        // 투명 창 + 내부 Border(라운드 배경). 창 자체는 항상 투명(히트테스트/클릭스루 유지),
+        // 배경 반투명판·모서리 라운드는 이 Border가 담당한다.
+        _backgroundBorder = new Border
+        {
+            Child = _panel,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+        Content = new Grid { Children = { _backgroundBorder } };
+        ApplyStyle();
 
         _lockButton = new LockButtonWindow(() => SetMoveMode(!IsMoveMode));
         _lockButton.SetLocked(true);
@@ -236,7 +245,8 @@ public sealed class OverlayWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd != IntPtr.Zero) ApplyClickThrough(hwnd, _clickThrough);
 
-        Background = moveMode
+        // 이동 모드 중에는 어두운 안내 배경을 라운드 판에 칠하고, 벗어나면 설정 배경으로 복원.
+        _backgroundBorder.Background = moveMode
             ? new SolidColorBrush(Color.FromArgb(0x50, 0x20, 0x20, 0x20))
             : ComputeBackgroundBrush();
         if (moveMode && string.IsNullOrEmpty(_originalLine.Text))
@@ -303,8 +313,8 @@ public sealed class OverlayWindow : Window
     private void PositionMediaControls()
     {
         if (_mediaControls is null || !IsVisible) return;
-        var top = Top + Math.Max(6, (ActualHeight - _mediaControls.Height) / 2);
-        _mediaControls.ShowAt(Left + 6, top);
+        // 좌상단(오버레이 Left/Top + 여백). 우상단 자물쇠와 겹치지 않는다.
+        _mediaControls.ShowAt(Left + 6, Top + 6);
     }
 
     private void UpdateLockButton()
@@ -357,6 +367,18 @@ public sealed class OverlayWindow : Window
     public void SetUserVisible(bool visible)
     {
         _userVisible = visible;
+        ApplyVisibility();
+    }
+
+    /// <summary>
+    /// 미니창(작업표시줄)에서 오버레이 되살리기: 사용자 숨김·일시정지·마우스오버 억제를 해제해
+    /// 항상 다시 보이게 한다. 전체화면 억제는 게임/영상 위로 튀지 않도록 그대로 둔다.
+    /// </summary>
+    public void ReviveVisible()
+    {
+        _userVisible = true;
+        _pausedSuppressed = false;
+        _mouseOverSuppressed = false;
         ApplyVisibility();
     }
 
@@ -421,7 +443,7 @@ public sealed class OverlayWindow : Window
     public void ApplyStyle()
     {
         _originalLine.Fill = ParseBrush(_settings.TextColor, Colors.White);
-        _originalLine.KaraokeFill = ParseBrush(_settings.KaraokeColor, Color.FromRgb(0x1D, 0xB9, 0x54));
+        _originalLine.KaraokeFill = ParseBrush(_settings.KaraokeColor, Color.FromRgb(0xFF, 0xEB, 0x3B));
         _translationLine.Fill = ParseBrush(_settings.TranslationColor, Color.FromRgb(0xE8, 0xE8, 0xE8));
 
         var outline = ParseBrush(_settings.OutlineColor, Colors.Black, alpha: 0xE0);
@@ -431,8 +453,9 @@ public sealed class OverlayWindow : Window
         _translationLine.Stroke = outline;
         _translationLine.StrokeThickness = thickness;
 
-        // 배경(반투명 판) — 이동 모드 중에는 그 어두운 배경을 유지
-        if (!IsMoveMode) Background = ComputeBackgroundBrush();
+        // 라운드 배경판(반투명) — 이동 모드 중에는 그 어두운 배경을 유지
+        _backgroundBorder.CornerRadius = new CornerRadius(Math.Max(0, _settings.OverlayCornerRadius));
+        if (!IsMoveMode) _backgroundBorder.Background = ComputeBackgroundBrush();
 
         _originalLine.InvalidateVisual();
         _translationLine.InvalidateVisual();

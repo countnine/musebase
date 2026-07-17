@@ -1,7 +1,14 @@
 # PROGRESS — Musebase for Windows (구 LyricsX for Windows)
 
-> **상태: windows-v0.10.0 (2026-07-17)** — 첫 Musebase 정식 릴리스(packId 클린 브레이크). 개명 + 거버넌스 + MPL-2.0 + 옵트인 텔레메트리 + Browser/Android 스파이크.
+> **상태: windows-v0.11.0 (2026-07-17)** — 무키 번역 기본을 MyMemory로 교체(LibreTranslate 유료화 대응) + 설정 4탭·번역 폴백 + 작업표시줄 미니창(컨트롤 허브) + 오버레이 개선 + 아이콘 M.
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.11.0 추가분
+- **무키 번역 기본 MyMemory 전환** — LibreTranslate.com이 API 키 필수로 바뀌어 무키 기본이 깨져 있던 것을 수정. MyMemory(공식 무료·자동감지) 기본. DeepL 할당량 초과 등 실패 시 무료 엔진 자동 폴백 옵션 + 실패 안내(로그·힌트).
+- **설정창 4탭**(일반/번역/오버레이 스타일/정보) + 긴 한글 줄바꿈/잘림 수정.
+- **작업표시줄 미니창(컨트롤 허브)** — 곡정보·가사소스·재생컨트롤·오프셋·검색·가사열기·틀린가사를 트레이/오버레이 없이 사용. 닫기→트레이 옵션.
+- 오버레이 배경 라운드 + 미디어컨트롤 좌상단, 기본값(노래방색 #FFEB3B·배경 불투명도 25%), 앱 아이콘 L→M.
+- 멀티플랫폼: Browser 인프로세스 호스팅 서버(`BrowserDisplayServer`), Android 가사 엔진 조립(실기기 검증).
 
 ## v0.10.0 추가분 (첫 Musebase 릴리스)
 - **옵트인 텔레메트리(ADR-0004)**: 익명 랜덤 GUID, 2단계 동의(①기본/②품질 — 다이얼로그·설정 토글, 기본 꺼짐), Engine `ITelemetry` 계측(lyrics_search/translation/wrong_lyrics/…), Windows `TelemetryClient`(JSONL 큐→시작 30초+1시간 주기, 틀린가사 즉시 업로드), 백엔드 Cloudflare Workers+D1(`backend/telemetry/`, /stats 공개·/admin 토큰 보호). 공개 문서 `TELEMETRY.md`, 계약 `contracts/telemetry-events.md`.

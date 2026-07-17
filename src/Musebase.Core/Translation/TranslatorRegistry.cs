@@ -4,7 +4,8 @@ namespace Musebase.Core.Translation;
 public sealed record TranslatorOptions(
     string? DeeplApiKey = null,
     string? LibreEndpoint = null,
-    string? LibreApiKey = null);
+    string? LibreApiKey = null,
+    string? MyMemoryEmail = null);
 
 /// <summary>번역 엔진 설명자. 키 필요 여부·무료 여부(UI/기본값 판단)와 생성 팩토리.</summary>
 public sealed record TranslatorDescriptor(
@@ -24,12 +25,18 @@ public static class TranslatorRegistry
     /// <summary>번역 비활성 식별자.</summary>
     public const string None = "none";
 
+    /// <summary>무키 무료 기본 엔진(설치 직후 바로 동작). LibreTranslate 공개 인스턴스가
+    /// 유료 키 필수로 바뀌어(2026) MyMemory를 기본 무키 엔진으로 사용한다.</summary>
+    public const string DefaultFreeEngine = "mymemory";
+
     /// <summary>LibreTranslate 기본 엔드포인트(설정으로 자체호스팅 인스턴스로 교체 가능).</summary>
     public const string DefaultLibreEndpoint = "https://libretranslate.com";
 
     public static IReadOnlyList<TranslatorDescriptor> All { get; } = new TranslatorDescriptor[]
     {
-        new("libretranslate", "LibreTranslate (무료·무키)", RequiresApiKey: false, IsFree: true,
+        new("mymemory", "MyMemory (무료·무키)", RequiresApiKey: false, IsFree: true,
+            o => new MyMemoryTranslator(o.MyMemoryEmail)),
+        new("libretranslate", "LibreTranslate (자체호스팅/키)", RequiresApiKey: false, IsFree: true,
             o => new LibreTranslateTranslator(
                 string.IsNullOrWhiteSpace(o.LibreEndpoint) ? DefaultLibreEndpoint : o.LibreEndpoint!,
                 o.LibreApiKey)),

@@ -14,7 +14,9 @@ public sealed record EngineConfig(
     string TargetLanguage,
     bool ShowOnlyTargetTranslation,
     double ManualOffsetSeconds,
-    string CacheDbPath);
+    string CacheDbPath,
+    // 주 번역 엔진 실패 시 폴백할 엔진 id(예: "libretranslate"). null=폴백 없음.
+    string? TranslationFallbackEngineId = null);
 
 /// <summary>
 /// 코어 서비스(가사 검색·번역·캐시)를 조합해 <see cref="LyricsCoordinator"/>를 만드는
@@ -23,12 +25,31 @@ public sealed record EngineConfig(
 /// </summary>
 public static class LyricsEngineFactory
 {
-    /// <summary>구성·캐시로 번역 서비스를 만든다(엔진/키 변경 시 재구성용으로도 사용).</summary>
-    public static LyricsTranslationService BuildTranslation(EngineConfig config, ITranslationCache cache) =>
-        new(TranslatorRegistry.Build(config.TranslationEngineId, config.TranslatorOptions), cache)
+    /// <summary>
+    /// 구성·캐시로 번역 서비스를 만든다(엔진/키 변경 시 재구성용으로도 사용).
+    /// 주 엔진 + (설정 시)폴백 엔진을 CompositeTranslator로 묶어, 주 엔진 실패 시
+    /// 폴백으로 번역을 유지한다. 실패는 <paramref name="onFailure"/>로 보고(로깅·상태 힌트용).
+    /// </summary>
+    public static LyricsTranslationService BuildTranslation(
+        EngineConfig config, ITranslationCache cache, Action<TranslatorFailure>? onFailure = null)
+    {
+        var chain = new List<(string, ITranslator)>();
+        if (TranslatorRegistry.Build(config.TranslationEngineId, config.TranslatorOptions) is { } primary)
+            chain.Add((config.TranslationEngineId, primary));
+
+        var fallbackId = config.TranslationFallbackEngineId;
+        if (!string.IsNullOrWhiteSpace(fallbackId) &&
+            !string.Equals(fallbackId, config.TranslationEngineId, StringComparison.OrdinalIgnoreCase) &&
+            TranslatorRegistry.Build(fallbackId!, config.TranslatorOptions) is { } fb)
+            chain.Add((fallbackId!, fb));
+
+        // 체인이 비면(엔진 none/키 없음) 번역기 없음 = 서비스 비활성.
+        ITranslator? translator = chain.Count == 0 ? null : new CompositeTranslator(chain, onFailure);
+        return new LyricsTranslationService(translator, cache)
         {
             EngineId = config.TranslationEngineId, // translation 텔레메트리의 engine 식별용
         };
+    }
 
     /// <summary>
     /// 재생 소스·디스패처·구성으로 완전 배선된 코디네이터를 만든다.
@@ -40,10 +61,11 @@ public static class LyricsEngineFactory
         EngineConfig config,
         ITranslationCache translationCache,
         Action<string>? log = null,
-        ITelemetry? telemetry = null) =>
+        ITelemetry? telemetry = null,
+        Action<TranslatorFailure>? onTranslationFailure = null) =>
         new(source, dispatcher, new LyricsSearchService(LyricsSourceRegistry.Build(config.EnabledLyricsSources)))
         {
-            Translation = BuildTranslation(config, translationCache),
+            Translation = BuildTranslation(config, translationCache, onTranslationFailure),
             Cache = new LyricsCacheStore(config.CacheDbPath),
             TargetLanguage = config.TargetLanguage,
             ShowOnlyTargetTranslation = config.ShowOnlyTargetTranslation,

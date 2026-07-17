@@ -122,3 +122,72 @@ public class TranslationServiceTests
         }
     }
 }
+
+/// <summary>CompositeTranslator 폴백 체인(ADR-0002) — 주 엔진 실패 시 다음으로.</summary>
+public class CompositeTranslatorTests
+{
+    private sealed class ThrowingTranslator(Exception ex) : ITranslator
+    {
+        public Task<IReadOnlyList<string?>> TranslateAsync(
+            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default) => throw ex;
+    }
+
+    private sealed class EchoTranslator(string prefix) : ITranslator
+    {
+        public int CallCount;
+        public Task<IReadOnlyList<string?>> TranslateAsync(
+            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default)
+        {
+            CallCount++;
+            return Task.FromResult<IReadOnlyList<string?>>(texts.Select(t => (string?)$"{prefix}:{t}").ToList());
+        }
+    }
+
+    [Fact]
+    public async Task PrimaryQuotaFailure_FallsBackToSecondary_AndReportsQuota()
+    {
+        var quota = new HttpRequestException("quota", null, (System.Net.HttpStatusCode)456);
+        TranslatorFailure? reported = null;
+        var fallback = new EchoTranslator("libre");
+        var composite = new CompositeTranslator(
+            [("deepl", new ThrowingTranslator(quota)), ("libretranslate", fallback)],
+            f => reported = f);
+
+        var result = await composite.TranslateAsync(["a", "b"], "KO");
+
+        Assert.Equal(["libre:a", "libre:b"], result);
+        Assert.Equal(1, fallback.CallCount);
+        Assert.NotNull(reported);
+        Assert.Equal("deepl", reported!.EngineId);
+        Assert.Equal(456, reported.HttpStatus);
+        Assert.Equal(TranslatorFailureKind.Quota, reported.Kind);
+    }
+
+    [Fact]
+    public async Task AllFail_ReturnsNulls_WithoutThrowing()
+    {
+        var boom = new HttpRequestException("nope", null, (System.Net.HttpStatusCode)403);
+        var reports = new List<TranslatorFailure>();
+        var composite = new CompositeTranslator(
+            [("deepl", new ThrowingTranslator(boom))], reports.Add);
+
+        var result = await composite.TranslateAsync(["x"], "KO");
+
+        Assert.Single(result);
+        Assert.Null(result[0]);
+        Assert.Equal(TranslatorFailureKind.Auth, Assert.Single(reports).Kind);
+    }
+
+    [Fact]
+    public async Task PrimarySucceeds_SecondaryNotCalled()
+    {
+        var primary = new EchoTranslator("deepl");
+        var secondary = new EchoTranslator("libre");
+        var composite = new CompositeTranslator([("deepl", primary), ("libretranslate", secondary)]);
+
+        var result = await composite.TranslateAsync(["a"], "KO");
+
+        Assert.Equal(["deepl:a"], result);
+        Assert.Equal(0, secondary.CallCount);
+    }
+}

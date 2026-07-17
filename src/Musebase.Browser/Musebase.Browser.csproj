@@ -1,18 +1,29 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Web SDK 대신 일반 SDK + FrameworkReference: WPF 등 다른 exe가 ProjectReference로
+       이 프로젝트를 참조해 BrowserDisplayServer를 인프로세스로 띄울 수 있게 한다.
+       (FrameworkReference는 ProjectReference를 통해 참조 측으로 전이되므로
+       참조하는 프로젝트는 ProjectReference 한 줄이면 된다 — 검증 완료.)
+       CLI exe(dotnet run) 산출은 그대로 유지한다. -->
   <PropertyGroup>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Musebase.Engine\Musebase.Engine.csproj" />
   </ItemGroup>
 
-  <!-- 빌드 출력(bin)에서 exe를 직접 실행해도 정적 웹 디스플레이가 서빙되도록 복사 -->
+  <!-- 웹 디스플레이 페이지는 임베디드 리소스로 어셈블리에 포함 — 참조하는 exe에서
+       호스팅해도 파일 복사 없이 서빙된다(빌드 출력 wwwroot 복사 불필요). -->
   <ItemGroup>
-    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="wwwroot\index.html" LogicalName="Musebase.Browser.wwwroot.index.html" />
   </ItemGroup>
 
 </Project>
