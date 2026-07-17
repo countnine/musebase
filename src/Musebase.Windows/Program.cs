@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using H.NotifyIcon;
 using Musebase.Windows.Overlay;
 using Musebase.Windows.Services;
+using Musebase.Browser;
 using Musebase.Engine;
 using Velopack;
 
@@ -87,6 +88,9 @@ internal static class Program
             H.NotifyIcon.TaskbarIcon? tray = null;
             MiniWindow? miniWindow = null;
 
+            // 브라우저 디스플레이 서버(인프로세스 Kestrel). null=꺼짐. 토글/자동시작/종료 경로가 공유.
+            BrowserDisplayServer? browserServer = null;
+
             // 번역 실패 사용자 힌트: 같은 kind는 세션 1회만(곡마다 스팸 금지). 로그는 매 실패 기록.
             var reportedFailureKinds = new HashSet<Musebase.Core.Translation.TranslatorFailureKind>();
             static string LocalizeFailureHint(Musebase.Core.Translation.TranslatorFailureKind kind) => kind switch
@@ -164,6 +168,7 @@ internal static class Program
             var overlayToggle = new MenuItem { Header = Loc.T("tray.overlay.show"), IsCheckable = true, IsChecked = settings.OverlayVisible };
             var moveToggle = new MenuItem { Header = Loc.T("tray.overlay.moveMode"), IsCheckable = true };
             var sourceMenu = new MenuItem { Header = Loc.T("tray.source") };
+            var browserDisplayToggle = new MenuItem { Header = Loc.T("tray.browserDisplay"), IsCheckable = true, IsChecked = settings.BrowserDisplayEnabled };
 
             void ApplySource(string mode, bool includeBrowsers)
             {
@@ -428,8 +433,93 @@ internal static class Program
             void ExitApp()
             {
                 miniWindow?.CloseForExit();
-                app.Shutdown();
+                app.Shutdown(); // 브라우저 서버 정리는 app.Exit 핸들러에서(설정은 유지 → 다음 실행 자동 시작)
             }
+
+            // ---- 브라우저 디스플레이(태블릿/TV) 수명주기 ----
+            // 실제 접속용 URL(LAN이면 사설 IPv4, 아니면 localhost) + 실제 바인딩 포트(포트=0 대응).
+            string BrowserDisplayUrl(BrowserDisplayServer server)
+            {
+                var port = settings.BrowserDisplayPort;
+                var bound = server.Urls
+                    .Select(u => Uri.TryCreate(
+                        u.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").Replace("+", "localhost"),
+                        UriKind.Absolute, out var uri) ? uri : null)
+                    .FirstOrDefault(u => u is not null);
+                if (bound is not null) port = bound.Port;
+                var host = settings.BrowserDisplayLan && LocalLanIPv4() is { } ip ? ip : "localhost";
+                return $"http://{host}:{port}";
+            }
+
+            async Task StartBrowserDisplayAsync(bool userInitiated)
+            {
+                if (browserServer is not null) return; // 이미 실행 중
+                try
+                {
+                    browserServer = await BrowserDisplayServer.StartAsync(new BrowserDisplayOptions(
+                        Port: settings.BrowserDisplayPort,
+                        ListenLan: settings.BrowserDisplayLan,
+                        Log: Log.Write));
+                    coordinator.StateChanged += browserServer.Publish; // 표시 상태 방송 연결
+                    browserServer.Publish(coordinator.CurrentState);    // 접속 전이라도 현재 상태 1회 반영
+                    telemetry.CountFeature("browserDisplay");
+
+                    var url = BrowserDisplayUrl(browserServer);
+                    settings.BrowserDisplayEnabled = true;
+                    settings.Save();
+                    browserDisplayToggle.IsChecked = true;
+                    Log.Write($"[browser] 시작: 리슨={string.Join(", ", browserServer.Urls)} 안내URL={url}");
+
+                    // URL 노출: 트레이 툴팁·미니창 상태 + (사용자 조작 시) 안내 다이얼로그.
+                    var statusText = Loc.T("browserDisplay.status.on", ("url", url));
+                    if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", statusText));
+                    miniWindow?.SetStatus(statusText);
+                    if (userInitiated)
+                        MessageBox.Show(
+                            Loc.T("browserDisplay.dialog.body", ("url", url)),
+                            Loc.T("browserDisplay.dialog.title"),
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception e)
+                {
+                    Log.Write($"[browser] 시작 실패: {e.Message}");
+                    if (browserServer is { } failed)
+                    {
+                        coordinator.StateChanged -= failed.Publish;
+                        try { await failed.DisposeAsync(); } catch { /* 정리 실패 무시 */ }
+                        browserServer = null;
+                    }
+                    settings.BrowserDisplayEnabled = false;
+                    settings.Save();
+                    browserDisplayToggle.IsChecked = false;
+                    MessageBox.Show(
+                        Loc.T("browserDisplay.fail", ("port", settings.BrowserDisplayPort.ToString()), ("error", e.Message)),
+                        Loc.T("browserDisplay.dialog.title"),
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+
+            async Task StopBrowserDisplayAsync(bool save)
+            {
+                if (browserServer is not { } server) return;
+                coordinator.StateChanged -= server.Publish;
+                browserServer = null;
+                try { await server.DisposeAsync(); }
+                catch (Exception e) { Log.Write($"[browser] 정지 실패: {e.Message}"); }
+                if (save)
+                {
+                    settings.BrowserDisplayEnabled = false;
+                    settings.Save();
+                }
+                browserDisplayToggle.IsChecked = false;
+                Log.Write("[browser] 정지");
+            }
+
+            browserDisplayToggle.Click += async (_, _) =>
+            {
+                if (browserDisplayToggle.IsChecked) await StartBrowserDisplayAsync(userInitiated: true);
+                else await StopBrowserDisplayAsync(save: true);
+            };
 
             overlayToggle.Click += (_, _) => SetOverlayVisible(overlayToggle.IsChecked);
             moveToggle.Click += (_, _) => overlay.SetMoveMode(moveToggle.IsChecked);
@@ -468,6 +558,7 @@ internal static class Program
             menu.Items.Add(overlayToggle);
             menu.Items.Add(moveToggle);
             menu.Items.Add(sourceMenu);
+            menu.Items.Add(browserDisplayToggle);
             menu.Items.Add(new Separator());
             menu.Items.Add(offsetLabel);
             menu.Items.Add(offsetPlus);
@@ -529,6 +620,13 @@ internal static class Program
 
             app.Exit += (_, _) =>
             {
+                // 브라우저 서버 정리: 종료 직전 Kestrel을 멈춰 포트를 해제(설정은 유지 → 다음 실행 자동 시작).
+                if (browserServer is { } bs)
+                {
+                    try { bs.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2)); }
+                    catch { /* 종료 정리 실패 무시 */ }
+                    browserServer = null;
+                }
                 tray.Dispose();
                 appIcon.Dispose();
                 telemetry.Dispose(); // 세션 feature_use 카운터를 큐로 보존(다음 실행에서 업로드)
@@ -611,6 +709,7 @@ internal static class Program
                 overlayToggle.Header = Loc.T("tray.overlay.show");
                 moveToggle.Header = Loc.T("tray.overlay.moveMode");
                 sourceMenu.Header = Loc.T("tray.source");
+                browserDisplayToggle.Header = Loc.T("tray.browserDisplay");
                 offsetPlus.Header = Loc.T("tray.offset.faster");
                 offsetMinus.Header = Loc.T("tray.offset.slower");
                 offsetReset.Header = Loc.T("tray.offset.reset");
@@ -641,6 +740,10 @@ internal static class Program
             coordinator.Start(); // 배선 완료 후 시작 (캐시/번역/상태 이벤트 유효)
             Log.Write("=== Musebase 시작 ===");
 
+            // 브라우저 디스플레이 자동 시작(설정 켜짐 시). 실패해도 앱 다른 기능엔 영향 없음.
+            if (settings.BrowserDisplayEnabled)
+                _ = StartBrowserDisplayAsync(userInitiated: false);
+
             // 텔레메트리 동의 다이얼로그(최초 1회, 기본 모두 꺼짐 = 미수집)
             if (!settings.TelemetryConsentAsked)
                 new TelemetryConsentWindow(settings).Show();
@@ -649,6 +752,32 @@ internal static class Program
             _ = RunUpdateCheckAsync(userInitiated: false);
         };
         app.Run();
+    }
+
+    /// <summary>
+    /// 이 PC의 사설대역 IPv4 주소(LAN 접속용). 여러 개면 첫 번째. 없으면 null(→ 호출부는 localhost 사용).
+    /// 10.x / 172.16–31.x / 192.168.x 만 후보로 삼아 공인/링크로컬 주소를 배제한다.
+    /// </summary>
+    private static string? LocalLanIPv4()
+    {
+        try
+        {
+            foreach (var ip in System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName()))
+            {
+                if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                var b = ip.GetAddressBytes();
+                var isPrivate =
+                    b[0] == 10 ||
+                    (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+                    (b[0] == 192 && b[1] == 168);
+                if (isPrivate) return ip.ToString();
+            }
+        }
+        catch
+        {
+            // 주소 조회 실패 시 localhost 폴백
+        }
+        return null;
     }
 
     /// <summary>파일명으로 쓸 수 없는 문자를 '_'로 치환한다.</summary>

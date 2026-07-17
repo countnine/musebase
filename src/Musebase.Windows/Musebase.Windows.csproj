@@ -12,7 +12,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <!-- 릴리스 버전: Velopack 패키징(vpk pack packVersion 인자)과 in-app 표시에 사용 -->
-    <Version>0.11.0</Version>
+    <Version>0.12.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,6 +25,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Musebase.Core\Musebase.Core.csproj" />
     <ProjectReference Include="..\Musebase.Engine\Musebase.Engine.csproj" />
+    <!-- 인프로세스 브라우저 디스플레이 서버(Kestrel). FrameworkReference(Microsoft.AspNetCore.App)는
+         이 ProjectReference를 통해 전이되므로 여기서는 한 줄이면 된다. -->
+    <ProjectReference Include="..\Musebase.Browser\Musebase.Browser.csproj" />
   </ItemGroup>
 
   <!-- UI 다국어 카탈로그: 로케일별 JSON을 어셈블리에 임베드 (Musebase.Windows.i18n.<code>.json) -->

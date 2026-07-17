@@ -281,6 +281,41 @@ public sealed class SettingsWindow : Window
                 Margin = new Thickness(0, 6, 0, 0),
             });
 
+            // ---- 브라우저 디스플레이(태블릿/TV) — 켜기는 트레이 메뉴에서, 여기선 포트·LAN 설정 ----
+            general.Children.Add(Header("settings.browserDisplay.header"));
+            general.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.browserDisplay.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+            var browserPortBox = new TextBox
+            {
+                Text = settings.BrowserDisplayPort.ToString(CultureInfo.InvariantCulture),
+                Width = 90,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalContentAlignment = VerticalAlignment.Center,
+            };
+            var browserPortRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
+            browserPortRow.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.browserDisplay.port"),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0),
+            });
+            browserPortRow.Children.Add(browserPortBox);
+            general.Children.Add(browserPortRow);
+            var browserLanCheck = WrapCheck("settings.browserDisplay.lan", settings.BrowserDisplayLan, new Thickness(0, 8, 0, 0));
+            general.Children.Add(browserLanCheck);
+            general.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.browserDisplay.lan.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(22, 2, 0, 0),
+            });
+
             // 사용 통계(텔레메트리, ADR-0004) — 토글 즉시 반영(저장 버튼과 무관)
             general.Children.Add(Header("settings.telemetry.header"));
             var telemetryBasicCheck = WrapCheck("telemetry.consent.basic", settings.TelemetryBasicEnabled, new Thickness(0, 2, 0, 0));
@@ -494,6 +529,10 @@ public sealed class SettingsWindow : Window
                 settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;
                 settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
                 settings.MiniWindowCloseToTray = closeToTrayCheck.IsChecked == true;
+                // 브라우저 디스플레이 포트/LAN (실행 중 변경은 다음 시작부터 적용 — 토글 재시작)
+                if (int.TryParse(browserPortBox.Text.Trim(), out var browserPort) && browserPort is >= 0 and <= 65535)
+                    settings.BrowserDisplayPort = browserPort;
+                settings.BrowserDisplayLan = browserLanCheck.IsChecked == true;
                 settings.TextColor = NormalizeHex(textColor.Box.Text, settings.TextColor);
                 settings.KaraokeColor = NormalizeHex(karaokeColor.Box.Text, settings.KaraokeColor);
                 settings.TranslationColor = NormalizeHex(translationColor.Box.Text, settings.TranslationColor);

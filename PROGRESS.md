@@ -1,7 +1,10 @@
 # PROGRESS — Musebase for Windows (구 LyricsX for Windows)
 
-> **상태: windows-v0.11.0 (2026-07-17)** — 무키 번역 기본을 MyMemory로 교체(LibreTranslate 유료화 대응) + 설정 4탭·번역 폴백 + 작업표시줄 미니창(컨트롤 허브) + 오버레이 개선 + 아이콘 M.
+> **상태: windows-v0.12.0 (2026-07-17)** — 브라우저 디스플레이(태블릿/TV 브라우저로 실시간 가사 송출) 통합. 이전 0.11.0(MyMemory 무키 번역·설정 4탭·미니창 허브) 포함.
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.12.0 추가분
+- **브라우저 디스플레이** — 트레이 "브라우저 디스플레이" 토글로 인프로세스 서버(Musebase.Browser) 기동, 같은 LAN의 태블릿·TV·폰 브라우저에서 `http://<PC IP>:5123` 접속 시 실시간 가사(카라오케 채움·번역 포함) 표시. 설정에 포트·LAN 접속 허용, 켤 때 접속 URL 안내. LAN 접속은 Windows 방화벽 인바운드 TCP 허용 필요. (Phase 1 완료 — PlaybackViewState 계약 실사용 검증)
 
 ## v0.11.0 추가분
 - **무키 번역 기본 MyMemory 전환** — LibreTranslate.com이 API 키 필수로 바뀌어 무키 기본이 깨져 있던 것을 수정. MyMemory(공식 무료·자동감지) 기본. DeepL 할당량 초과 등 실패 시 무료 엔진 자동 폴백 옵션 + 실패 안내(로그·힌트).
