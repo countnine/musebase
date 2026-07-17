@@ -73,15 +73,48 @@ internal static class Program
                 settings.EffectiveTargetLanguage,
                 settings.ShowOnlyTargetTranslation,
                 settings.ManualOffsetSeconds,
-                cacheDb);
+                cacheDb,
+                // 폴백 켬 + 주 엔진이 무키 무료 기본이 아닐 때만 무료 엔진(MyMemory)으로 자동 전환.
+                TranslationFallbackEngineId:
+                    settings.TranslationFallbackToFree
+                    && !string.Equals(settings.EffectiveTranslationEngine, Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine, StringComparison.OrdinalIgnoreCase)
+                        ? Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine : null);
 
             Log.Write($"[sources] 활성 가사 소스: {string.Join(", ", settings.EnabledLyricsSources)}");
             Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}");
 
+            // 트레이/미니창은 아래에서 생성되지만, 번역 실패 콜백·표시 동기화가 이들을 참조하므로 선언만 먼저.
+            H.NotifyIcon.TaskbarIcon? tray = null;
+            MiniWindow? miniWindow = null;
+
+            // 번역 실패 사용자 힌트: 같은 kind는 세션 1회만(곡마다 스팸 금지). 로그는 매 실패 기록.
+            var reportedFailureKinds = new HashSet<Musebase.Core.Translation.TranslatorFailureKind>();
+            static string LocalizeFailureHint(Musebase.Core.Translation.TranslatorFailureKind kind) => kind switch
+            {
+                Musebase.Core.Translation.TranslatorFailureKind.Quota => Loc.T("translate.fail.quota"),
+                Musebase.Core.Translation.TranslatorFailureKind.Auth => Loc.T("translate.fail.auth"),
+                Musebase.Core.Translation.TranslatorFailureKind.RateLimit => Loc.T("translate.fail.rate"),
+                Musebase.Core.Translation.TranslatorFailureKind.Server => Loc.T("translate.fail.server"),
+                Musebase.Core.Translation.TranslatorFailureKind.Network => Loc.T("translate.fail.network"),
+                _ => Loc.T("translate.fail.other"),
+            };
+            void OnTranslationFailure(Musebase.Core.Translation.TranslatorFailure f)
+            {
+                Log.Write($"[translate] 실패: engine={f.EngineId} status={(f.HttpStatus?.ToString() ?? "-")} kind={f.Kind}");
+                if (!reportedFailureKinds.Add(f.Kind)) return; // 세션당 kind 1회만 사용자 힌트
+                var hint = LocalizeFailureHint(f.Kind);
+                app.Dispatcher.BeginInvoke(() =>
+                {
+                    if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", hint));
+                    miniWindow?.SetStatus(hint);
+                });
+            }
+
             // 공유 조합 팩토리로 코디네이터 조립(동일 조합을 Android/서버가 재사용)
             var coordinator = LyricsEngineFactory.Create(
                 nowPlaying, new WpfEngineDispatcher(app.Dispatcher), CurrentConfig(), translationCache, Log.Write,
-                telemetry: telemetry); // 엔진 계측(lyrics_search/translation/wrong_lyrics/…) 활성화
+                telemetry: telemetry, // 엔진 계측(lyrics_search/translation/wrong_lyrics/…) 활성화
+                onTranslationFailure: OnTranslationFailure); // 번역 실패 로깅·힌트
 
             // "틀린 가사" 억제 목록을 설정에서 복원하고 변경 시 영속화
             foreach (var key in settings.SuppressedTracks) coordinator.SuppressedTrackKeys.Add(key);
@@ -113,12 +146,17 @@ internal static class Program
                     app.Dispatcher.BeginInvoke(() => overlay.SetPausedSuppressed(!playing));
 
                 // 오버레이 좌측 재생 컨트롤(이전/재생·정지/다음). 마우스 오버 시에만 표시.
+                // 트레이·미니창과 같은 코드 경로(MediaPrevious/MediaPlayPause/MediaNext)를 공유.
                 overlay.EnableMediaControls(
                     controlsProvider: () => nowPlaying.GetControls(),
                     playingProvider: () => nowPlaying.IsPlaying,
-                    onPrevious: () => { telemetry.CountFeature("mediaControls"); _ = nowPlaying.SkipPreviousAsync(); },
-                    onPlayPause: () => { telemetry.CountFeature("mediaControls"); _ = nowPlaying.TogglePlayPauseAsync(); },
-                    onNext: () => { telemetry.CountFeature("mediaControls"); _ = nowPlaying.SkipNextAsync(); });
+                    onPrevious: MediaPrevious,
+                    onPlayPause: MediaPlayPause,
+                    onNext: MediaNext);
+
+                // 재생 상태 변경 시 미니창 재생 버튼(재생/일시정지·활성) 갱신.
+                nowPlaying.IsPlayingChanged += _ =>
+                    app.Dispatcher.BeginInvoke(() => miniWindow?.RefreshPlayback());
             }
 
             // ---- 트레이 메뉴 ----
@@ -205,19 +243,18 @@ internal static class Program
                     startupToggle.IsChecked = StartupManager.IsEnabled();
                 }
             };
-            var searchItem = new MenuItem { Header = Loc.T("tray.search") };
-            searchItem.Click += (_, _) =>
+            // ---- 트레이·미니창 공유 동작(중복 구현 방지: 같은 로컬 함수를 호출) ----
+            LyricsEditorWindow? editorWindow = null;
+            void MediaPrevious() { telemetry.CountFeature("mediaControls"); _ = nowPlaying.SkipPreviousAsync(); }
+            void MediaPlayPause() { telemetry.CountFeature("mediaControls"); _ = nowPlaying.TogglePlayPauseAsync(); }
+            void MediaNext() { telemetry.CountFeature("mediaControls"); _ = nowPlaying.SkipNextAsync(); }
+            bool HasLyrics() => coordinator.CurrentLyrics is not null && coordinator.CurrentTrack is not null;
+            void OpenSearch()
             {
                 telemetry.CountFeature("search");
                 new SearchWindow(coordinator).Show();
-            };
-
-            // ---- 현재 가사 편집 / 내보내기 ----
-            var editItem = new MenuItem { Header = Loc.T("tray.edit") };
-            var exportItem = new MenuItem { Header = Loc.T("tray.export") };
-            LyricsEditorWindow? editorWindow = null;
-
-            editItem.Click += (_, _) =>
+            }
+            void OpenLyricsEditor()
             {
                 if (coordinator.CurrentLyrics is not { } lyrics || coordinator.CurrentTrack is not { } track) return;
                 telemetry.CountFeature("edit");
@@ -230,7 +267,16 @@ internal static class Program
                     track.ToString(), lyrics,
                     edited => coordinator.SaveEditedLyrics(track, edited));
                 editorWindow.Show();
-            };
+            }
+            void MarkWrong() => coordinator.MarkWrongLyrics();
+
+            var searchItem = new MenuItem { Header = Loc.T("tray.search") };
+            searchItem.Click += (_, _) => OpenSearch();
+
+            // ---- 현재 가사 편집 / 내보내기 ----
+            var editItem = new MenuItem { Header = Loc.T("tray.edit") };
+            var exportItem = new MenuItem { Header = Loc.T("tray.export") };
+            editItem.Click += (_, _) => OpenLyricsEditor();
 
             exportItem.Click += (_, _) =>
             {
@@ -259,7 +305,10 @@ internal static class Program
 
             // 현재 가사가 틀렸을 때: 표시 중단 + 캐시 제거 + 재검색 억제
             var wrongItem = new MenuItem { Header = Loc.T("tray.wrong") };
-            wrongItem.Click += (_, _) => coordinator.MarkWrongLyrics();
+            wrongItem.Click += (_, _) => MarkWrong();
+
+            var openMiniItem = new MenuItem { Header = Loc.T("mini.open") };
+            openMiniItem.Click += (_, _) => miniWindow?.ShowFromTray();
 
             var settingsItem = new MenuItem { Header = Loc.T("tray.settings") };
             var exitItem = new MenuItem { Header = Loc.T("tray.exit") };
@@ -330,7 +379,7 @@ internal static class Program
             updateItem.Click += async (_, _) => await RunUpdateCheckAsync(userInitiated: true);
 
             SettingsWindow? settingsWindow = null;
-            settingsItem.Click += (_, _) =>
+            void OpenSettings()
             {
                 if (settingsWindow is { IsLoaded: true })
                 {
@@ -340,32 +389,55 @@ internal static class Program
                 settingsWindow = new SettingsWindow(settings, onSaved: () =>
                 {
                     var cfg = CurrentConfig();
-                    coordinator.Translation = LyricsEngineFactory.BuildTranslation(cfg, translationCache);
+                    reportedFailureKinds.Clear(); // 엔진/폴백 변경 시 힌트를 다시 안내할 수 있게 초기화
+                    coordinator.Translation = LyricsEngineFactory.BuildTranslation(cfg, translationCache, OnTranslationFailure);
                     coordinator.TargetLanguage = cfg.TargetLanguage;
                     coordinator.ShowOnlyTargetTranslation = cfg.ShowOnlyTargetTranslation;
                     coordinator.RefreshCurrentLine(); // 표시 정책 변경 즉시 반영
                     overlay.ApplyStyle();
-                    Log.Write($"[settings] 저장됨: engine={cfg.TranslationEngineId}, lang={cfg.TargetLanguage}");
-                });
+                    Log.Write($"[settings] 저장됨: engine={cfg.TranslationEngineId}, lang={cfg.TargetLanguage}, fallback={cfg.TranslationFallbackEngineId ?? "-"}");
+                },
+                onCheckUpdates: () => _ = RunUpdateCheckAsync(userInitiated: true));
                 settingsWindow.Show();
-            };
+            }
+            settingsItem.Click += (_, _) => OpenSettings();
 
             void UpdateOffsetLabel() =>
                 offsetLabel.Header = Loc.T("tray.offset.label", ("value", coordinator.ManualOffsetSeconds.ToString("+0.0;-0.0;0")));
             UpdateOffsetLabel();
 
-            overlayToggle.Click += (_, _) =>
+            // 오버레이 표시 상태를 트레이·미니창과 동기화하며 설정에 저장.
+            void SetOverlayVisible(bool visible)
             {
-                settings.OverlayVisible = overlayToggle.IsChecked;
-                overlay.SetUserVisible(overlayToggle.IsChecked);
+                settings.OverlayVisible = visible;
+                overlay.SetUserVisible(visible);
                 settings.Save();
-            };
+                overlayToggle.IsChecked = visible;
+                miniWindow?.SyncOverlayVisible(visible);
+            }
+            // 미니창(작업표시줄)에서 오버레이 되살리기 — 사용자 숨김/일시정지/가림방지 억제를 해제.
+            void ReviveOverlay()
+            {
+                overlay.ReviveVisible();
+                settings.OverlayVisible = true;
+                settings.Save();
+                overlayToggle.IsChecked = true;
+                miniWindow?.SyncOverlayVisible(true);
+            }
+            // 종료(트레이/미니창 공통): 미니창 실제 닫힘 허용 후 앱 종료.
+            void ExitApp()
+            {
+                miniWindow?.CloseForExit();
+                app.Shutdown();
+            }
+
+            overlayToggle.Click += (_, _) => SetOverlayVisible(overlayToggle.IsChecked);
             moveToggle.Click += (_, _) => overlay.SetMoveMode(moveToggle.IsChecked);
             overlay.MoveModeChanged += moveMode => moveToggle.IsChecked = moveMode; // 자물쇠 버튼과 동기화
             offsetPlus.Click += (_, _) => AdjustOffset(0.5);
             offsetMinus.Click += (_, _) => AdjustOffset(-0.5);
             offsetReset.Click += (_, _) => AdjustOffset(null);
-            exitItem.Click += (_, _) => app.Shutdown();
+            exitItem.Click += (_, _) => ExitApp();
 
             void AdjustOffset(double? delta)
             {
@@ -374,6 +446,7 @@ internal static class Program
                 settings.ManualOffsetSeconds = coordinator.ManualOffsetSeconds;
                 settings.Save();
                 UpdateOffsetLabel();
+                miniWindow?.RefreshOffset();
             }
 
             var menu = new ContextMenu();
@@ -403,12 +476,14 @@ internal static class Program
             menu.Items.Add(new Separator());
             menu.Items.Add(startupToggle);
             menu.Items.Add(updateItem);
+            menu.Items.Add(openMiniItem);
             menu.Items.Add(settingsItem);
             menu.Items.Add(exitItem);
 
-            var tray = new TaskbarIcon
+            var appIcon = CreateTrayIcon(); // 트레이·미니창이 공유하는 런타임 아이콘(녹색 원 + M)
+            tray = new TaskbarIcon
             {
-                Icon = CreateTrayIcon(),
+                Icon = appIcon,
                 ToolTipText = Loc.T("tray.tooltip.version", ("version", updater.CurrentVersion.ToString())),
                 ContextMenu = menu,
             };
@@ -421,9 +496,41 @@ internal static class Program
             {
                 Log.Write($"[tray] ForceCreate 실패: {e.Message}");
             }
+
+            // ---- 작업표시줄 상주 미니창(컨트롤 허브) ----
+            // 콜백은 위 트레이 로컬 함수를 그대로 주입 → 트레이/미니창이 같은 코드 경로를 공유.
+            miniWindow = new MiniWindow(appIcon, new MiniWindowActions(
+                IsOverlayVisible: () => settings.OverlayVisible,
+                SetOverlayVisible: SetOverlayVisible,
+                ReviveOverlay: ReviveOverlay,
+                OpenSettings: OpenSettings,
+                Exit: ExitApp,
+                GetControls: () => nowPlaying.GetControls(),
+                IsPlaying: () => nowPlaying.IsPlaying,
+                OnPrevious: MediaPrevious,
+                OnPlayPause: MediaPlayPause,
+                OnNext: MediaNext,
+                AdjustOffset: AdjustOffset,
+                GetOffset: () => coordinator.ManualOffsetSeconds,
+                OpenSearch: OpenSearch,
+                OpenLyricsEditor: OpenLyricsEditor,
+                MarkWrong: MarkWrong,
+                HasLyrics: HasLyrics,
+                CloseToTray: () => settings.MiniWindowCloseToTray));
+            miniWindow.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
+            if (coordinator.CurrentStatus is { } cs) miniWindow.SetStatus(LocalizeStatus(cs));
+            miniWindow.RefreshLyricsFeatures();
+            // 포커스를 뺏지 않도록 최소화 상태로 작업표시줄에 상주(오버레이는 별도로 표시됨).
+            miniWindow.WindowState = WindowState.Minimized;
+            miniWindow.Show();
+
+            // 트레이 아이콘 더블클릭 → 미니창 복귀(닫기→트레이 옵션 사용 시 필수 경로).
+            tray.TrayLeftMouseDoubleClick += (_, _) => miniWindow?.ShowFromTray();
+
             app.Exit += (_, _) =>
             {
                 tray.Dispose();
+                appIcon.Dispose();
                 telemetry.Dispose(); // 세션 feature_use 카운터를 큐로 보존(다음 실행에서 업로드)
                 settings.Save();
             };
@@ -448,7 +555,14 @@ internal static class Program
             {
                 var text = LocalizeStatus(status);
                 trackItem.Header = text;
-                tray.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
+                if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
+                if (miniWindow is { } mw)
+                {
+                    mw.SetStatus(text);
+                    mw.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
+                    mw.RefreshLyricsFeatures();
+                    mw.RefreshPlayback();
+                }
                 Log.Write($"[status] {text}");
             };
             coordinator.CurrentLineChanged += line =>
@@ -507,12 +621,19 @@ internal static class Program
                 wrongItem.Header = Loc.T("tray.wrong");
                 settingsItem.Header = Loc.T("tray.settings");
                 exitItem.Header = Loc.T("tray.exit");
+                openMiniItem.Header = Loc.T("mini.open");
                 UpdateOffsetLabel();
                 UpdateUpdateItemText();
                 if (coordinator.CurrentTrack is null)
                 {
                     trackItem.Header = Loc.T("status.noTrack");
-                    tray.ToolTipText = Loc.T("tray.tooltip.version", ("version", updater.CurrentVersion.ToString()));
+                    if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.version", ("version", updater.CurrentVersion.ToString()));
+                }
+                // 미니창의 곡/상태 텍스트도 새 언어로 다시 현지화(버튼 라벨은 MiniWindow가 자체 처리).
+                if (miniWindow is { } mw)
+                {
+                    mw.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
+                    if (coordinator.CurrentStatus is { } cs2) mw.SetStatus(LocalizeStatus(cs2));
                 }
             }
             Loc.CultureChanged += ApplyMenuText;

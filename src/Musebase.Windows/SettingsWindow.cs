@@ -34,6 +34,7 @@ public sealed class SettingsWindow : Window
 
     private readonly AppSettings _settings;
     private readonly Action _onSaved;
+    private readonly Action? _onCheckUpdates;
     private bool _rebuilding; // 언어 변경으로 콤보를 프로그램적으로 세팅할 때 이벤트 억제
 
     private static SolidColorBrush BrushFromHex(string hex)
@@ -42,10 +43,11 @@ public sealed class SettingsWindow : Window
         catch { return new SolidColorBrush(Colors.Transparent); }
     }
 
-    public SettingsWindow(AppSettings settings, Action onSaved)
+    public SettingsWindow(AppSettings settings, Action onSaved, Action? onCheckUpdates = null)
     {
         _settings = settings;
         _onSaved = onSaved;
+        _onCheckUpdates = onCheckUpdates;
 
         Width = 470;
         SizeToContent = SizeToContent.Height; // 내용 높이에 맞춰 자동(세로 스크롤 없음)
@@ -91,9 +93,10 @@ public sealed class SettingsWindow : Window
             Title = Loc.T("settings.title");
             var settings = _settings;
 
-            // ================= [일반] 탭 =================
+            // ================= 탭 패널 =================
             // 폭을 명시(SizeToContent.Height에서 폭 전파 누락으로 글자단위 줄바꿈되는 문제 방지)
-            var general = new StackPanel { Margin = new Thickness(16), Width = 410, HorizontalAlignment = HorizontalAlignment.Left };
+            var general = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
+            var translation = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
 
             // 표시 언어
             var langChoices = new List<LanguageChoice> { new(Loc.SystemSetting, Loc.T("settings.language.system")) };
@@ -173,11 +176,16 @@ public sealed class SettingsWindow : Window
 
             general.Children.Add(Header("settings.language.header"));
             general.Children.Add(uiLangBox);
-            general.Children.Add(contribute);
-            general.Children.Add(Header("settings.deepl.key.header"));
-            general.Children.Add(keyRow);
-            general.Children.Add(Header("settings.deepl.lang.header"));
-            general.Children.Add(langBox);
+
+            // 미니창 닫기(X) 동작: 켜면 트레이로 숨김(작업표시줄에서 사라짐), 꺼짐(기본)=최소화 상주.
+            var closeToTrayCheck = WrapCheck("settings.mini.closeToTray", settings.MiniWindowCloseToTray, new Thickness(0, 0, 0, 10));
+            general.Children.Add(closeToTrayCheck);
+
+            // ---- [번역] 탭 ----
+            translation.Children.Add(Header("settings.deepl.lang.header"));
+            translation.Children.Add(langBox);
+            translation.Children.Add(Header("settings.deepl.key.header"));
+            translation.Children.Add(keyRow);
 
             // 번역 엔진 선택 (레지스트리) + LibreTranslate 엔드포인트(자체호스팅)
             var engineChoices = new List<EngineChoice> { new("none", Loc.T("settings.translation.none")) };
@@ -211,23 +219,36 @@ public sealed class SettingsWindow : Window
             engineBox.SelectionChanged += (_, _) => UpdateEndpointVisibility();
             UpdateEndpointVisibility();
 
-            general.Children.Add(Header("settings.translation.engine.header"));
-            general.Children.Add(engineBox);
-            general.Children.Add(endpointPanel);
+            translation.Children.Add(Header("settings.translation.engine.header"));
+            translation.Children.Add(engineBox);
+            translation.Children.Add(endpointPanel);
 
-            // 번역 표시 정책: 대상 언어 번역만 표시(제공자의 다른 언어 번역 숨김)
-            var onlyTargetTransCheck = WrapCheck("settings.onlyTargetTranslation", settings.ShowOnlyTargetTranslation, new Thickness(0, 8, 0, 0));
-            general.Children.Add(onlyTargetTransCheck);
+            // DeepL 실패 시 LibreTranslate 공개 서버로 자동 전환 (신규, 기본 꺼짐)
+            var fallbackCheck = WrapCheck("settings.translation.fallback", settings.TranslationFallbackToFree, new Thickness(0, 12, 0, 0));
+            var fallbackWarn = new TextBlock
+            {
+                Text = Loc.T("settings.translation.fallback.warn"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(22, 2, 0, 0),
+                Visibility = settings.TranslationFallbackToFree ? Visibility.Visible : Visibility.Collapsed,
+            };
+            fallbackCheck.Checked += (_, _) => fallbackWarn.Visibility = Visibility.Visible;
+            fallbackCheck.Unchecked += (_, _) => fallbackWarn.Visibility = Visibility.Collapsed;
+            translation.Children.Add(fallbackCheck);
+            translation.Children.Add(fallbackWarn);
 
-            // 동작 옵션 토글(일반 탭)
-            var karaokeCheck = WrapCheck("settings.karaoke.check", settings.CharacterKaraoke, new Thickness(0, 14, 0, 0));
+            // 번역 표시 정책: 대상 언어 번역만 표시(제공자의 다른 언어 번역 숨김) + 원문과 같은 번역 숨김
+            var onlyTargetTransCheck = WrapCheck("settings.onlyTargetTranslation", settings.ShowOnlyTargetTranslation, new Thickness(0, 12, 0, 0));
             var hideSameTransCheck = WrapCheck("settings.hideSameTranslation", settings.HideSameTranslation, new Thickness(0, 6, 0, 0));
+            translation.Children.Add(onlyTargetTransCheck);
+            translation.Children.Add(hideSameTransCheck);
+            translation.Children.Add(contribute);
+
+            // 오버레이 동작 토글(오버레이 스타일 탭으로 이관)
+            var karaokeCheck = WrapCheck("settings.karaoke.check", settings.CharacterKaraoke, new Thickness(0, 14, 0, 0));
             var fadeCheck = WrapCheck("settings.fade", settings.FadeAnimation, new Thickness(0, 6, 0, 0));
             var hideOnHoverCheck = WrapCheck("settings.hideOnMouseOver", settings.HideOnMouseOver, new Thickness(0, 6, 0, 0));
-            general.Children.Add(karaokeCheck);
-            general.Children.Add(hideSameTransCheck);
-            general.Children.Add(fadeCheck);
-            general.Children.Add(hideOnHoverCheck);
 
             // 가사 소스 선택 (레지스트리). 공식/비공식 표시 — 비공식은 공개 배포 리스크 안내.
             general.Children.Add(Header("settings.sources.header"));
@@ -305,7 +326,7 @@ public sealed class SettingsWindow : Window
             general.Children.Add(resetIdButton);
 
             // ================= [오버레이 스타일] 탭 =================
-            var appearance = new StackPanel { Margin = new Thickness(16), Width = 410, HorizontalAlignment = HorizontalAlignment.Left };
+            var appearance = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
 
             appearance.Children.Add(new TextBlock
             {
@@ -424,12 +445,20 @@ public sealed class SettingsWindow : Window
             appearance.Children.Add(bgColor.Row);
             appearance.Children.Add(bgOpacityLabel);
             appearance.Children.Add(bgOpacitySlider);
+            appearance.Children.Add(karaokeCheck);
+            appearance.Children.Add(fadeCheck);
+            appearance.Children.Add(hideOnHoverCheck);
+
+            // ================= [정보] 탭 =================
+            var about = BuildAboutTab();
 
             // ================= 탭 컨트롤 =================
             // ScrollViewer 없이 각 탭 내용을 직접 넣고, 창을 SizeToContent로 맞춰 세로 스크롤이 없게 한다.
             var tabs = new TabControl { Margin = new Thickness(8, 8, 8, 0) };
             tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.general"), Content = general });
+            tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.translation"), Content = translation });
             tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.appearance"), Content = appearance });
+            tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.about"), Content = about });
             // 탭 전환 시 새 탭 높이에 맞춰 창을 다시 계산(콤보 등 하위 SelectionChanged 버블은 제외)
             tabs.SelectionChanged += (_, e) =>
             {
@@ -462,7 +491,9 @@ public sealed class SettingsWindow : Window
                 settings.TargetLanguage = string.IsNullOrWhiteSpace(langBox.Text) ? AppSettings.DefaultTargetLanguage() : langBox.Text.Trim().ToUpperInvariant();
                 settings.TranslationEngine = engineBox.SelectedValue as string;
                 settings.LibreTranslateEndpoint = string.IsNullOrWhiteSpace(endpointBox.Text) ? null : endpointBox.Text.Trim();
+                settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;
                 settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
+                settings.MiniWindowCloseToTray = closeToTrayCheck.IsChecked == true;
                 settings.TextColor = NormalizeHex(textColor.Box.Text, settings.TextColor);
                 settings.KaraokeColor = NormalizeHex(karaokeColor.Box.Text, settings.KaraokeColor);
                 settings.TranslationColor = NormalizeHex(translationColor.Box.Text, settings.TranslationColor);
@@ -491,6 +522,88 @@ public sealed class SettingsWindow : Window
         {
             _rebuilding = false;
         }
+    }
+
+    /// <summary>[정보](About) 탭: 앱 이름·버전·출처·라이선스·링크·업데이트 확인.</summary>
+    private StackPanel BuildAboutTab()
+    {
+        var about = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
+
+        var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
+        var versionText = $"{v.Major}.{v.Minor}.{v.Build}";
+
+        about.Children.Add(new TextBlock
+        {
+            Text = Loc.T("about.appName"),
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 16,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        about.Children.Add(new TextBlock
+        {
+            Text = Loc.T("about.version", ("version", versionText)),
+            Opacity = 0.85,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 0),
+        });
+        about.Children.Add(new TextBlock
+        {
+            Text = Loc.T("about.formerly"),
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 1, 0, 0),
+        });
+        about.Children.Add(new TextBlock
+        {
+            Text = Loc.T("about.intro"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 10, 0, 0),
+        });
+
+        // 라이선스 + 원작 출처
+        about.Children.Add(new TextBlock
+        {
+            Text = Loc.T("about.license"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+        about.Children.Add(new TextBlock
+        {
+            Text = Loc.T("about.attribution"),
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 0),
+        });
+
+        // 링크 3개
+        TextBlock LinkRow(string labelKey, string url)
+        {
+            var tb = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) };
+            var hl = new Hyperlink(new Run(Loc.T(labelKey))) { NavigateUri = new Uri(url) };
+            hl.RequestNavigate += OnRequestNavigate;
+            tb.Inlines.Add(hl);
+            return tb;
+        }
+        about.Children.Add(new TextBlock { Height = 6 });
+        about.Children.Add(LinkRow("about.link.github", "https://github.com/countnine/musebase"));
+        about.Children.Add(LinkRow("about.link.home", "https://countnine.github.io/musebase-home/"));
+        about.Children.Add(LinkRow("about.link.license", "https://github.com/countnine/musebase/blob/master/LICENSE"));
+
+        // 업데이트 확인 버튼 — 트레이 로직 재사용(주입된 경우에만 표시)
+        if (_onCheckUpdates is { } check)
+        {
+            var updateButton = new Button
+            {
+                Content = Loc.T("about.checkUpdates"),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 2, 10, 2),
+                Margin = new Thickness(0, 14, 0, 0),
+            };
+            updateButton.Click += (_, _) => check();
+            about.Children.Add(updateButton);
+        }
+
+        return about;
     }
 
     private static void OnRequestNavigate(object sender, RequestNavigateEventArgs e)

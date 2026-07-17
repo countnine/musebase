@@ -35,3 +35,4 @@ Releases/
 publish-test/
 publish-singlefile/
 .wrangler/
+.claude/worktrees/

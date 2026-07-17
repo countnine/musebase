@@ -1,5 +1,5 @@
 # 멀티사이즈 app.ico 생성 (16/24/32/48/64/128/256, PNG 압축 엔트리)
-# 디자인: 녹색 원 + 흰색 "L" (트레이 런타임 아이콘과 동일)
+# 디자인: 녹색 원 + 흰색 "M" (트레이 런타임 아이콘과 동일)
 Add-Type -AssemblyName System.Drawing
 
 $sizes = 16, 24, 32, 48, 64, 128, 256
@@ -22,7 +22,7 @@ foreach ($size in $sizes) {
     $format.Alignment = [System.Drawing.StringAlignment]::Center
     $format.LineAlignment = [System.Drawing.StringAlignment]::Center
     $rect = New-Object System.Drawing.RectangleF(0, ($size * 0.03), $size, $size)
-    $g.DrawString("L", $font, [System.Drawing.Brushes]::White, $rect, $format)
+    $g.DrawString("M", $font, [System.Drawing.Brushes]::White, $rect, $format)
 
     $ms = New-Object System.IO.MemoryStream
     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
