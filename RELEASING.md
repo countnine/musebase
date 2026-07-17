@@ -49,8 +49,9 @@ vpk upload github \
   --repoUrl $REPO \
   --publish \
   --releaseName "Musebase $VERSION" \
-  --tag $VERSION \
+  --tag windows-v$VERSION \
   --token <GITHUB_TOKEN>
+# 태그는 플랫폼 접두 스킴(ADR-0003): windows-vX.Y.Z. 홈페이지 동기화가 접두를 제거해 표기한다.
 ```
 
 `vpk upload github`은 태그 `$VERSION`으로 릴리스를 만들고 `RELEASES`, 델타 `.nupkg`,

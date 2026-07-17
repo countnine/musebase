@@ -1,7 +1,12 @@
 # PROGRESS — Musebase for Windows (구 LyricsX for Windows)
 
-> **상태: v0.9.2 (2026-07-16) + Phase 0 진행 중** — 제품 개명(LyricsX→Musebase, 프로젝트/네임스페이스/데이터 경로 포함) + 멀티플랫폼 거버넌스 셋업 + LICENSE(MPL-2.0)
+> **상태: windows-v0.10.0 (2026-07-17)** — 첫 Musebase 정식 릴리스(packId 클린 브레이크). 개명 + 거버넌스 + MPL-2.0 + 옵트인 텔레메트리 + Browser/Android 스파이크.
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.10.0 추가분 (첫 Musebase 릴리스)
+- **옵트인 텔레메트리(ADR-0004)**: 익명 랜덤 GUID, 2단계 동의(①기본/②품질 — 다이얼로그·설정 토글, 기본 꺼짐), Engine `ITelemetry` 계측(lyrics_search/translation/wrong_lyrics/…), Windows `TelemetryClient`(JSONL 큐→시작 30초+1시간 주기, 틀린가사 즉시 업로드), 백엔드 Cloudflare Workers+D1(`backend/telemetry/`, /stats 공개·/admin 토큰 보호). 공개 문서 `TELEMETRY.md`, 계약 `contracts/telemetry-events.md`.
+- **Phase 1·2 스파이크**: `src/Musebase.Browser`(PlaybackViewState WS 방송+웹 카라오케 렌더러, --demo) · `src/Musebase.Android`(MediaSession 재생감지, 실기기 검증, sln 미등록).
+- 릴리스 태그 스킴 전환: 플랫폼 접두 **`windows-vX.Y.Z`**(ADR-0003).
 
 ## Phase 0 (개명 + 거버넌스, 2026-07-16)
 - **개명 LyricsX→Musebase**: 프로젝트 `Musebase.{Core,Engine,Windows}`(구 App→Windows)·`Musebase.sln`·네임스페이스·AssemblyName(`Musebase.exe`) 일괄. `%LOCALAPPDATA%\LyricsX`→`Musebase` 자동 이전(`MigrateLegacyAppData`), DPAPI entropy는 호환 위해 `"LyricsX.DeepL.v1"` 유지, 시작프로그램 레지스트리 값 `Musebase`(+구 값 정리). Velopack packId `Musebase` = 구 설치본 자동 업데이트 단절(클린 브레이크, RELEASING.md 참고).

@@ -12,7 +12,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <!-- 릴리스 버전: Velopack 패키징(vpk pack packVersion 인자)과 in-app 표시에 사용 -->
-    <Version>0.10.0-beta.2</Version>
+    <Version>0.10.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
