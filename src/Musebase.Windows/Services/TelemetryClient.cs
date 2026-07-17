@@ -15,7 +15,8 @@ namespace Musebase.Windows.Services;
 /// - 옵트인 2단계: ① 기본(<see cref="AppSettings.TelemetryBasicEnabled"/>) /
 ///   ② 품질(<see cref="AppSettings.TelemetryQualityEnabled"/>). 꺼져 있으면 수집 자체를 안 한다.
 /// - 로컬 큐: %LOCALAPPDATA%\Musebase\telemetry-queue.jsonl (1줄=1이벤트, 상한 500건).
-/// - 업로드: 시작 30초 후 + 이후 6시간마다 배치(≤100건) POST. 실패 시 큐 보존 후 재시도.
+/// - 업로드: 시작 30초 후 + 이후 1시간마다 배치(≤100건) POST. 실패 시 큐 보존 후 재시도.
+///   wrong_lyrics(틀린 가사 표시)는 3초 병합 지연 후 즉시 업로드 트리거.
 /// - <see cref="Track"/>은 논블로킹이며 절대 던지지 않는다(수집 실패는 무해).
 /// - 클라이언트 집계: playback_source는 appId별 하루 1회 디바운스, feature_use는 세션 카운터로
 ///   모았다가 업로드 시 집계 이벤트로 변환, app_session은 하루 1회(일일 ping 겸용).
@@ -46,6 +47,7 @@ public sealed class TelemetryClient : ITelemetry, IDisposable
     private readonly ConcurrentQueue<string> _pendingLines = new();
     private readonly ConcurrentDictionary<string, int> _featureCounts = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _uploadGate = new(1, 1); // 주기·즉시 업로드 중복 실행 방지
     private DebounceState? _state; // 지연 로드(파일 IO는 첫 사용 시)
 
     /// <summary>디바운스 상태(%LOCALAPPDATA%\Musebase\telemetry-state.json). 날짜는 로컬 yyyy-MM-dd.</summary>
@@ -111,11 +113,32 @@ public sealed class TelemetryClient : ITelemetry, IDisposable
                 return;
 
             Enqueue(type, props);
+
+            // 틀린 가사 표시는 관리자 페이지에서 바로 보이도록 즉시 업로드(3초 병합 지연)
+            if (type == TelemetryEvents.WrongLyrics)
+                ScheduleImmediateUpload();
         }
         catch
         {
             // 텔레메트리는 앱 동작에 절대 영향을 주지 않는다
         }
+    }
+
+    /// <summary>짧은 병합 지연 후 업로드 1회 트리거(연속 표시를 한 배치로).</summary>
+    private void ScheduleImmediateUpload()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3), _cts.Token).ConfigureAwait(false);
+                await UploadOnceAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // 무시 — 다음 주기 업로드가 커버
+            }
+        });
     }
 
     /// <summary>feature_use 카운트 편의 메서드(기존 핸들러에 한 줄 추가용).</summary>
@@ -204,7 +227,7 @@ public sealed class TelemetryClient : ITelemetry, IDisposable
 
     /// <summary>
     /// 백그라운드 업로더 시작: 초기 지연(기본 30초, 환경변수
-    /// MUSEBASE_TELEMETRY_INITIAL_DELAY_SECONDS로 재정의 가능) 후 1회, 이후 6시간마다.
+    /// MUSEBASE_TELEMETRY_INITIAL_DELAY_SECONDS로 재정의 가능) 후 1회, 이후 1시간마다.
     /// </summary>
     public void StartUploader()
     {
@@ -218,14 +241,16 @@ public sealed class TelemetryClient : ITelemetry, IDisposable
             while (!_cts.IsCancellationRequested)
             {
                 await UploadOnceAsync().ConfigureAwait(false);
-                try { await Task.Delay(TimeSpan.FromHours(6), _cts.Token); } catch { return; }
+                try { await Task.Delay(TimeSpan.FromHours(1), _cts.Token); } catch { return; }
             }
         });
     }
 
-    /// <summary>업로드 1주기: 일일 app_session 발화 → feature_use 집계 반영 → 큐 배치 전송.</summary>
+    /// <summary>업로드 1주기: 일일 app_session 발화 → feature_use 집계 반영 → 큐 배치 전송.
+    /// 이미 실행 중이면 건너뛴다(주기 업로드와 즉시 트리거의 중복 전송 방지).</summary>
     public async Task UploadOnceAsync()
     {
+        if (!await _uploadGate.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
             if (!_settings.TelemetryBasicEnabled && !_settings.TelemetryQualityEnabled) return;
@@ -305,6 +330,10 @@ public sealed class TelemetryClient : ITelemetry, IDisposable
         catch (Exception e)
         {
             _log?.Invoke($"[telemetry] 업로드 오류: {e.GetType().Name} — 큐 보존");
+        }
+        finally
+        {
+            _uploadGate.Release();
         }
     }
 
