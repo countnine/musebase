@@ -38,6 +38,19 @@
   "settings.contribute.tooltip": "Open the translation contribution guide (GitHub)",
   "settings.save": "Save",
 
+  "settings.telemetry.header": "Usage statistics",
+  "settings.telemetry.details": "What is collected (TELEMETRY.md)…",
+  "settings.telemetry.resetId": "Reset anonymous ID",
+  "settings.telemetry.resetId.done": "A new anonymous ID will be used from now on. Previously sent data cannot be linked to it.",
+
+  "telemetry.consent.title": "Musebase — Usage statistics",
+  "telemetry.consent.intro": "Would you like to help improve Musebase by sharing anonymous usage statistics? Nothing is collected unless you opt in. The identifier is a random ID created on this device, and no lyrics text, listening history, or personal data is ever sent.",
+  "telemetry.consent.basic": "Basic statistics — features, performance, environment. No song information.",
+  "telemetry.consent.quality": "Quality reports — includes the song title and artist of tracks whose lyrics were not found or that you marked as wrong lyrics.",
+  "telemetry.consent.details": "Details: everything that is collected (TELEMETRY.md)…",
+  "telemetry.consent.note": "Both options are off by default. You can change them anytime in Settings → General.",
+  "telemetry.consent.ok": "OK",
+
   "tray.tooltip.version": "Musebase v{version}",
   "tray.tooltip.status": "Musebase\n{status}",
   "tray.overlay.show": "Show overlay",

@@ -82,6 +82,20 @@ public sealed class AppSettings
     /// </summary>
     public List<string> EnabledLyricsSources { get; set; } = LyricsSourceRegistry.AllIds.ToList();
 
+    // ---- 사용 통계(텔레메트리, ADR-0004) — 옵트인 2단계, 기본 모두 꺼짐 ----
+
+    /// <summary>최초 실행 동의 다이얼로그를 이미 보여줬는지(최초 1회만 표시).</summary>
+    public bool TelemetryConsentAsked { get; set; }
+
+    /// <summary>① 기본 통계(기능·성능·환경 — 곡 정보 없음). 기본 꺼짐(옵트인).</summary>
+    public bool TelemetryBasicEnabled { get; set; }
+
+    /// <summary>② 품질 리포트(틀린가사/검색실패 곡의 제목·아티스트 포함 — 별도 동의). 기본 꺼짐.</summary>
+    public bool TelemetryQualityEnabled { get; set; }
+
+    /// <summary>익명 클라이언트 ID(로컬 생성 랜덤 GUID). 동의 최초 켜짐 시 생성, 설정에서 재설정 가능.</summary>
+    public string? TelemetryClientId { get; set; }
+
     // ---- 번역 엔진 선택 ----
 
     /// <summary>번역 엔진 id(TranslatorRegistry). 비면 EffectiveTranslationEngine으로 자동 결정.</summary>

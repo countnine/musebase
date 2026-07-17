@@ -260,6 +260,50 @@ public sealed class SettingsWindow : Window
                 Margin = new Thickness(0, 6, 0, 0),
             });
 
+            // 사용 통계(텔레메트리, ADR-0004) — 토글 즉시 반영(저장 버튼과 무관)
+            general.Children.Add(Header("settings.telemetry.header"));
+            var telemetryBasicCheck = WrapCheck("telemetry.consent.basic", settings.TelemetryBasicEnabled, new Thickness(0, 2, 0, 0));
+            var telemetryQualityCheck = WrapCheck("telemetry.consent.quality", settings.TelemetryQualityEnabled, new Thickness(0, 6, 0, 0));
+            void ApplyTelemetryConsent()
+            {
+                if (_rebuilding) return;
+                settings.TelemetryBasicEnabled = telemetryBasicCheck.IsChecked == true;
+                settings.TelemetryQualityEnabled = telemetryQualityCheck.IsChecked == true;
+                if (settings.TelemetryBasicEnabled || settings.TelemetryQualityEnabled)
+                    TelemetryClient.EnsureClientId(settings); // 최초 켜짐 시 익명 GUID 생성(+저장)
+                settings.Save();
+            }
+            telemetryBasicCheck.Checked += (_, _) => ApplyTelemetryConsent();
+            telemetryBasicCheck.Unchecked += (_, _) => ApplyTelemetryConsent();
+            telemetryQualityCheck.Checked += (_, _) => ApplyTelemetryConsent();
+            telemetryQualityCheck.Unchecked += (_, _) => ApplyTelemetryConsent();
+            general.Children.Add(telemetryBasicCheck);
+            general.Children.Add(telemetryQualityCheck);
+
+            var telemetryDoc = new TextBlock { Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
+            var telemetryLink = new Hyperlink(new Run(Loc.T("settings.telemetry.details")))
+            {
+                NavigateUri = new Uri(TelemetryConsentWindow.TelemetryDocUrl),
+            };
+            telemetryLink.RequestNavigate += OnRequestNavigate;
+            telemetryDoc.Inlines.Add(telemetryLink);
+            general.Children.Add(telemetryDoc);
+
+            var resetIdButton = new Button
+            {
+                Content = Loc.T("settings.telemetry.resetId"),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 2, 10, 2),
+                Margin = new Thickness(0, 6, 0, 0),
+            };
+            resetIdButton.Click += (_, _) =>
+            {
+                TelemetryClient.ResetClientId(settings);
+                MessageBox.Show(this, Loc.T("settings.telemetry.resetId.done"),
+                    Loc.T("settings.telemetry.header"), MessageBoxButton.OK, MessageBoxImage.Information);
+            };
+            general.Children.Add(resetIdButton);
+
             // ================= [오버레이 스타일] 탭 =================
             var appearance = new StackPanel { Margin = new Thickness(16), Width = 410, HorizontalAlignment = HorizontalAlignment.Left };
 

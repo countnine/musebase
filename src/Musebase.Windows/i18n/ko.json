@@ -38,6 +38,19 @@
   "settings.contribute.tooltip": "번역 기여 안내 열기 (GitHub)",
   "settings.save": "저장",
 
+  "settings.telemetry.header": "사용 통계",
+  "settings.telemetry.details": "수집 항목 안내 (TELEMETRY.md)…",
+  "settings.telemetry.resetId": "익명 ID 재설정",
+  "settings.telemetry.resetId.done": "이제부터 새 익명 ID를 사용합니다. 이전에 보낸 데이터와는 연결되지 않습니다.",
+
+  "telemetry.consent.title": "Musebase — 사용 통계",
+  "telemetry.consent.intro": "익명 사용 통계를 공유해 Musebase 개선을 도와주시겠어요? 동의한 경우에만 수집합니다. 식별자는 이 기기에서 만든 무작위 ID이며, 가사 본문·재생 이력·개인정보는 절대 보내지 않습니다.",
+  "telemetry.consent.basic": "기본 통계 — 기능·성능·환경 정보. 곡 정보는 포함하지 않습니다.",
+  "telemetry.consent.quality": "품질 리포트 — 가사를 못 찾았거나 '틀린 가사'로 표시한 곡의 제목·아티스트를 포함합니다.",
+  "telemetry.consent.details": "자세히: 수집 항목 전체 (TELEMETRY.md)…",
+  "telemetry.consent.note": "두 항목 모두 기본값은 꺼짐입니다. 설정 → 일반에서 언제든 바꿀 수 있습니다.",
+  "telemetry.consent.ok": "확인",
+
   "tray.tooltip.version": "Musebase v{version}",
   "tray.tooltip.status": "Musebase\n{status}",
   "tray.overlay.show": "오버레이 표시",
