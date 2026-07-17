@@ -60,6 +60,71 @@ async function handleIngest(request, env) {
   return json({ ok: true, stored: rows.length });
 }
 
+// ---- 관리자 조회 페이지 (토큰 보호) -------------------------------------------
+// GET /admin?token=<ADMIN_TOKEN>  — 품질 리포트(틀린가사/검색실패, 빈도순) + 현황 요약 HTML.
+// 토큰은 Worker Secret(ADMIN_TOKEN)으로 관리: `wrangler secret put ADMIN_TOKEN`
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function handleAdmin(url, env) {
+  const token = url.searchParams.get("token") ?? "";
+  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN)
+    return new Response("unauthorized", { status: 401 });
+
+  const [wrong, notFound, summary, versions] = await Promise.all([
+    env.DB.prepare(
+      `SELECT json_extract(props,'$.title') AS title, json_extract(props,'$.artist') AS artist,
+              json_extract(props,'$.source') AS source, COUNT(*) AS cnt,
+              COUNT(DISTINCT client_id) AS clients, MAX(received_at) AS last_seen
+         FROM events WHERE type='wrong_lyrics'
+        GROUP BY title, artist, source ORDER BY cnt DESC, last_seen DESC LIMIT 200`).all(),
+    env.DB.prepare(
+      `SELECT json_extract(props,'$.title') AS title, json_extract(props,'$.artist') AS artist,
+              COUNT(*) AS cnt, COUNT(DISTINCT client_id) AS clients, MAX(received_at) AS last_seen
+         FROM events WHERE type='lyrics_not_found'
+        GROUP BY title, artist ORDER BY cnt DESC, last_seen DESC LIMIT 200`).all(),
+    env.DB.prepare(
+      `SELECT type, COUNT(*) AS cnt, COUNT(DISTINCT client_id) AS clients, MAX(received_at) AS last_seen
+         FROM events GROUP BY type ORDER BY cnt DESC`).all(),
+    env.DB.prepare(
+      `SELECT platform, app_version, COUNT(DISTINCT client_id) AS clients, MAX(received_at) AS last_seen
+         FROM events GROUP BY platform, app_version ORDER BY last_seen DESC LIMIT 50`).all(),
+  ]);
+
+  const rows = (rs, cols) => rs.results.length
+    ? rs.results.map(r => `<tr>${cols.map(c => `<td>${esc(r[c])}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${cols.length}" class="empty">아직 데이터 없음</td></tr>`;
+
+  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>Musebase 텔레메트리 관리자</title><style>
+  body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:64rem;padding:0 1rem;background:#111;color:#eee}
+  h1{font-size:1.3rem} h2{font-size:1.05rem;margin-top:2rem;border-bottom:1px solid #333;padding-bottom:.3rem}
+  table{border-collapse:collapse;width:100%;font-size:.85rem} th,td{border:1px solid #333;padding:.35rem .5rem;text-align:left}
+  th{background:#1c1c1c} tr:nth-child(even){background:#181818} .empty{color:#777;text-align:center}
+  .meta{color:#888;font-size:.8rem}
+</style></head><body>
+<h1>Musebase 텔레메트리 관리자</h1>
+<p class="meta">생성 시각(UTC): ${new Date().toISOString()} · 원본 보존 90일 · <a href="/stats" style="color:#7cc4ff">공개 집계</a></p>
+<h2>틀린 가사 리포트 (빈도순, 상위 200)</h2>
+<table><tr><th>곡명</th><th>아티스트</th><th>가사 소스</th><th>건수</th><th>사용자수</th><th>마지막</th></tr>
+${rows(wrong, ["title", "artist", "source", "cnt", "clients", "last_seen"])}</table>
+<h2>가사 검색 실패 곡 (빈도순, 상위 200)</h2>
+<table><tr><th>곡명</th><th>아티스트</th><th>건수</th><th>사용자수</th><th>마지막</th></tr>
+${rows(notFound, ["title", "artist", "cnt", "clients", "last_seen"])}</table>
+<h2>이벤트 전체 현황</h2>
+<table><tr><th>종류</th><th>건수</th><th>고유 사용자</th><th>마지막</th></tr>
+${rows(summary, ["type", "cnt", "clients", "last_seen"])}</table>
+<h2>플랫폼·버전 분포</h2>
+<table><tr><th>플랫폼</th><th>앱 버전</th><th>고유 사용자</th><th>마지막</th></tr>
+${rows(versions, ["platform", "app_version", "clients", "last_seen"])}</table>
+</body></html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
 async function handleStats(env) {
   const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const { results } = await env.DB.prepare(
@@ -75,6 +140,7 @@ export default {
     if (url.pathname === "/healthz") return new Response("ok");
     if (url.pathname === "/ingest" && request.method === "POST") return handleIngest(request, env);
     if (url.pathname === "/stats" && request.method === "GET") return handleStats(env);
+    if (url.pathname === "/admin" && request.method === "GET") return handleAdmin(url, env);
     return json({ error: "not found" }, 404);
   },
 };
