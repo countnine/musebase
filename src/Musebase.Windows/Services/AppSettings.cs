@@ -81,6 +81,17 @@ public sealed class AppSettings
     /// <summary>자동 모드에서 브라우저(Firefox/Chrome 등)를 음악 소스로 포함할지. 기본 제외(영상 오인식 방지).</summary>
     public bool IncludeBrowsers { get; set; }
 
+    // ---- 브라우저 디스플레이 (태블릿/TV 원격 표시, Musebase.Browser 인프로세스 호스팅) ----
+
+    /// <summary>브라우저 디스플레이 서버(Kestrel)를 켤지. 켜면 앱 시작 시 자동 기동. 기본 꺼짐.</summary>
+    public bool BrowserDisplayEnabled { get; set; }
+
+    /// <summary>브라우저 디스플레이 리슨 포트(기본 5123).</summary>
+    public int BrowserDisplayPort { get; set; } = 5123;
+
+    /// <summary>true면 0.0.0.0에 바인딩해 같은 LAN의 다른 기기(태블릿/TV)에서 접속 가능. 기본 localhost 전용.</summary>
+    public bool BrowserDisplayLan { get; set; }
+
     // ---- 가사 소스 선택 (레지스트리 기반, [[0002-pluggable-sources-and-translation]]) ----
 
     /// <summary>
