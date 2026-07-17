@@ -1,17 +1,22 @@
 using Android.App;
 using Android.Content;
+using Android.Graphics;
 using Android.OS;
 using Android.Views;
 using Android.Widget;
-using Musebase.Android.Services;
+using Musebase.Engine;
 
 namespace Musebase.Android;
 
 /// <summary>
-/// Phase 2 스파이크 UI — 가사 오버레이 없음. 하는 일:
+/// Phase 2 UI — 앱 내 동기 가사 표시(오버레이는 다음 단계). 하는 일:
 /// 1) 알림 접근 권한 상태 표시 + 시스템 설정으로 이동하는 버튼
-/// 2) <see cref="AndroidNowPlayingSource"/>가 감지한 곡명/아티스트/위치/소스앱을 1초마다 갱신 표시
-/// 레이아웃 리소스 없이 코드로 UI를 만들어 스파이크 표면적을 최소화한다.
+/// 2) 가사 영역: 현재 줄(크게) + 번역(아래) + 검색 상태 문구
+///    — <see cref="MusebaseApp"/>이 조립한 <see cref="LyricsCoordinator"/>의
+///    StateChanged/StatusChanged 구독으로 갱신(이벤트는 메인 스레드로 정렬돼 있다)
+/// 3) 감지된 곡명/아티스트/위치/소스앱을 1초마다 갱신 표시(스파이크 유지)
+/// 엔진·소스는 Application 소유이므로 화면 회전에도 유지되고, 이 Activity는 구독만 붙였다 뗀다.
+/// 레이아웃 리소스 없이 코드로 UI를 만들어 표면적을 최소화한다.
 /// </summary>
 [Activity(
     Label = "Musebase",
@@ -22,11 +27,17 @@ public sealed class MainActivity : Activity
 {
     private const int UiRefreshMs = 1000;
 
-    private AndroidNowPlayingSource? _source;
     private readonly Handler _handler = new(Looper.MainLooper!);
     private TextView? _permissionText;
+    private TextView? _lyricsStatusText;
+    private TextView? _lineText;
+    private TextView? _translationText;
     private TextView? _statusText;
     private bool _uiLoopRunning;
+
+    // 구독 해제를 위해 델리게이트 보관
+    private Action<PlaybackViewState>? _onStateChanged;
+    private Action<LyricsStatus>? _onStatusChanged;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -39,7 +50,7 @@ public sealed class MainActivity : Activity
         };
         root.SetPadding(48, 96, 48, 48);
 
-        var title = new TextView(this) { Text = "Musebase — MediaSession 스파이크" };
+        var title = new TextView(this) { Text = "Musebase" };
         title.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 20f);
         root.AddView(title);
 
@@ -52,19 +63,45 @@ public sealed class MainActivity : Activity
             StartActivity(new Intent(global::Android.Provider.Settings.ActionNotificationListenerSettings));
         root.AddView(permissionButton);
 
+        // ---- 가사 영역 ----
+        _lyricsStatusText = new TextView(this) { Text = "가사 대기 중" };
+        _lyricsStatusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 13f);
+        _lyricsStatusText.SetPadding(0, 48, 0, 0);
+        root.AddView(_lyricsStatusText);
+
+        _lineText = new TextView(this) { Text = "♪" };
+        _lineText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 26f);
+        _lineText.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+        _lineText.SetPadding(0, 16, 0, 0);
+        root.AddView(_lineText);
+
+        _translationText = new TextView(this) { Visibility = ViewStates.Gone };
+        _translationText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 17f);
+        _translationText.SetPadding(0, 8, 0, 0);
+        root.AddView(_translationText);
+
+        // ---- 재생 감지 정보(스파이크 유지) ----
         _statusText = new TextView(this) { Text = "감지 대기 중…" };
-        _statusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 16f);
-        _statusText.SetPadding(0, 48, 0, 0);
+        _statusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 14f);
+        _statusText.SetPadding(0, 64, 0, 0);
         root.AddView(_statusText);
 
-        SetContentView(root, new ViewGroup.LayoutParams(
+        var scroll = new ScrollView(this) { FillViewport = true };
+        scroll.AddView(root, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        SetContentView(scroll, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
-        // ---- 감지 소스 ----
-        _source = new AndroidNowPlayingSource(this);
-        _source.TrackChanged += t =>
-            global::Android.Util.Log.Info("Musebase", $"track changed: {t?.ToString() ?? "(none)"}");
-        _source.Start(); // 권한이 없어도 폴링하며 대기 — 권한이 켜지면 즉시 감지 시작
+        // ---- 엔진 구독 (조립은 MusebaseApp이 이미 완료) ----
+        if (MusebaseApp.Instance is { } app)
+        {
+            _onStateChanged = RenderLine;
+            _onStatusChanged = s => RenderLyricsStatus(s);
+            app.Coordinator.StateChanged += _onStateChanged;
+            app.Coordinator.StatusChanged += _onStatusChanged;
+            RenderLine(app.Coordinator.CurrentState); // 초기 스냅샷 반영
+            RenderLyricsStatus(app.LastStatus);
+        }
     }
 
     protected override void OnResume()
@@ -88,9 +125,45 @@ public sealed class MainActivity : Activity
         _handler.PostDelayed(UiTick, UiRefreshMs);
     }
 
+    /// <summary>현재 가사 줄 + 번역 갱신(StateChanged — 라인/재생상태 변화 시 발화).</summary>
+    private void RenderLine(PlaybackViewState state)
+    {
+        if (_lineText is null || _translationText is null) return;
+
+        _lineText.Text = string.IsNullOrEmpty(state.LineContent) ? "♪" : state.LineContent;
+        if (string.IsNullOrEmpty(state.LineTranslation))
+        {
+            _translationText.Visibility = ViewStates.Gone;
+        }
+        else
+        {
+            _translationText.Text = state.LineTranslation;
+            _translationText.Visibility = ViewStates.Visible;
+        }
+    }
+
+    /// <summary>가사 검색 상태 문구(엔진의 구조화 상태 → 간단 한국어. i18n은 다음 단계).</summary>
+    private void RenderLyricsStatus(LyricsStatus s)
+    {
+        if (_lyricsStatusText is null) return;
+        _lyricsStatusText.Text = s.Kind switch
+        {
+            LyricsStatusKind.NoTrack => "재생 중인 곡 없음",
+            LyricsStatusKind.HiddenByUser => "이 곡은 틀린 가사로 표시되어 숨김",
+            LyricsStatusKind.Cache => $"가사: 캐시 · {s.Service}",
+            LyricsStatusKind.Searching => "가사 검색 중…",
+            LyricsStatusKind.Found => $"가사: {s.Service} (품질 {s.Quality ?? 0:0.00})",
+            LyricsStatusKind.NotFound => "가사를 찾지 못했습니다",
+            LyricsStatusKind.Wrong => "틀린 가사로 표시됨",
+            LyricsStatusKind.Manual => $"가사: 수동 선택 · {s.Service}",
+            LyricsStatusKind.Edited => "가사: 사용자 편집",
+            _ => "",
+        };
+    }
+
     private void RenderStatus()
     {
-        var source = _source;
+        var source = MusebaseApp.Instance?.Source;
         if (source is null || _permissionText is null || _statusText is null) return;
 
         var granted = source.HasNotificationAccess;
@@ -127,9 +200,13 @@ public sealed class MainActivity : Activity
     protected override void OnDestroy()
     {
         _handler.RemoveCallbacksAndMessages(null);
-        _source?.Stop();
-        _source?.Dispose();
-        _source = null;
+        if (MusebaseApp.Instance is { } app)
+        {
+            if (_onStateChanged is not null) app.Coordinator.StateChanged -= _onStateChanged;
+            if (_onStatusChanged is not null) app.Coordinator.StatusChanged -= _onStatusChanged;
+        }
+        _onStateChanged = null;
+        _onStatusChanged = null;
         base.OnDestroy();
     }
 }
