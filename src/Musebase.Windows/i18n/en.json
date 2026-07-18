@@ -145,6 +145,13 @@
   "translate.fail.network": "Could not reach the translation service. Check your connection.",
   "translate.fail.other": "Translation failed. See the log for details.",
 
+  "translation.status.suffix": " · Translation: {status}",
+  "translation.status.translating": "translating",
+  "translation.status.live": "live",
+  "translation.status.cache": "cached",
+  "translation.status.quota": "quota exceeded",
+  "translation.status.failed": "failed",
+
   "search.title": "Search lyrics",
   "search.button": "Search",
   "search.label.title": "Title:",

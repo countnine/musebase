@@ -111,6 +111,25 @@ public sealed class LyricsCoordinator : IDisposable
         StatusChanged?.Invoke(status);
     }
 
+    /// <summary>대상 언어 번역의 표시 상태(정상/캐시/한도초과 등). UI가 소스 옆에 표기.</summary>
+    public TranslationDisplayStatus CurrentTranslationStatus { get; private set; } = TranslationDisplayStatus.None;
+
+    /// <summary>번역 표시 상태 변경 알림.</summary>
+    public event Action<TranslationDisplayStatus>? TranslationStatusChanged;
+
+    // 이번 번역 실행에서 마지막으로 보고된 실패(팩토리가 콜백으로 주입). 한도초과 판정용.
+    private TranslatorFailure? _lastTranslationFailure;
+
+    /// <summary>팩토리가 번역기 실패 콜백을 이리로 라우팅한다(한도초과 등 상태 판정용). App 콜백과 별개.</summary>
+    internal void RecordTranslationFailure(TranslatorFailure failure) => _lastTranslationFailure = failure;
+
+    private void SetTranslationStatus(TranslationDisplayStatus status)
+    {
+        if (CurrentTranslationStatus == status) return;
+        CurrentTranslationStatus = status;
+        TranslationStatusChanged?.Invoke(status);
+    }
+
     /// <summary>"틀린 가사"로 표시된 트랙 키 집합(검색·표시 억제). 소비자가 설정과 동기화.</summary>
     public HashSet<string> SuppressedTrackKeys { get; } = new();
 
@@ -152,6 +171,7 @@ public sealed class LyricsCoordinator : IDisposable
         _currentLine = null;
         _currentLineStartedAt = null;
         _translationReported = false; // translation 이벤트는 곡당 1회
+        SetTranslationStatus(TranslationDisplayStatus.None); // 새 트랙 — 아직 번역 전
         CurrentLineChanged?.Invoke(null);
         EmitState(); // 새 트랙(제목) 반영, 라인은 아직 없음
 
@@ -352,14 +372,28 @@ public sealed class LyricsCoordinator : IDisposable
     private async Task TranslateAsync(Lyrics lyrics, CancellationToken ct)
     {
         // 대상=중국어면 제공자 번역(중국어)을 그대로 쓰므로 DeepL을 거치지 않는다.
-        if (TargetIsChinese) return;
-        if (Translation is not { IsEnabled: true } service) return;
+        if (TargetIsChinese) { SetTranslationStatus(TranslationDisplayStatus.None); return; }
+        if (Translation is not { IsEnabled: true } service) { SetTranslationStatus(TranslationDisplayStatus.None); return; }
+        _lastTranslationFailure = null;
+        SetTranslationStatus(TranslationDisplayStatus.Translating);
         try
         {
             var stats = new TranslationRunStats();
             var changed = await service.EnsureTranslatedAsync(lyrics, TargetLanguage, ct, stats);
             if (changed > 0 && ReferenceEquals(CurrentLyrics, lyrics))
                 _lastLineIndex = int.MinValue; // 번역 반영 위해 현재 라인 재발행
+
+            // 번역 표시 상태 판정: API로 채워야 했는데 실패로 못 채운 라인이 남으면 실패(한도초과 등),
+            // 이번에 API로 채웠으면 정상(Live), 그 외(전부 캐시/이미 번역됨)는 캐시.
+            var apiFilled = changed - stats.CacheHits;          // 이번에 API로 채운 라인 수
+            var apiNeeded = stats.LinesNeeded - stats.CacheHits; // API로 채워야 했던 라인 수
+            if (_lastTranslationFailure is { } f && apiFilled < apiNeeded)
+                SetTranslationStatus(f.Kind is TranslatorFailureKind.Quota or TranslatorFailureKind.RateLimit
+                    ? TranslationDisplayStatus.Quota : TranslationDisplayStatus.Failed);
+            else if (apiFilled > 0)
+                SetTranslationStatus(TranslationDisplayStatus.Live);
+            else
+                SetTranslationStatus(TranslationDisplayStatus.Cache); // 필요 없음(이미 번역됨) 또는 전부 캐시
 
             // translation: 번역이 실제로 필요했던 첫 완료 시점에 곡당 1회
             if (!_translationReported && stats.LinesNeeded > 0)
