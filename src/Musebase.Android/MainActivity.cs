@@ -80,6 +80,11 @@ public sealed class MainActivity : Activity
         _overlayToggleButton.Click += (_, _) => ToggleOverlay();
         root.AddView(_overlayToggleButton);
 
+        // ---- 번역 설정(엔진/DeepL 키/대상 언어) ----
+        var settingsButton = new Button(this) { Text = "번역 설정" };
+        settingsButton.Click += (_, _) => StartActivity(new Intent(this, typeof(SettingsActivity)));
+        root.AddView(settingsButton);
+
         // ---- 가사 영역 ----
         _lyricsStatusText = new TextView(this) { Text = "가사 대기 중" };
         _lyricsStatusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 13f);
