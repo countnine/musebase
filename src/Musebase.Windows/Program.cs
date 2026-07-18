@@ -649,20 +649,45 @@ internal static class Program
                 _ => "",
             };
 
-            coordinator.StatusChanged += status =>
+            // 번역 표시 상태(정상/캐시/한도초과 등)를 소스·품질 텍스트 옆에 붙일 접미사.
+            static string TranslationSuffix(TranslationDisplayStatus s)
             {
-                var text = LocalizeStatus(status);
+                var key = s switch
+                {
+                    TranslationDisplayStatus.Translating => "translation.status.translating",
+                    TranslationDisplayStatus.Live => "translation.status.live",
+                    TranslationDisplayStatus.Cache => "translation.status.cache",
+                    TranslationDisplayStatus.Quota => "translation.status.quota",
+                    TranslationDisplayStatus.Failed => "translation.status.failed",
+                    _ => null, // None → 표기 안 함
+                };
+                return key is null ? "" : Loc.T("translation.status.suffix", ("status", Loc.T(key)));
+            }
+
+            // 가사 상태 + 번역 상태를 합쳐 트레이/미니창에 표시(둘 중 하나만 바뀌어도 재렌더).
+            void RenderStatus()
+            {
+                var text = (coordinator.CurrentStatus is { } cs ? LocalizeStatus(cs) : "")
+                    + TranslationSuffix(coordinator.CurrentTranslationStatus);
                 trackItem.Header = text;
                 if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
+                miniWindow?.SetStatus(text);
+            }
+
+            coordinator.StatusChanged += status =>
+            {
+                RenderStatus();
                 if (miniWindow is { } mw)
                 {
-                    mw.SetStatus(text);
                     mw.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
                     mw.RefreshLyricsFeatures();
                     mw.RefreshPlayback();
                 }
-                Log.Write($"[status] {text}");
+                Log.Write($"[status] {LocalizeStatus(status)}");
             };
+
+            // 번역 상태만 바뀌어도(예: 검색 후 번역 완료·한도초과) 소스 옆 표기를 갱신.
+            coordinator.TranslationStatusChanged += _ => app.Dispatcher.BeginInvoke(RenderStatus);
             coordinator.CurrentLineChanged += line =>
             {
                 overlay.SetLine(line);

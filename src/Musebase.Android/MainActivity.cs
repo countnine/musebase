@@ -29,6 +29,8 @@ public sealed class MainActivity : Activity
 
     private readonly Handler _handler = new(Looper.MainLooper!);
     private TextView? _permissionText;
+    private TextView? _overlayPermissionText;
+    private Button? _overlayToggleButton;
     private TextView? _lyricsStatusText;
     private TextView? _lineText;
     private TextView? _translationText;
@@ -38,6 +40,8 @@ public sealed class MainActivity : Activity
     // 구독 해제를 위해 델리게이트 보관
     private Action<PlaybackViewState>? _onStateChanged;
     private Action<LyricsStatus>? _onStatusChanged;
+    private Action<TranslationDisplayStatus>? _onTranslationStatusChanged;
+    private LyricsStatus _lastLyricsStatus = new(LyricsStatusKind.NoTrack); // 번역상태만 바뀔 때 재렌더용
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -62,6 +66,24 @@ public sealed class MainActivity : Activity
         permissionButton.Click += (_, _) =>
             StartActivity(new Intent(global::Android.Provider.Settings.ActionNotificationListenerSettings));
         root.AddView(permissionButton);
+
+        // ---- 오버레이(다른 앱 위 표시) ----
+        _overlayPermissionText = new TextView(this);
+        _overlayPermissionText.SetPadding(0, 32, 0, 0);
+        root.AddView(_overlayPermissionText);
+
+        var overlayPermissionButton = new Button(this) { Text = "오버레이 권한 허용" };
+        overlayPermissionButton.Click += (_, _) => RequestOverlayPermission();
+        root.AddView(overlayPermissionButton);
+
+        _overlayToggleButton = new Button(this) { Text = "가사 오버레이 켜기" };
+        _overlayToggleButton.Click += (_, _) => ToggleOverlay();
+        root.AddView(_overlayToggleButton);
+
+        // ---- 번역 설정(엔진/DeepL 키/대상 언어) ----
+        var settingsButton = new Button(this) { Text = "번역 설정" };
+        settingsButton.Click += (_, _) => StartActivity(new Intent(this, typeof(SettingsActivity)));
+        root.AddView(settingsButton);
 
         // ---- 가사 영역 ----
         _lyricsStatusText = new TextView(this) { Text = "가사 대기 중" };
@@ -96,11 +118,14 @@ public sealed class MainActivity : Activity
         if (MusebaseApp.Instance is { } app)
         {
             _onStateChanged = RenderLine;
-            _onStatusChanged = s => RenderLyricsStatus(s);
+            _onStatusChanged = s => { _lastLyricsStatus = s; RenderLyricsStatus(); };
+            _onTranslationStatusChanged = _ => RenderLyricsStatus(); // 번역 상태만 바뀌어도 소스 옆 표기 갱신
             app.Coordinator.StateChanged += _onStateChanged;
             app.Coordinator.StatusChanged += _onStatusChanged;
+            app.Coordinator.TranslationStatusChanged += _onTranslationStatusChanged;
             RenderLine(app.Coordinator.CurrentState); // 초기 스냅샷 반영
-            RenderLyricsStatus(app.LastStatus);
+            _lastLyricsStatus = app.LastStatus;
+            RenderLyricsStatus();
         }
     }
 
@@ -143,10 +168,11 @@ public sealed class MainActivity : Activity
     }
 
     /// <summary>가사 검색 상태 문구(엔진의 구조화 상태 → 간단 한국어. i18n은 다음 단계).</summary>
-    private void RenderLyricsStatus(LyricsStatus s)
+    private void RenderLyricsStatus()
     {
         if (_lyricsStatusText is null) return;
-        _lyricsStatusText.Text = s.Kind switch
+        var s = _lastLyricsStatus;
+        var baseText = s.Kind switch
         {
             LyricsStatusKind.NoTrack => "재생 중인 곡 없음",
             LyricsStatusKind.HiddenByUser => "이 곡은 틀린 가사로 표시되어 숨김",
@@ -159,10 +185,67 @@ public sealed class MainActivity : Activity
             LyricsStatusKind.Edited => "가사: 사용자 편집",
             _ => "",
         };
+        var suffix = (MusebaseApp.Instance?.Coordinator.CurrentTranslationStatus ?? TranslationDisplayStatus.None) switch
+        {
+            TranslationDisplayStatus.Translating => " · 번역: 번역 중",
+            TranslationDisplayStatus.Live => " · 번역: 정상 번역",
+            TranslationDisplayStatus.Cache => " · 번역: 캐시 이용",
+            TranslationDisplayStatus.Quota => " · 번역: 한도 초과",
+            TranslationDisplayStatus.Failed => " · 번역: 실패",
+            _ => "",
+        };
+        _lyricsStatusText.Text = baseText + suffix;
+    }
+
+    /// <summary>오버레이 그리기 권한 요청(시스템 설정의 "다른 앱 위에 표시" 화면으로 이동).</summary>
+    private void RequestOverlayPermission()
+    {
+        if (global::Android.Provider.Settings.CanDrawOverlays(this)) return;
+        StartActivity(new Intent(
+            global::Android.Provider.Settings.ActionManageOverlayPermission,
+            global::Android.Net.Uri.Parse("package:" + PackageName)));
+    }
+
+    /// <summary>오버레이 서비스 시작/중지 토글. 권한 없으면 권한 화면으로 유도.</summary>
+    private void ToggleOverlay()
+    {
+        if (Services.OverlayService.IsRunning)
+        {
+            StopService(new Intent(this, typeof(Services.OverlayService)));
+        }
+        else
+        {
+            if (!global::Android.Provider.Settings.CanDrawOverlays(this))
+            {
+                Toast.MakeText(this, "먼저 '오버레이 권한 허용'을 눌러 주세요.", ToastLength.Long)?.Show();
+                RequestOverlayPermission();
+                return;
+            }
+            var intent = new Intent(this, typeof(Services.OverlayService));
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(intent);
+            else StartService(intent);
+        }
+        UpdateOverlayControls();
+    }
+
+    /// <summary>오버레이 권한 상태 문구 + 토글 버튼 라벨을 현재 상태로 갱신.</summary>
+    private void UpdateOverlayControls()
+    {
+        if (_overlayPermissionText is not null)
+        {
+            _overlayPermissionText.Text = global::Android.Provider.Settings.CanDrawOverlays(this)
+                ? "다른 앱 위 표시: 허용됨 ✓"
+                : "다른 앱 위 표시: 미허용 — '오버레이 권한 허용'을 눌러 설정에서 켜 주세요.";
+        }
+        if (_overlayToggleButton is not null)
+            _overlayToggleButton.Text = Services.OverlayService.IsRunning
+                ? "가사 오버레이 끄기" : "가사 오버레이 켜기";
     }
 
     private void RenderStatus()
     {
+        UpdateOverlayControls();
+
         var source = MusebaseApp.Instance?.Source;
         if (source is null || _permissionText is null || _statusText is null) return;
 
@@ -204,9 +287,11 @@ public sealed class MainActivity : Activity
         {
             if (_onStateChanged is not null) app.Coordinator.StateChanged -= _onStateChanged;
             if (_onStatusChanged is not null) app.Coordinator.StatusChanged -= _onStatusChanged;
+            if (_onTranslationStatusChanged is not null) app.Coordinator.TranslationStatusChanged -= _onTranslationStatusChanged;
         }
         _onStateChanged = null;
         _onStatusChanged = null;
+        _onTranslationStatusChanged = null;
         base.OnDestroy();
     }
 }

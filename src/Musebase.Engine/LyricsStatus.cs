@@ -23,3 +23,17 @@ public sealed record LyricsStatus(
     string? Track = null,
     string? Service = null,
     double? Quality = null);
+
+/// <summary>
+/// 대상 언어 번역의 표시 상태(가사 소스/품질 옆에 표기). 현지화는 소비자 UI가 담당.
+/// UI는 예: "가사: QQMusic (품질 1.04) · 번역: 한도초과"처럼 소스 텍스트 옆에 붙인다.
+/// </summary>
+public enum TranslationDisplayStatus
+{
+    None,        // 번역 엔진 꺼짐/불필요(대상=중국어 등) — 표기 안 함
+    Translating, // 번역 진행 중
+    Live,        // 이번에 번역 API로 채움(정상 번역)
+    Cache,       // 캐시에서 채움(오프라인/재재생)
+    Quota,       // 한도 초과·요청 제한으로 실패
+    Failed,      // 그 외 실패(인증/서버/네트워크)
+}

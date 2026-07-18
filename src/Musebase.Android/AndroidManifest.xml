@@ -9,10 +9,19 @@
     (.NET for Android 관례 — 수동 선언과 특성 선언을 중복하면 병합 충돌이 난다.)
   - 알림 접근(notification access)은 설치형 권한이 아니라 사용자가 시스템 설정에서
     직접 켜는 특수 권한이므로 <uses-permission>이 필요 없다.
+  - 오버레이 서비스(Services/OverlayService.cs)의 <service> 선언(foregroundServiceType=specialUse
+    포함)도 [Service] 특성에서 생성·병합된다. 여기엔 그 서비스가 요구하는 권한만 선언한다.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- 가사 검색·번역 API 호출용(Release 빌드에는 자동 추가되지 않으므로 명시). -->
   <uses-permission android:name="android.permission.INTERNET" />
+  <!-- 다른 앱 위에 가사 오버레이를 그리기 위한 특수 권한(사용자가 설정에서 켠다). -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+  <!-- 오버레이를 유지하는 포그라운드 서비스(Android 8+). specialUse 타입 → 전용 권한 필요(Android 14+). -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <!-- 포그라운드 알림 표시(Android 13+). FGS 알림은 미허용이어도 표시되지만 명시해 둔다. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <!-- android:name(커스텀 Application)은 MusebaseApp.cs의 [Application] 특성에서 병합된다. -->
   <application
       android:label="Musebase"

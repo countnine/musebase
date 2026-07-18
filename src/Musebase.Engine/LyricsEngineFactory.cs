@@ -62,10 +62,11 @@ public static class LyricsEngineFactory
         ITranslationCache translationCache,
         Action<string>? log = null,
         ITelemetry? telemetry = null,
-        Action<TranslatorFailure>? onTranslationFailure = null) =>
-        new(source, dispatcher, new LyricsSearchService(LyricsSourceRegistry.Build(config.EnabledLyricsSources)))
+        Action<TranslatorFailure>? onTranslationFailure = null)
+    {
+        var coordinator = new LyricsCoordinator(
+            source, dispatcher, new LyricsSearchService(LyricsSourceRegistry.Build(config.EnabledLyricsSources)))
         {
-            Translation = BuildTranslation(config, translationCache, onTranslationFailure),
             Cache = new LyricsCacheStore(config.CacheDbPath),
             TargetLanguage = config.TargetLanguage,
             ShowOnlyTargetTranslation = config.ShowOnlyTargetTranslation,
@@ -73,4 +74,28 @@ public static class LyricsEngineFactory
             Log = log,
             Telemetry = telemetry ?? NoopTelemetry.Instance,
         };
+        ApplyTranslation(coordinator, config, translationCache, onTranslationFailure);
+        return coordinator;
+    }
+
+    /// <summary>
+    /// 코디네이터의 번역 구성을 (재)적용한다 — 엔진/키/대상 언어 변경 시 호출(설정 저장 등).
+    /// 번역기 실패를 코디네이터(번역 표시 상태)와 App(로깅·힌트) 양쪽으로 라우팅하고,
+    /// 현재 라인을 즉시 재발행해 새 번역/상태가 바로 반영되게 한다.
+    /// </summary>
+    public static void ApplyTranslation(
+        LyricsCoordinator coordinator,
+        EngineConfig config,
+        ITranslationCache translationCache,
+        Action<TranslatorFailure>? onTranslationFailure = null)
+    {
+        coordinator.Translation = BuildTranslation(config, translationCache, f =>
+        {
+            coordinator.RecordTranslationFailure(f);
+            onTranslationFailure?.Invoke(f);
+        });
+        coordinator.TargetLanguage = config.TargetLanguage;
+        coordinator.ShowOnlyTargetTranslation = config.ShowOnlyTargetTranslation;
+        coordinator.RefreshCurrentLine();
+    }
 }

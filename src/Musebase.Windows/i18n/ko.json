@@ -145,6 +145,13 @@
   "translate.fail.network": "번역 서비스에 연결할 수 없습니다. 네트워크를 확인하세요.",
   "translate.fail.other": "번역에 실패했습니다. 자세한 내용은 로그를 확인하세요.",
 
+  "translation.status.suffix": " · 번역: {status}",
+  "translation.status.translating": "번역 중",
+  "translation.status.live": "정상 번역",
+  "translation.status.cache": "캐시 이용",
+  "translation.status.quota": "한도 초과",
+  "translation.status.failed": "실패",
+
   "search.title": "가사 검색",
   "search.button": "검색",
   "search.label.title": "제목:",
