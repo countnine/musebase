@@ -15,7 +15,8 @@ namespace Musebase.Android;
 ///
 /// 구성(개인용 프로파일):
 /// - 가사 소스: <see cref="LyricsSourceRegistry.AllIds"/> 전부 (공개 배포 시 OfficialIds로 축소 — ADR-0002)
-/// - 번역 엔진: libretranslate (무키·무료 — DeepL 키 입력 UI는 다음 단계)
+/// - 번역 엔진: MyMemory (무키·무료 기본 — LibreTranslate 공개 인스턴스가 API 키 필수로 바뀌어
+///   무키로 동작하지 않으므로 제외. DeepL 키 입력 UI는 다음 단계)
 /// - 대상 언어: 기기 로케일 → DeepL target_lang 코드(Windows AppSettings.DefaultTargetLanguage와 동일 규칙)
 /// - 캐시: FilesDir/translations.db 단일 SQLite 파일(라인 번역 캐시 + 곡 단위 가사 캐시)
 /// - 텔레메트리: 미연결(팩토리 기본 NoopTelemetry — 수집하지 않음, ADR-0004)
@@ -47,8 +48,8 @@ public sealed class MusebaseApp : Application
         var dbPath = Path.Combine(FilesDir!.AbsolutePath, "translations.db");
         var config = new EngineConfig(
             EnabledLyricsSources: LyricsSourceRegistry.AllIds,
-            TranslationEngineId: "libretranslate",
-            TranslatorOptions: new TranslatorOptions(), // 무키 — 기본 엔드포인트 사용
+            TranslationEngineId: TranslatorRegistry.DefaultFreeEngine, // mymemory — 무키 무료 기본
+            TranslatorOptions: new TranslatorOptions(), // 무키
             TargetLanguage: DefaultTargetLanguage(),
             ShowOnlyTargetTranslation: true,
             ManualOffsetSeconds: 0,
