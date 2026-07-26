@@ -129,9 +129,14 @@ public sealed class SettingsWindow : Window
             link.RequestNavigate += OnRequestNavigate;
             contribute.Inlines.Add(link);
 
-            // API 키: 기본은 마스킹(PasswordBox), 눈(👁) 토글로만 잠깐 평문 표시.
+            // API 키: 엔진마다 키가 다르므로 엔진별 입력값을 버퍼에 담아 두고(전환해도 유지),
+            // 선택된 엔진의 키만 보여준다. 저장 시 버퍼 전체를 설정에 반영한다.
+            var engineKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var keyed in TranslatorRegistry.All.Where(x => x.UsesApiKey))
+                engineKeys[keyed.Id] = settings.GetTranslationApiKey(keyed.Id) ?? "";
+
+            // 기본은 마스킹(PasswordBox), 눈(👁) 토글로만 잠깐 평문 표시.
             var keyMasked = new PasswordBox { VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 4, 10) };
-            keyMasked.Password = settings.DeeplApiKey ?? "";
             var keyPlain = new TextBox { VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 4, 10), Visibility = Visibility.Collapsed };
             var keyReveal = new ToggleButton
             {
@@ -153,6 +158,7 @@ public sealed class SettingsWindow : Window
                 keyMasked.Visibility = Visibility.Visible;
             };
             string CurrentKey() => keyReveal.IsChecked == true ? keyPlain.Text : keyMasked.Password;
+            void SetCurrentKey(string value) { keyMasked.Password = value; keyPlain.Text = value; }
 
             var keyRow = new Grid { Margin = new Thickness(0, 0, 0, 0) };
             keyRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -182,12 +188,7 @@ public sealed class SettingsWindow : Window
             general.Children.Add(closeToTrayCheck);
 
             // ---- [번역] 탭 ----
-            translation.Children.Add(Header("settings.deepl.lang.header"));
-            translation.Children.Add(langBox);
-            translation.Children.Add(Header("settings.deepl.key.header"));
-            translation.Children.Add(keyRow);
-
-            // 번역 엔진 선택 (레지스트리) + LibreTranslate 엔드포인트(자체호스팅)
+            // 엔진 선택 → (엔진이 쓰는) API 키 → (LibreTranslate) 엔드포인트 → 대상 언어 순으로 배치.
             var engineChoices = new List<EngineChoice> { new("none", Loc.T("settings.translation.none")) };
             engineChoices.AddRange(TranslatorRegistry.All.Select(d => new EngineChoice(d.Id, d.DisplayName)));
             var engineBox = new ComboBox
@@ -213,17 +214,59 @@ public sealed class SettingsWindow : Window
             var endpointPanel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left };
             endpointPanel.Children.Add(Header("settings.translation.libre.endpoint"));
             endpointPanel.Children.Add(endpointBox);
-            void UpdateEndpointVisibility() =>
-                endpointPanel.Visibility = (engineBox.SelectedValue as string) == "libretranslate"
+
+            // 키 입력 영역(헤더 문구·표시 여부는 선택된 엔진에 따라 바뀐다)
+            var keyHeader = Header("settings.translation.engine.header"); // 문구는 아래에서 엔진에 맞게 교체
+            var keyHint = new TextBlock
+            {
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 8),
+                Visibility = Visibility.Collapsed,
+            };
+            var keyPanel = new StackPanel();
+            keyPanel.Children.Add(keyHeader);
+            keyPanel.Children.Add(keyRow);
+            keyPanel.Children.Add(keyHint);
+
+            var currentEngineId = engineBox.SelectedValue as string ?? TranslatorRegistry.None;
+            void ApplyEngineUi()
+            {
+                var descriptor = TranslatorRegistry.Find(currentEngineId);
+                var usesKey = descriptor?.UsesApiKey == true;
+                keyPanel.Visibility = usesKey ? Visibility.Visible : Visibility.Collapsed;
+                if (usesKey)
+                {
+                    keyHeader.Text = Loc.T(
+                        descriptor!.RequiresApiKey ? "settings.translation.key.header" : "settings.translation.key.header.optional",
+                        ("engine", descriptor.Name));
+                    SetCurrentKey(engineKeys.GetValueOrDefault(currentEngineId, ""));
+                    // 발급에 추가 절차가 필요한 엔진만 안내를 붙인다.
+                    var hint = currentEngineId.Equals("google", StringComparison.OrdinalIgnoreCase)
+                        ? Loc.T("settings.translation.key.hint.google") : null;
+                    keyHint.Text = hint ?? "";
+                    keyHint.Visibility = hint is null ? Visibility.Collapsed : Visibility.Visible;
+                }
+                endpointPanel.Visibility = currentEngineId.Equals("libretranslate", StringComparison.OrdinalIgnoreCase)
                     ? Visibility.Visible : Visibility.Collapsed;
-            engineBox.SelectionChanged += (_, _) => UpdateEndpointVisibility();
-            UpdateEndpointVisibility();
+            }
+            engineBox.SelectionChanged += (_, _) =>
+            {
+                // 엔진을 바꾸기 전에 입력 중이던 키를 그 엔진 자리에 보관 → 되돌아오면 그대로 보인다.
+                if (engineKeys.ContainsKey(currentEngineId)) engineKeys[currentEngineId] = CurrentKey();
+                currentEngineId = engineBox.SelectedValue as string ?? TranslatorRegistry.None;
+                ApplyEngineUi();
+            };
+            ApplyEngineUi();
 
             translation.Children.Add(Header("settings.translation.engine.header"));
             translation.Children.Add(engineBox);
+            translation.Children.Add(keyPanel);
             translation.Children.Add(endpointPanel);
+            translation.Children.Add(Header("settings.deepl.lang.header"));
+            translation.Children.Add(langBox);
 
-            // DeepL 실패 시 LibreTranslate 공개 서버로 자동 전환 (신규, 기본 꺼짐)
+            // 선택한 엔진 실패 시 무키 무료 엔진(MyMemory)으로 자동 전환 (기본 꺼짐)
             var fallbackCheck = WrapCheck("settings.translation.fallback", settings.TranslationFallbackToFree, new Thickness(0, 12, 0, 0));
             var fallbackWarn = new TextBlock
             {
@@ -521,10 +564,11 @@ public sealed class SettingsWindow : Window
             };
             saveButton.Click += (_, _) =>
             {
-                var enteredKey = CurrentKey();
-                settings.DeeplApiKey = string.IsNullOrWhiteSpace(enteredKey) ? null : enteredKey.Trim();
+                // 화면에 떠 있던 엔진의 입력값까지 버퍼에 담고, 엔진별 키를 한꺼번에 반영한다.
+                if (engineKeys.ContainsKey(currentEngineId)) engineKeys[currentEngineId] = CurrentKey();
+                foreach (var (engineId, key) in engineKeys) settings.SetTranslationApiKey(engineId, key);
                 settings.TargetLanguage = string.IsNullOrWhiteSpace(langBox.Text) ? AppSettings.DefaultTargetLanguage() : langBox.Text.Trim().ToUpperInvariant();
-                settings.TranslationEngine = engineBox.SelectedValue as string;
+                settings.TranslationEngine = currentEngineId;
                 settings.LibreTranslateEndpoint = string.IsNullOrWhiteSpace(endpointBox.Text) ? null : endpointBox.Text.Trim();
                 settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;
                 settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();

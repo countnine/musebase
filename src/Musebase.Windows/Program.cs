@@ -70,7 +70,9 @@ internal static class Program
                 settings.EffectiveTranslationEngine,
                 new Musebase.Core.Translation.TranslatorOptions(
                     DeeplApiKey: settings.DeeplApiKey,
-                    LibreEndpoint: settings.LibreTranslateEndpoint),
+                    LibreEndpoint: settings.LibreTranslateEndpoint,
+                    LibreApiKey: settings.LibreTranslateApiKey,
+                    GoogleApiKey: settings.GoogleApiKey),
                 settings.EffectiveTargetLanguage,
                 settings.ShowOnlyTargetTranslation,
                 settings.ManualOffsetSeconds,
@@ -79,7 +81,9 @@ internal static class Program
                 TranslationFallbackEngineId:
                     settings.TranslationFallbackToFree
                     && !string.Equals(settings.EffectiveTranslationEngine, Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine, StringComparison.OrdinalIgnoreCase)
-                        ? Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine : null);
+                        ? Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine : null,
+                // 트레이 토글: 끄면 API 호출 없이 캐시된 번역만 표시(유료 사용량 차단).
+                ApiTranslationEnabled: settings.ApiTranslationEnabled);
 
             Log.Write($"[sources] 활성 가사 소스: {string.Join(", ", settings.EnabledLyricsSources)}");
             Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}");
@@ -169,6 +173,14 @@ internal static class Program
             var moveToggle = new MenuItem { Header = Loc.T("tray.overlay.moveMode"), IsCheckable = true };
             var sourceMenu = new MenuItem { Header = Loc.T("tray.source") };
             var browserDisplayToggle = new MenuItem { Header = Loc.T("tray.browserDisplay"), IsCheckable = true, IsChecked = settings.BrowserDisplayEnabled };
+            // 유료 API(DeepL/Google) 사용량 차단 스위치 — 끄면 새 번역 요청 없이 캐시된 번역만 표시.
+            var apiTranslationToggle = new MenuItem
+            {
+                Header = Loc.T("tray.apiTranslation"),
+                IsCheckable = true,
+                IsChecked = settings.ApiTranslationEnabled,
+                ToolTip = Loc.T("tray.apiTranslation.tooltip"),
+            };
 
             void ApplySource(string mode, bool includeBrowsers)
             {
@@ -383,6 +395,20 @@ internal static class Program
 
             updateItem.Click += async (_, _) => await RunUpdateCheckAsync(userInitiated: true);
 
+            // 번역 구성(엔진·키·대상 언어·API 사용 여부)을 현재 설정으로 다시 적용한다.
+            // 설정 저장과 트레이의 "API 번역 사용" 토글이 같은 경로를 공유한다.
+            void ApplyTranslationConfig(string reason)
+            {
+                var cfg = CurrentConfig();
+                reportedFailureKinds.Clear(); // 엔진/폴백 변경 시 힌트를 다시 안내할 수 있게 초기화
+                coordinator.Translation = LyricsEngineFactory.BuildTranslation(cfg, translationCache, OnTranslationFailure);
+                coordinator.TargetLanguage = cfg.TargetLanguage;
+                coordinator.ShowOnlyTargetTranslation = cfg.ShowOnlyTargetTranslation;
+                coordinator.RefreshCurrentLine(); // 표시 정책 변경 즉시 반영
+                Log.Write($"[{reason}] engine={cfg.TranslationEngineId}, lang={cfg.TargetLanguage}, " +
+                          $"fallback={cfg.TranslationFallbackEngineId ?? "-"}, api={(cfg.ApiTranslationEnabled ? "on" : "off")}");
+            }
+
             SettingsWindow? settingsWindow = null;
             void OpenSettings()
             {
@@ -393,14 +419,8 @@ internal static class Program
                 }
                 settingsWindow = new SettingsWindow(settings, onSaved: () =>
                 {
-                    var cfg = CurrentConfig();
-                    reportedFailureKinds.Clear(); // 엔진/폴백 변경 시 힌트를 다시 안내할 수 있게 초기화
-                    coordinator.Translation = LyricsEngineFactory.BuildTranslation(cfg, translationCache, OnTranslationFailure);
-                    coordinator.TargetLanguage = cfg.TargetLanguage;
-                    coordinator.ShowOnlyTargetTranslation = cfg.ShowOnlyTargetTranslation;
-                    coordinator.RefreshCurrentLine(); // 표시 정책 변경 즉시 반영
+                    ApplyTranslationConfig("settings");
                     overlay.ApplyStyle();
-                    Log.Write($"[settings] 저장됨: engine={cfg.TranslationEngineId}, lang={cfg.TargetLanguage}, fallback={cfg.TranslationFallbackEngineId ?? "-"}");
                 },
                 onCheckUpdates: () => _ = RunUpdateCheckAsync(userInitiated: true));
                 settingsWindow.Show();
@@ -521,6 +541,16 @@ internal static class Program
                 else await StopBrowserDisplayAsync(save: true);
             };
 
+            // API 번역 사용/미사용 — 끄면 새 번역 요청을 보내지 않고(유료 사용량 0) 캐시된 번역만 남는다.
+            // 다시 켜면 지금 재생 중인 곡부터 바로 번역한다(다음 곡을 기다리지 않는다).
+            apiTranslationToggle.Click += (_, _) =>
+            {
+                settings.ApiTranslationEnabled = apiTranslationToggle.IsChecked;
+                settings.Save();
+                ApplyTranslationConfig("translate.api");
+                _ = coordinator.RetranslateCurrentAsync();
+            };
+
             overlayToggle.Click += (_, _) => SetOverlayVisible(overlayToggle.IsChecked);
             moveToggle.Click += (_, _) => overlay.SetMoveMode(moveToggle.IsChecked);
             overlay.MoveModeChanged += moveMode => moveToggle.IsChecked = moveMode; // 자물쇠 버튼과 동기화
@@ -559,6 +589,7 @@ internal static class Program
             menu.Items.Add(moveToggle);
             menu.Items.Add(sourceMenu);
             menu.Items.Add(browserDisplayToggle);
+            menu.Items.Add(apiTranslationToggle);
             menu.Items.Add(new Separator());
             menu.Items.Add(offsetLabel);
             menu.Items.Add(offsetPlus);
@@ -735,6 +766,8 @@ internal static class Program
                 moveToggle.Header = Loc.T("tray.overlay.moveMode");
                 sourceMenu.Header = Loc.T("tray.source");
                 browserDisplayToggle.Header = Loc.T("tray.browserDisplay");
+                apiTranslationToggle.Header = Loc.T("tray.apiTranslation");
+                apiTranslationToggle.ToolTip = Loc.T("tray.apiTranslation.tooltip");
                 offsetPlus.Header = Loc.T("tray.offset.faster");
                 offsetMinus.Header = Loc.T("tray.offset.slower");
                 offsetReset.Header = Loc.T("tray.offset.reset");
