@@ -17,8 +17,8 @@ android 워크로드가 CI/모든 개발 머신에 없어도 메인 빌드가 �
 | `Services/OverlayService.cs` | 포그라운드 서비스 — `WindowManager`의 `TYPE_APPLICATION_OVERLAY` 뷰(하단 중앙, 반투명 둥근 카드)로 다른 앱 위에 가사 표시. 코디네이터 `CurrentLineChanged`/`LineProgressChanged` + 소스 `IsPlayingChanged`만 **구독**(엔진 재조립 안 함). 재생 중+라인 있을 때만 표시, 터치 완전 통과. Android 8+ 알림 채널 + "정지" 액션 |
 | `Views/KaraokeTextView.cs` | 커스텀 뷰 — 베이스(흰색) 위에 채움색(노랑 `#FFEB3B`)을 진행 글자까지 클립해 덧그리는 **글자 단위 카라오케**. 태그(`InlineTimeTags.CharIndexAt`) 있으면 글자 위치, 없으면 라인 비율 폴백. 100ms 갱신 사이를 앵커+실시간으로 60fps 보간(`postInvalidateOnAnimation`). `StaticLayout`으로 멀티라인/가운데정렬 대응 |
 | `MainActivity.cs` | 앱 내 가사 UI(대체 확인용 유지) + **오버레이 권한 안내/요청**(`Settings.CanDrawOverlays`→`ACTION_MANAGE_OVERLAY_PERMISSION`) + **오버레이 켜기/끄기 토글** + **"번역 설정" 버튼**(→ `SettingsActivity`). 검색 상태 + 현재 줄 + 번역, `StateChanged`/`StatusChanged` 구독 |
-| `SettingsActivity.cs` | **번역 설정 화면**(코드 UI, Exported=false) — 엔진 스피너(MyMemory/DeepL/끄기) + DeepL API 키(DeepL 선택 시만 표시, 눈 토글) + 대상 언어(비면 로케일 기본). 저장 시 `AndroidSettings`에 반영 → `MusebaseApp.ApplyTranslationSettings()`로 **재시작 없이** 엔진 재구성(새 엔진은 다음 곡부터) |
-| `Services/AndroidSettings.cs` | `ISharedPreferences`(앱 private) 래퍼 — `TranslationEngine`/`DeeplApiKey`/`TargetLanguage`. **앱 private 저장이며 디스크 암호화는 아님**(Windows DPAPI와 다름 — 루팅/백업 추출 시 평문 노출 가능). 직렬화 키는 영어 식별자 유지 |
+| `SettingsActivity.cs` | **번역 설정 화면**(코드 UI, Exported=false) — 엔진 스피너(MyMemory/DeepL/Google Cloud Translation/끄기) + **선택한 엔진의 API 키**(키를 쓰는 엔진에서만 표시, 문구·값이 엔진을 따라감, 눈 토글) + 대상 언어(비면 로케일 기본) + **API 번역 사용** 체크박스(기본 켬 — 끄면 새 번역 요청 없이 캐시된 번역만, 유료 사용량 차단) + **선택 엔진 실패 시 무료(MyMemory) 자동 전환** 체크박스(기본 꺼짐, 켜면 공개 서버 전송 안내 표시). 저장 시 `AndroidSettings`에 반영 → `MusebaseApp.ApplyTranslationSettings()`로 **재시작 없이** 엔진 재구성(새 엔진은 다음 곡부터) |
+| `Services/AndroidSettings.cs` | `ISharedPreferences`(앱 private) 래퍼 — `TranslationEngine`/`DeeplApiKey`/`GoogleApiKey`/`TargetLanguage`/`TranslationFallbackToFree`/`ApiTranslationEnabled`(엔진 id로 읽고 쓰는 `Get/SetTranslationApiKey` 포함). **앱 private 저장이며 디스크 암호화는 아님**(Windows DPAPI와 다름 — 루팅/백업 추출 시 평문 노출 가능). 직렬화 키는 영어 식별자 유지 |
 | `AndroidManifest.xml` | INTERNET + `SYSTEM_ALERT_WINDOW` + `FOREGROUND_SERVICE`(+`_SPECIAL_USE`, Android 14) + `POST_NOTIFICATIONS`. `<service>`(리스너/오버레이)/`<activity>`(Main/Settings)/`<application android:name>`은 C# 특성에서 생성·병합 |
 
 SQLite: `Microsoft.Data.Sqlite`(Musebase.Core 참조)가 `SQLitePCLRaw.bundle_e_sqlite3`를 통해
@@ -30,47 +30,80 @@ net8.0-android 네이티브 `libe_sqlite3.so`를 자동 포함하므로 별도 P
 
 ## 번역 설정 사용법
 
-메인 화면의 **"번역 설정"** 버튼 → 엔진 선택(MyMemory 무료·무키 / DeepL / 끄기), DeepL 선택 시
-**API 키** 입력, 필요하면 **대상 언어**(예: `KO`, `JA`, `EN-US`; 비우면 기기 로케일) 지정 후 **저장**.
+메인 화면의 **"번역 설정"** 버튼 → 엔진 선택(MyMemory 무료·무키 / DeepL / Google Cloud Translation /
+끄기), 키가 필요한 엔진이면 **그 엔진의 API 키**(입력란이 선택한 엔진을 따라가며, 엔진을 바꿔도
+입력값은 엔진별로 보관된다) 입력, 필요하면 **대상 언어**(예: `KO`, `JA`, `EN-US`; 비우면 기기 로케일) 지정 후 **저장**.
 저장하면 앱 재시작 없이 엔진이 재구성되며, **새 엔진은 다음 곡/재검색부터** 적용된다(현재 곡의
-기존 번역 태그는 유지 — Windows와 동일 동작). DeepL 키는 앱 private 영역에만 저장되고 디스크
+기존 번역 태그는 유지 — Windows와 동일 동작). API 키는 앱 private 영역에만 저장되고 디스크
 암호화는 아니다(위 표 참고).
+
+**API 번역 사용**을 끄면 새 번역 요청을 전혀 보내지 않고(유료 사용량 0) 이미 캐시된 번역만 표시한다.
+엔진·키 설정은 그대로 보존되며, 다시 켜고 저장하면 **재생 중인 곡부터 즉시** 번역한다
+(Windows 트레이의 "API 번역 사용" 토글과 같은 스위치 — 설정 키도 `ApiTranslationEnabled`로 동일).
+
+**선택 엔진 실패 시 무료 전환**을 켜면 주 엔진이 실패(할당량·인증·네트워크)한 줄만 MyMemory로
+다시 번역한다(`CompositeTranslator` 폴백 체인). 주 엔진이 이미 MyMemory면 체크해도 무시된다.
+켜면 가사가 무료 번역 공개 서버로 전송될 수 있다는 점에 주의.
 
 오버레이 위치/폰트 커스터마이즈는 다음 단계.
 
-## 빌드 환경 (2026-07 이 머신에서 확인한 상태)
+## 빌드 환경 (2026-07-26 이 머신에서 확인한 상태 — APK 산출까지 성공)
 
-- .NET SDK 8.0.423 (`C:\Program Files\dotnet`, PATH에 없음 — 세션마다 `$env:Path += ';C:\Program Files\dotnet'`)
-- **android 워크로드: 설치됨** (`dotnet workload install android` — Microsoft.Android.Sdk.Windows 34.0.154). 관리자 승격 없이 성공했음(MSI가 UAC 자동 승인 환경).
-- **JDK: 없음** (`where.exe java` 실패, `JAVA_HOME` 미설정) → **JDK 17+ 필요** (권장: Microsoft OpenJDK 17)
-- **Android SDK: 없음** (`%LOCALAPPDATA%\Android\Sdk` 부재, `ANDROID_HOME` 미설정) → **platform-tools + platforms;android-34 + build-tools 필요**
+- .NET SDK 8.0.423 (`C:\Program Files\dotnet`)
+- **android 워크로드: 설치됨** (`dotnet workload install android` — Microsoft.Android.Sdk.Windows 34.0.154)
+- **JDK: Microsoft OpenJDK 17** — `C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot` (`winget install Microsoft.OpenJDK.17`)
+- **Android SDK: `%LOCALAPPDATA%\Android\Sdk`** — platforms;android-34, build-tools 34.0.0/35.0.0, platform-tools, cmdline-tools
 
-이 상태에서 `dotnet build src/Musebase.Android -c Debug`는 다음 오류로 중단된다:
+주의: JDK가 없으면 `sdkmanager`(자바 프로그램)가 못 돌아서 SDK 구성요소 설치가 조용히 실패하고
+`Dependency 'platforms;android-34' should have been installed but could not be resolved` 경고만 남는다.
+**JDK부터 깔 것.**
 
-```
-error XA5300: Android SDK 디렉터리를 찾을 수 없습니다. (https://aka.ms/dotnet-android-install-sdk)
-error XA5300: 'AndroidSdkDirectory' MSBuild 속성을 사용자 지정 경로로 설정합니다.
-```
+### PATH·환경변수 설정 (한 번만 — 이후 `-p:` 인자 없이 빌드)
 
-단, C# 소스 자체는 Mono.Android(API 34) 참조 어셈블리에 대해 **경고 0으로 컴파일 검증 완료**
-(csc 직접 호출) — 남은 것은 JDK/SDK만 있으면 되는 패키징 단계다.
-
-## 사용자가 할 일 — APK 빌드까지
-
-가장 쉬운 길은 .NET for Android의 자동 설치 타깃이다(관리자 불필요, 사용자 폴더에 설치):
+`JAVA_HOME`/`ANDROID_HOME`이 있으면 .NET for Android가 알아서 찾는다. PowerShell에서 **사용자 환경변수**로
+영구 등록(관리자 불필요, 새 터미널부터 적용):
 
 ```powershell
-$env:Path += ';C:\Program Files\dotnet'
-# 1) JDK + Android SDK를 지정 폴더에 자동 다운로드/설치
-dotnet build src/Musebase.Android -t:InstallAndroidDependencies -f net8.0-android `
-  -p:AndroidSdkDirectory="$env:LOCALAPPDATA\Android\Sdk" `
-  -p:JavaSdkDirectory="$env:LOCALAPPDATA\Android\jdk" `
-  -p:AcceptAndroidSDKLicenses=true
+[Environment]::SetEnvironmentVariable('JAVA_HOME', 'C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot', 'User')
+[Environment]::SetEnvironmentVariable('ANDROID_HOME', "$env:LOCALAPPDATA\Android\Sdk", 'User')
+# PATH에 dotnet + java + adb 추가 (기존 사용자 PATH 뒤에 덧붙임)
+$p = [Environment]::GetEnvironmentVariable('Path', 'User')
+$add = @('C:\Program Files\dotnet',
+         'C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot\bin',
+         "$env:LOCALAPPDATA\Android\Sdk\platform-tools") | Where-Object { $p -notlike "*$_*" }
+[Environment]::SetEnvironmentVariable('Path', (@($p) + $add -join ';'), 'User')
+```
 
-# 2) 빌드 (이후에는 같은 -p: 경로 지정 또는 ANDROID_HOME/JAVA_HOME 환경변수 설정)
+현재 세션에만 적용하려면:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+$env:Path += ";C:\Program Files\dotnet;$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools"
+```
+
+### 빌드
+
+```powershell
+dotnet build src/Musebase.Android -c Debug           # 환경변수를 설정했다면 이걸로 끝
+```
+
+환경변수를 안 쓰면 매번 경로를 넘긴다:
+
+```powershell
 dotnet build src/Musebase.Android -c Debug `
   -p:AndroidSdkDirectory="$env:LOCALAPPDATA\Android\Sdk" `
-  -p:JavaSdkDirectory="$env:LOCALAPPDATA\Android\jdk"
+  -p:JavaSdkDirectory="C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot"
+```
+
+처음부터 다시 까는 머신이라면 JDK 설치 후 자동 설치 타깃으로 SDK를 채울 수 있다
+(관리자 불필요, 사용자 폴더에 설치):
+
+```powershell
+dotnet build src/Musebase.Android -t:InstallAndroidDependencies -f net8.0-android `
+  -p:AndroidSdkDirectory="$env:LOCALAPPDATA\Android\Sdk" `
+  -p:JavaSdkDirectory="C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot" `
+  -p:AcceptAndroidSDKLicenses=true
 ```
 
 수동 설치 대안: Microsoft OpenJDK 17(msi) + Android Studio(또는 commandline-tools)로

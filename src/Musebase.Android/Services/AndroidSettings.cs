@@ -20,7 +20,10 @@ public sealed class AndroidSettings
     private const string PrefsName = "musebase";
     private const string KeyTranslationEngine = "TranslationEngine";
     private const string KeyDeeplApiKey = "DeeplApiKey";
+    private const string KeyGoogleApiKey = "GoogleApiKey";
     private const string KeyTargetLanguage = "TargetLanguage";
+    private const string KeyTranslationFallbackToFree = "TranslationFallbackToFree";
+    private const string KeyApiTranslationEnabled = "ApiTranslationEnabled";
 
     private readonly ISharedPreferences _prefs;
 
@@ -46,6 +49,31 @@ public sealed class AndroidSettings
         set => Put(KeyDeeplApiKey, value);
     }
 
+    /// <summary>Google Cloud Translation API 키(선택). DeepL 키와 같은 저장 한계를 갖는다.</summary>
+    public string? GoogleApiKey
+    {
+        get => NullIfBlank(_prefs.GetString(KeyGoogleApiKey, null));
+        set => Put(KeyGoogleApiKey, value);
+    }
+
+    /// <summary>엔진 id별 API 키 조회(설정 화면이 선택한 엔진의 키를 따라 보여주는 데 쓴다).</summary>
+    public string? GetTranslationApiKey(string engineId) => engineId?.ToLowerInvariant() switch
+    {
+        "deepl" => DeeplApiKey,
+        "google" => GoogleApiKey,
+        _ => null,
+    };
+
+    /// <summary>엔진 id별 API 키 저장(빈 값은 저장소가 제거 처리).</summary>
+    public void SetTranslationApiKey(string engineId, string? key)
+    {
+        switch (engineId?.ToLowerInvariant())
+        {
+            case "deepl": DeeplApiKey = key; break;
+            case "google": GoogleApiKey = key; break;
+        }
+    }
+
     /// <summary>번역 대상 언어(DeepL target_lang 코드). 비면 기기 로케일 기본값을 쓴다.</summary>
     public string? TargetLanguage
     {
@@ -54,8 +82,40 @@ public sealed class AndroidSettings
     }
 
     /// <summary>
+    /// 번역 API 사용 여부. 끄면 새 번역 요청을 보내지 않고 이미 캐시된 번역만 표시한다 —
+    /// 유료 API(DeepL/Google) 사용량을 그 자리에서 끊는 스위치(Windows 트레이 토글과 같은 키·의미).
+    /// 엔진·키 설정은 보존되므로 다시 켜면 원래대로 동작한다. 기본 켬.
+    /// </summary>
+    public bool ApiTranslationEnabled
+    {
+        get => _prefs.GetBoolean(KeyApiTranslationEnabled, true);
+        set
+        {
+            var editor = _prefs.Edit()!;
+            editor.PutBoolean(KeyApiTranslationEnabled, value);
+            editor.Apply();
+        }
+    }
+
+    /// <summary>
+    /// 선택한 번역 엔진 실패 시 무키 무료 엔진(MyMemory)으로 자동 전환한다. 기본 꺼짐.
+    /// 켜면 가사 텍스트가 무료 번역 공개 서버로 전송될 수 있다(Windows AppSettings와 같은 키·의미).
+    /// </summary>
+    public bool TranslationFallbackToFree
+    {
+        get => _prefs.GetBoolean(KeyTranslationFallbackToFree, false);
+        set
+        {
+            var editor = _prefs.Edit()!;
+            editor.PutBoolean(KeyTranslationFallbackToFree, value);
+            editor.Apply();
+        }
+    }
+
+    /// <summary>
     /// 실효 번역 엔진 판정(Windows AppSettings.EffectiveTranslationEngine과 동일 규칙):
     /// 명시 엔진이 있으면 그대로, 없으면 DeepL 키가 있으면 "deepl", 아니면 "mymemory".
+    /// (Google 키만 있는 경우는 명시 선택으로만 도달하므로 판정에 넣지 않는다 — Windows와 동일.)
     /// (실제로는 사용자가 화면에서 명시 선택하므로 저장값이 곧 실효값이지만, 빈값 안전망으로 유지.)
     /// </summary>
     public string EffectiveTranslationEngine

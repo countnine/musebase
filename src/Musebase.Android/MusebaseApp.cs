@@ -79,16 +79,25 @@ public sealed class MusebaseApp : Application
     private EngineConfig BuildConfig()
     {
         var engineId = Settings.EffectiveTranslationEngine; // 저장값 우선, 빈값이면 키 유무로 결정
-        var deeplKey = Settings.DeeplApiKey;
         var target = Settings.TargetLanguage ?? DefaultTargetLanguage(); // 비면 기기 로케일 기본값
         return new EngineConfig(
             EnabledLyricsSources: LyricsSourceRegistry.AllIds,
             TranslationEngineId: engineId,
-            TranslatorOptions: new TranslatorOptions(DeeplApiKey: deeplKey),
+            // 엔진별 키를 모두 넘기고, 선택된 엔진의 팩토리만 자기 키를 쓴다.
+            TranslatorOptions: new TranslatorOptions(
+                DeeplApiKey: Settings.DeeplApiKey,
+                GoogleApiKey: Settings.GoogleApiKey),
             TargetLanguage: target,
             ShowOnlyTargetTranslation: true,
             ManualOffsetSeconds: 0,
-            CacheDbPath: _dbPath);
+            CacheDbPath: _dbPath,
+            // 폴백 켬 + 주 엔진이 무키 무료 기본이 아닐 때만 무료 엔진(MyMemory)으로 자동 전환(Windows와 동일 규칙).
+            TranslationFallbackEngineId:
+                Settings.TranslationFallbackToFree
+                && !string.Equals(engineId, TranslatorRegistry.DefaultFreeEngine, StringComparison.OrdinalIgnoreCase)
+                    ? TranslatorRegistry.DefaultFreeEngine : null,
+            // 끄면 API 호출 없이 캐시된 번역만 표시(유료 사용량 차단) — Windows 트레이 토글과 같은 스위치.
+            ApiTranslationEnabled: Settings.ApiTranslationEnabled);
     }
 
     /// <summary>
@@ -96,14 +105,22 @@ public sealed class MusebaseApp : Application
     /// <see cref="LyricsEngineFactory.ApplyTranslation"/>이 실패 라우팅·대상 언어·현재 라인 재발행을
     /// 처리한다. 새 엔진은 <b>다음 곡/재검색부터</b> 적용된다(현재 곡의 기존 tr 태그는 유지 — Windows와 동일).
     /// </summary>
-    public void ApplyTranslationSettings()
+    /// <param name="retranslateNow">
+    /// true면 현재 곡을 즉시 다시 번역한다(API 번역을 껐다가 다시 켠 직후 등 —
+    /// 다음 곡을 기다리지 않고 바로 채우기 위해). Windows 트레이 토글과 같은 동작.
+    /// </param>
+    public void ApplyTranslationSettings(bool retranslateNow = false)
     {
         if (Coordinator is null) return;
         var config = BuildConfig();
         LyricsEngineFactory.ApplyTranslation(Coordinator, config, _translationCache);
+        if (retranslateNow) _ = Coordinator.RetranslateCurrentAsync();
+        // 선택된 엔진의 키 유무만 남긴다(키 값은 절대 로그에 남기지 않는다).
+        var apiKey = string.IsNullOrEmpty(Settings.GetTranslationApiKey(config.TranslationEngineId)) ? "-" : "set";
         global::Android.Util.Log.Info("Musebase",
             $"translation reconfigured: engine={config.TranslationEngineId} " +
-            $"target={config.TargetLanguage} deeplKey={(string.IsNullOrEmpty(config.TranslatorOptions.DeeplApiKey) ? "-" : "set")}");
+            $"target={config.TargetLanguage} apiKey={apiKey} " +
+            $"fallback={config.TranslationFallbackEngineId ?? "-"}");
     }
 
     /// <summary>
