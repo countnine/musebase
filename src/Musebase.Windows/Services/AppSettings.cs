@@ -123,6 +123,13 @@ public sealed class AppSettings
     public string? LibreTranslateEndpoint { get; set; }
 
     /// <summary>
+    /// 번역 API 사용 여부(트레이에서 즉시 토글). 끄면 새 번역 요청을 보내지 않고
+    /// 이미 캐시된 번역만 표시한다 — 유료 API(DeepL/Google) 사용량을 그 자리에서 끊는 스위치.
+    /// 엔진·키 설정은 그대로 보존되므로 다시 켜면 원래대로 동작한다. 기본 켬.
+    /// </summary>
+    public bool ApiTranslationEnabled { get; set; } = true;
+
+    /// <summary>
     /// 주 번역 엔진(DeepL 등) 실패 시 무키 무료 엔진(MyMemory)으로 자동 전환한다.
     /// 켜면 가사 텍스트가 무료 번역 공개 서버로 전송될 수 있다(주의). 기본 꺼짐.
     /// </summary>
@@ -150,6 +157,46 @@ public sealed class AppSettings
     /// <summary>구버전 평문 키("deeplApiKey") — 마이그레이션 전용(읽기만, 저장 시 제거).</summary>
     [JsonPropertyName("deeplApiKey")]
     public string? LegacyDeeplApiKey { get; set; }
+
+    /// <summary>Google Cloud Translation API 키(평문) — 파일엔 암호화본만 저장한다.</summary>
+    [JsonIgnore]
+    public string? GoogleApiKey { get; set; }
+
+    /// <summary>Google 키의 DPAPI 암호문(base64). settings.json에 실제 저장되는 값.</summary>
+    [JsonPropertyName("googleApiKeyEnc")]
+    public string? GoogleApiKeyEncrypted { get; set; }
+
+    /// <summary>LibreTranslate API 키(평문, 선택) — 파일엔 암호화본만 저장한다.</summary>
+    [JsonIgnore]
+    public string? LibreTranslateApiKey { get; set; }
+
+    /// <summary>LibreTranslate 키의 DPAPI 암호문(base64).</summary>
+    [JsonPropertyName("libreTranslateApiKeyEnc")]
+    public string? LibreTranslateApiKeyEncrypted { get; set; }
+
+    /// <summary>
+    /// 엔진 id별 API 키 조회(설정 UI가 선택된 엔진의 키를 따라 보여주는 데 쓴다).
+    /// 키를 쓰지 않는 엔진(MyMemory 등)은 null.
+    /// </summary>
+    public string? GetTranslationApiKey(string engineId) => engineId?.ToLowerInvariant() switch
+    {
+        "deepl" => DeeplApiKey,
+        "google" => GoogleApiKey,
+        "libretranslate" => LibreTranslateApiKey,
+        _ => null,
+    };
+
+    /// <summary>엔진 id별 API 키 저장(빈 문자열은 null로 정규화).</summary>
+    public void SetTranslationApiKey(string engineId, string? key)
+    {
+        var value = string.IsNullOrWhiteSpace(key) ? null : key.Trim();
+        switch (engineId?.ToLowerInvariant())
+        {
+            case "deepl": DeeplApiKey = value; break;
+            case "google": GoogleApiKey = value; break;
+            case "libretranslate": LibreTranslateApiKey = value; break;
+        }
+    }
 
     /// <summary>DeepL target_lang. 최초 실행 시 시스템 언어로 기본 설정(미지원이면 EN-US).</summary>
     public string TargetLanguage { get; set; } = DefaultTargetLanguage();
@@ -215,7 +262,7 @@ public sealed class AppSettings
         return new AppSettings { _secretStore = store };
     }
 
-    /// <summary>암호문 복호화 또는 구버전 평문 키 마이그레이션 → 평문 DeeplApiKey 확정.</summary>
+    /// <summary>암호문 복호화 또는 구버전 평문 키 마이그레이션 → 평문 API 키 확정.</summary>
     private void ResolveSecrets()
     {
         if (!string.IsNullOrEmpty(DeeplApiKeyEncrypted))
@@ -223,6 +270,9 @@ public sealed class AppSettings
         else if (!string.IsNullOrWhiteSpace(LegacyDeeplApiKey))
             DeeplApiKey = LegacyDeeplApiKey; // 구버전 평문 → 다음 Save에서 암호화
         LegacyDeeplApiKey = null;            // 평문 필드는 더 이상 보관/기록하지 않음
+
+        GoogleApiKey = _secretStore.Unprotect(GoogleApiKeyEncrypted);
+        LibreTranslateApiKey = _secretStore.Unprotect(LibreTranslateApiKeyEncrypted);
     }
 
     public void Save()
@@ -231,6 +281,8 @@ public sealed class AppSettings
         {
             // 평문 키는 파일에 쓰지 않고, 암호문만 저장(플랫폼 시크릿 저장소)
             DeeplApiKeyEncrypted = _secretStore.Protect(DeeplApiKey);
+            GoogleApiKeyEncrypted = _secretStore.Protect(GoogleApiKey);
+            LibreTranslateApiKeyEncrypted = _secretStore.Protect(LibreTranslateApiKey);
             LegacyDeeplApiKey = null;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));

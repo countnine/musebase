@@ -368,6 +368,20 @@ public sealed class LyricsCoordinator : IDisposable
         }
     }
 
+    /// <summary>
+    /// 현재 가사의 번역을 다시 실행한다 — 번역 구성(엔진/키/API 사용 토글)을 바꾼 직후 호출하면
+    /// 다음 곡을 기다리지 않고 지금 곡에 바로 반영된다. 가사가 없으면 아무것도 하지 않는다.
+    /// </summary>
+    public async Task RetranslateCurrentAsync()
+    {
+        if (CurrentLyrics is not { } lyrics) return;
+        _searchCts?.Cancel(); // 진행 중 검색/번역과 겹치지 않게
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+        try { await TranslateAsync(lyrics, cts.Token); }
+        catch (OperationCanceledException) { /* 트랙 교체 등 — 무시 */ }
+    }
+
     /// <summary>대상 언어 MT 보장 후 현재 라인 갱신 (캐시 히트면 즉시, 미스면 API 1회)</summary>
     private async Task TranslateAsync(Lyrics lyrics, CancellationToken ct)
     {
