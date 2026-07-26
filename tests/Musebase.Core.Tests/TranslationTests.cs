@@ -55,6 +55,24 @@ public class TranslationServiceTests
     }
 
     [Fact]
+    public async Task CacheOnly_AppliesCache_ButNeverCallsApi()
+    {
+        var cache = new InMemoryTranslationCache();
+        cache.Set("hello", "KO", "안녕");
+
+        var translator = new FakeTranslator();
+        var service = new LyricsTranslationService(translator, cache) { CacheOnly = true };
+        var lyrics = Make("hello", "world");
+        var changed = await service.EnsureTranslatedAsync(lyrics, "KO");
+
+        Assert.Equal(0, translator.CallCount);        // API 호출 0 = 유료 사용량 0
+        Assert.Equal(1, changed);                     // 캐시된 줄만 채움
+        Assert.Equal("안녕", lyrics.Lines[0].Attachments.Translation("ko"));
+        Assert.Null(lyrics.Lines[1].Attachments.Translation("ko")); // 미스는 번역하지 않음
+        Assert.True(service.IsEnabled);               // 엔진/키 설정은 그대로(다시 켜면 즉시 동작)
+    }
+
+    [Fact]
     public async Task Ensure_UsesCache_NoTranslatorCallOnSecondSong()
     {
         var cache = new InMemoryTranslationCache();

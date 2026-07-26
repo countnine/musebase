@@ -38,6 +38,13 @@ public sealed class LyricsTranslationService
     public bool IsEnabled => _translator is not null;
 
     /// <summary>
+    /// true면 API를 호출하지 않고 <b>캐시된 번역만</b> 채운다(이미 번역해 둔 줄은 그대로 보인다).
+    /// 유료 API 사용량을 사용자가 즉시 끊을 수 있게 하는 토글용 — 엔진/키 설정은 그대로 둔 채
+    /// 새 번역 요청만 막는다.
+    /// </summary>
+    public bool CacheOnly { get; init; }
+
+    /// <summary>
     /// 이 서비스를 만든 번역 엔진 id(레지스트리 id, 텔레메트리용).
     /// 팩토리(LyricsEngineFactory)가 구성값으로 채운다. 기본 "none".
     /// </summary>
@@ -88,7 +95,8 @@ public sealed class LyricsTranslationService
             }
         }
 
-        if (pendingTexts.Count == 0) return changed;
+        // 캐시만 사용 모드면 여기서 끝 — 미스는 번역하지 않는다(네트워크 호출 0).
+        if (pendingTexts.Count == 0 || CacheOnly) return changed;
 
         // 2) 미스만 배치 번역
         IReadOnlyList<string?> translated;

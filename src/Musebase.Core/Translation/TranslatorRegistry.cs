@@ -5,15 +5,30 @@ public sealed record TranslatorOptions(
     string? DeeplApiKey = null,
     string? LibreEndpoint = null,
     string? LibreApiKey = null,
-    string? MyMemoryEmail = null);
+    string? MyMemoryEmail = null,
+    string? GoogleApiKey = null);
 
-/// <summary>번역 엔진 설명자. 키 필요 여부·무료 여부(UI/기본값 판단)와 생성 팩토리.</summary>
+/// <summary>
+/// 번역 엔진 설명자. 키 필요 여부·무료 여부(UI/기본값 판단)와 생성 팩토리.
+/// <c>RequiresApiKey</c>=키가 없으면 동작 불가(팩토리가 null),
+/// <c>AcceptsApiKey</c>=키 없이도 되지만 넣으면 사용(예: LibreTranslate 공개 인스턴스),
+/// <c>ShortName</c>="{engine} API 키" 같은 UI 문구에 넣을 짧은 이름(비면 DisplayName).
+/// </summary>
 public sealed record TranslatorDescriptor(
     string Id,
     string DisplayName,
     bool RequiresApiKey,
     bool IsFree,
-    Func<TranslatorOptions, ITranslator?> Factory);
+    Func<TranslatorOptions, ITranslator?> Factory,
+    bool AcceptsApiKey = false,
+    string? ShortName = null)
+{
+    /// <summary>API 키 입력을 노출할 엔진인지(필수 또는 선택).</summary>
+    public bool UsesApiKey => RequiresApiKey || AcceptsApiKey;
+
+    /// <summary>문구 삽입용 짧은 이름(괄호 수식 없는 제품명).</summary>
+    public string Name => string.IsNullOrWhiteSpace(ShortName) ? DisplayName : ShortName!;
+}
 
 /// <summary>
 /// 번역 엔진 레지스트리. 새 엔진은 <see cref="All"/>에 한 줄 추가로 편입된다.
@@ -35,13 +50,19 @@ public static class TranslatorRegistry
     public static IReadOnlyList<TranslatorDescriptor> All { get; } = new TranslatorDescriptor[]
     {
         new("mymemory", "MyMemory (무료·무키)", RequiresApiKey: false, IsFree: true,
-            o => new MyMemoryTranslator(o.MyMemoryEmail)),
+            o => new MyMemoryTranslator(o.MyMemoryEmail),
+            ShortName: "MyMemory"),
         new("libretranslate", "LibreTranslate (자체호스팅/키)", RequiresApiKey: false, IsFree: true,
             o => new LibreTranslateTranslator(
                 string.IsNullOrWhiteSpace(o.LibreEndpoint) ? DefaultLibreEndpoint : o.LibreEndpoint!,
-                o.LibreApiKey)),
+                o.LibreApiKey),
+            AcceptsApiKey: true, ShortName: "LibreTranslate"),
         new("deepl", "DeepL", RequiresApiKey: true, IsFree: false,
-            o => string.IsNullOrWhiteSpace(o.DeeplApiKey) ? null : new DeeplTranslator(o.DeeplApiKey!)),
+            o => string.IsNullOrWhiteSpace(o.DeeplApiKey) ? null : new DeeplTranslator(o.DeeplApiKey!),
+            ShortName: "DeepL"),
+        new("google", "Google Cloud Translation (API 키)", RequiresApiKey: true, IsFree: false,
+            o => string.IsNullOrWhiteSpace(o.GoogleApiKey) ? null : new GoogleTranslateTranslator(o.GoogleApiKey!),
+            ShortName: "Google Cloud Translation"),
     };
 
     public static TranslatorDescriptor? Find(string id) =>

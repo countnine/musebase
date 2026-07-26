@@ -16,7 +16,10 @@ public sealed record EngineConfig(
     double ManualOffsetSeconds,
     string CacheDbPath,
     // 주 번역 엔진 실패 시 폴백할 엔진 id(예: "libretranslate"). null=폴백 없음.
-    string? TranslationFallbackEngineId = null);
+    string? TranslationFallbackEngineId = null,
+    // false면 번역 API를 호출하지 않고 캐시된 번역만 표시한다(유료 API 사용량 차단 토글).
+    // 엔진/키 설정은 그대로 유지되므로 다시 켜면 즉시 원래대로 동작한다.
+    bool ApiTranslationEnabled = true);
 
 /// <summary>
 /// 코어 서비스(가사 검색·번역·캐시)를 조합해 <see cref="LyricsCoordinator"/>를 만드는
@@ -48,6 +51,8 @@ public static class LyricsEngineFactory
         return new LyricsTranslationService(translator, cache)
         {
             EngineId = config.TranslationEngineId, // translation 텔레메트리의 engine 식별용
+            // API 번역 끔 → 캐시된 번역만 채우고 새 요청은 보내지 않는다(엔진/키 설정은 보존).
+            CacheOnly = !config.ApiTranslationEnabled,
         };
     }
 

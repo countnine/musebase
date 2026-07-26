@@ -56,6 +56,42 @@ public class RegistryTests
     }
 
     [Fact]
+    public void Translator_GoogleRequiresKey_LibreAcceptsOptionalKey()
+    {
+        var google = TranslatorRegistry.Find("google");
+        Assert.NotNull(google);
+        Assert.True(google!.RequiresApiKey);
+        Assert.True(google.UsesApiKey);
+        Assert.False(google.IsFree);
+        Assert.Equal("Google Cloud Translation", google.Name); // "{engine} API 키" 문구용 짧은 이름
+
+        var libre = TranslatorRegistry.Find("libretranslate")!;
+        Assert.False(libre.RequiresApiKey);
+        Assert.True(libre.AcceptsApiKey);   // 키 없이도 되지만 넣으면 사용
+        Assert.True(libre.UsesApiKey);
+
+        Assert.False(TranslatorRegistry.Find("mymemory")!.UsesApiKey);
+    }
+
+    [Fact]
+    public void TranslatorBuild_GoogleWithoutKey_IsNull()
+    {
+        Assert.Null(TranslatorRegistry.Build("google", new TranslatorOptions()));
+        Assert.NotNull(TranslatorRegistry.Build("google", new TranslatorOptions(GoogleApiKey: "AIza-test")));
+    }
+
+    [Theory]
+    [InlineData("KO", "ko")]
+    [InlineData("EN-US", "en")]
+    [InlineData("PT-BR", "pt")]
+    [InlineData("ZH", "zh-CN")]
+    [InlineData("ZH-HANT", "zh-TW")]
+    [InlineData("NB", "no")]
+    [InlineData("", "en")]
+    public void GoogleTranslator_MapsDeeplStyleTargetLang(string targetLang, string expected) =>
+        Assert.Equal(expected, GoogleTranslateTranslator.ToGoogleLanguage(targetLang));
+
+    [Fact]
     public void TranslatorBuild_NoneOrEmpty_IsNull()
     {
         Assert.Null(TranslatorRegistry.Build("none", new TranslatorOptions()));

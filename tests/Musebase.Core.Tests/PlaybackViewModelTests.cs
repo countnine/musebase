@@ -10,7 +10,9 @@ public class PlaybackViewModelTests
     {
         public TrackInfo? CurrentTrack { get; set; }
         public bool IsPlaying { get; set; }
+#pragma warning disable CS0067 // 인터페이스 구현상 필요하지만 이 테스트 페이크에서는 발화하지 않는다
         public event Action<TrackInfo?>? TrackChanged;
+#pragma warning restore CS0067
         public event Action<bool>? IsPlayingChanged;
         public TimeSpan? GetEstimatedPosition() => TimeSpan.Zero;
         public PlaybackControls GetControls() => new(true, true, true);

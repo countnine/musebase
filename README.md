@@ -31,8 +31,8 @@ desktop overlay. It's a Windows-native rewrite of the macOS app
 - **Word-level karaoke** — character-by-character fill for sources that provide inline timing
   (Kugou / QQ / NetEase), with line-level fallback otherwise.
 - **Bilingual display** — original and translated lines stacked together. Uses the source's own
-  translation first, and falls back to machine translation — **LibreTranslate** (free, no key)
-  or **DeepL** (your API key).
+  translation first, and falls back to machine translation — **MyMemory** (free, no key),
+  **DeepL**, **Google Cloud Translation**, or **LibreTranslate** (your API key / endpoint).
 - **Desktop overlay** — transparent, click-through, always-on-top. Move/resize, fade in/out,
   optional background panel, auto-hide on fullscreen apps / pause / mouse-over. Hover to show
   media controls (previous / play-pause / next).
@@ -78,10 +78,13 @@ Get the latest build from **[Releases](https://github.com/countnine/musebase/rel
 ### Machine translation (optional)
 
 Out of the box, lines without a translation in your target language are machine-translated via
-**LibreTranslate** (free, no key required). For higher quality, get a free
-[DeepL API](https://www.deepl.com/pro-api) key (500k characters/month) and enter it in
-**Settings** — Musebase then switches to DeepL automatically. Translations are cached per line
-(each song is translated only once). The key is stored encrypted.
+**MyMemory** (free, no key required). For higher quality, pick another engine in **Settings** and
+paste that engine's key — the key box follows the engine you select:
+[DeepL API](https://www.deepl.com/pro-api) (free tier: 500k characters/month) or
+[Google Cloud Translation](https://cloud.google.com/translate) (enable the API in the Google Cloud
+console and create an API key — paid, usage-based). Optionally, Musebase can switch back to the free
+engine automatically when the selected engine fails (quota, network). Translations are cached per
+line (each song is translated only once). Keys are stored encrypted.
 
 ## Translating the UI
 
