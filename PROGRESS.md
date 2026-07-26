@@ -1,7 +1,14 @@
 # PROGRESS — Musebase for Windows (구 LyricsX for Windows)
 
-> **상태: windows-v0.13.0 (2026-07-18)** — 번역 상태 표기(정상/캐시/한도초과)를 가사 소스 옆에. 이전 0.12.0(브라우저 디스플레이)·0.11.0(MyMemory 무키 번역·설정 4탭·미니창 허브) 포함.
+> **상태: windows-v0.14.0 (2026-07-27)** — Google Cloud Translation 엔진 + 엔진별 API 키 + 트레이 "API 번역 사용" 토글. 이전 0.13.0(번역 상태 표기)·0.12.0(브라우저 디스플레이) 포함.
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.14.0 추가분
+- **Google Cloud Translation 엔진** — Translation API v2(API 키). 원문 자동 감지, DeepL식 대상 언어 코드를 Google 코드로 변환(EN-US→en, ZH-HANT→zh-TW 등), 응답 HTML 엔티티 디코드. 레지스트리 한 줄 등록으로 Windows·Android 설정에 함께 노출.
+- **엔진별 API 키 입력** — 설정 [번역] 탭을 엔진 → 그 엔진의 키 → 엔드포인트 → 대상 언어 순으로 재배치. 키 입력란이 선택한 엔진을 따라가고, 엔진을 바꿔도 입력값은 엔진별로 보관. DeepL/Google/LibreTranslate 키 모두 DPAPI 암호화 저장(기존 `deeplApiKeyEnc`·entropy 불변).
+- **트레이 "API 번역 사용" 토글** — 유료 API 사용량을 즉시 끊는 스위치. 끄면 새 번역 요청 없이 캐시된 번역만 표시(코어 `LyricsTranslationService.CacheOnly`), 다시 켜면 재생 중인 곡부터 즉시 재번역(`LyricsCoordinator.RetranslateCurrentAsync`).
+- 폴백 옵션 문구 일반화: "DeepL 실패 시" → "선택한 번역 엔진 실패 시"(설정 키는 유지).
+- (Android 병행: Google 엔진·엔진별 키·폴백/API 사용 체크박스 — PR #15, sln 밖)
 
 ## v0.13.0 추가분
 - **번역 상태 표기** — 가사 소스/품질 옆에 "· 번역: 정상 번역 / 캐시 이용 / 한도 초과"를 표시(트레이 툴팁·미니창). 무료 번역(MyMemory) 한도 초과 등 실패 여부를 바로 확인. 코어 `LyricsCoordinator.CurrentTranslationStatus`로 계산해 PC·Android 공유.
