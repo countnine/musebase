@@ -24,6 +24,8 @@ public sealed class AndroidSettings
     private const string KeyTargetLanguage = "TargetLanguage";
     private const string KeyTranslationFallbackToFree = "TranslationFallbackToFree";
     private const string KeyApiTranslationEnabled = "ApiTranslationEnabled";
+    private const string KeyPlaybackSource = "PlaybackSource";
+    private const string KeyIncludeVideoApps = "IncludeVideoApps";
 
     private readonly ISharedPreferences _prefs;
 
@@ -79,6 +81,31 @@ public sealed class AndroidSettings
     {
         get => NullIfBlank(_prefs.GetString(KeyTargetLanguage, null));
         set => Put(KeyTargetLanguage, value);
+    }
+
+    /// <summary>
+    /// 재생 소스 선택. "auto" = 자동 감지, 그 외 = 특정 앱 패키지로 고정
+    /// (Windows AppSettings.PlaybackSource와 같은 의미 — 그쪽은 SourceAppUserModelId).
+    /// </summary>
+    public string PlaybackSource
+    {
+        get => _prefs.GetString(KeyPlaybackSource, AndroidNowPlayingSource.AutoSource)!;
+        set => Put(KeyPlaybackSource, value);
+    }
+
+    /// <summary>
+    /// 자동 모드에서 영상·브라우저 앱(YouTube·크롬 등)도 음악 소스로 볼지. 기본 꺼짐 —
+    /// 영상 재생 중 엉뚱한 가사를 찾아 표시하는 것을 막는다(Windows의 IncludeBrowsers에 대응).
+    /// </summary>
+    public bool IncludeVideoApps
+    {
+        get => _prefs.GetBoolean(KeyIncludeVideoApps, false);
+        set
+        {
+            var editor = _prefs.Edit()!;
+            editor.PutBoolean(KeyIncludeVideoApps, value);
+            editor.Apply();
+        }
     }
 
     /// <summary>

@@ -40,6 +40,58 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     private bool _started;
     private bool _sessionListenerRegistered;
 
+    // 재생 소스 선택(Windows NowPlayingService와 같은 규칙): "auto" = 자동 감지,
+    // 그 외 = 특정 앱 패키지로 고정.
+    private string _sourceMode = AutoSource;
+    // 자동 모드에서 영상·브라우저 앱(YouTube·크롬 등)을 음악 소스로 포함할지. 기본 제외 —
+    // 영상 재생 중 엉뚱한 곡의 가사를 찾아 표시하는 것을 막는다.
+    private bool _includeVideoApps;
+
+    /// <summary>자동 감지 식별자.</summary>
+    public const string AutoSource = "auto";
+
+    /// <summary>영상·브라우저로 간주할 패키지 토큰(부분 일치, 소문자).</summary>
+    private static readonly string[] VideoAppTokens =
+    {
+        "com.google.android.youtube", "com.google.android.videos",
+        "com.android.chrome", "org.mozilla", "com.microsoft.emmx", "com.opera",
+        "com.brave", "com.sec.android.app.sbrowser", "com.duckduckgo", "com.kiwibrowser",
+        "com.netflix", "tv.twitch", "com.instagram", "com.zhiliaoapp.musically", "com.facebook",
+    };
+
+    /// <summary>자동 소스 감지 모드 여부.</summary>
+    private bool IsAuto => string.Equals(_sourceMode, AutoSource, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsVideoApp(string? package)
+    {
+        if (string.IsNullOrEmpty(package)) return false;
+        // YouTube Music은 음악 앱이므로 제외 대상이 아니다(패키지에 youtube가 들어가 먼저 걸러 준다).
+        if (package!.StartsWith("com.google.android.apps.youtube.music", StringComparison.OrdinalIgnoreCase))
+            return false;
+        foreach (var token in VideoAppTokens)
+            if (package.Contains(token, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>현재 활성 세션의 앱 패키지 목록(설정 화면의 소스 선택 목록용). 최근 활성 순.</summary>
+    public IReadOnlyList<string> ActiveSessionPackages { get; private set; } = Array.Empty<string>();
+
+    /// <summary>선택된 소스 모드("auto" 또는 패키지명).</summary>
+    public string SourceMode => _sourceMode;
+
+    /// <summary>
+    /// 재생 소스를 적용한다(설정 저장 시 호출). Windows <c>NowPlayingService.SetSource</c>와 대칭.
+    /// 즉시 재선택하므로 다음 폴링을 기다리지 않는다.
+    /// </summary>
+    public void SetSource(string? mode, bool includeVideoApps)
+    {
+        _sourceMode = string.IsNullOrWhiteSpace(mode) ? AutoSource : mode!.Trim();
+        _includeVideoApps = includeVideoApps;
+        global::Android.Util.Log.Info("Musebase",
+            $"source: 모드={_sourceMode}, 영상앱포함={_includeVideoApps}");
+        if (_started) PollOnce();
+    }
+
     // 위치 떨림 완화 상태 (같은 곡 재생 중 작은 역행 흡수)
     private TimeSpan _smoothedPosition = TimeSpan.MinValue;
     private string? _smoothedTrackKey;
@@ -139,21 +191,35 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     }
 
     /// <summary>
-    /// 부착할 컨트롤러를 결정한다: 재생 중인 세션 우선, 없으면 목록 첫 세션
-    /// (GetActiveSessions는 최근 활성 순으로 정렬돼 있다). 바뀔 때만 재구독.
+    /// 부착할 컨트롤러를 결정한다: 후보(소스 모드·영상 앱 필터 통과) 중 재생 중인 세션 우선,
+    /// 없으면 후보 첫 세션(GetActiveSessions는 최근 활성 순). 바뀔 때만 재구독.
+    /// 필터에서 제외된 세션도 <see cref="ActiveSessionPackages"/>에는 남긴다(설정 화면 목록용).
     /// </summary>
     private void SelectBestController(IList<MediaController>? controllers)
     {
+        var packages = new List<string>();
         MediaController? best = null;
         if (controllers is not null)
         {
             foreach (var c in controllers)
             {
+                var package = c.PackageName;
+                if (!string.IsNullOrEmpty(package) && !packages.Contains(package!)) packages.Add(package!);
+
+                if (!IsCandidate(package)) continue;
                 best ??= c;
                 if (c.PlaybackState?.State == PlaybackStateCode.Playing) { best = c; break; }
             }
         }
+        ActiveSessionPackages = packages;
         AttachController(best);
+    }
+
+    /// <summary>이 세션을 가사 소스로 쓸지: 고정 모드면 패키지 일치, 자동이면 영상 앱 제외 여부.</summary>
+    private bool IsCandidate(string? package)
+    {
+        if (!IsAuto) return string.Equals(package, _sourceMode, StringComparison.OrdinalIgnoreCase);
+        return _includeVideoApps || !IsVideoApp(package);
     }
 
     private void AttachController(MediaController? controller)

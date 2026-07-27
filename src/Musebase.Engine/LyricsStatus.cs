@@ -36,4 +36,5 @@ public enum TranslationDisplayStatus
     Cache,       // 캐시에서 채움(오프라인/재재생)
     Quota,       // 한도 초과·요청 제한으로 실패
     Failed,      // 그 외 실패(인증/서버/네트워크)
+    Disabled,    // 사용자가 API 번역을 끔 — 새 요청 없이 캐시된 번역만 표시
 }

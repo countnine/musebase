@@ -155,6 +155,7 @@
   "translation.status.cache": "캐시 이용",
   "translation.status.quota": "한도 초과",
   "translation.status.failed": "실패",
+  "translation.status.disabled": "API 번역 꺼짐",
 
   "search.title": "가사 검색",
   "search.button": "검색",

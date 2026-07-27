@@ -37,6 +37,8 @@ namespace Musebase.Android.Services;
 public sealed class OverlayService : Service
 {
     public const string ActionStop = "com.countnine.musebase.action.STOP_OVERLAY";
+    /// <summary>알림바에서 API 번역을 켜고 끄는 액션(유료 사용량을 그 자리에서 끊기 위한 단축키).</summary>
+    public const string ActionToggleTranslation = "com.countnine.musebase.action.TOGGLE_TRANSLATION";
     private const string ChannelId = "musebase_overlay";
     private const int NotificationId = 0x0B45; // "OB" 느낌의 임의 상수
 
@@ -55,6 +57,12 @@ public sealed class OverlayService : Service
     private Action<DisplayLine?>? _onLineChanged;
     private Action<double>? _onProgress;
     private Action<bool>? _onPlayingChanged;
+    private Action<LyricsStatus>? _onStatusChanged;
+    private Action<TranslationDisplayStatus>? _onTranslationStatusChanged;
+    private Action<TrackInfo?>? _onTrackChanged;
+
+    // 알림바에 표시 중인 상태(곡/가사 상태) — 이벤트마다 최신값으로 갱신한다.
+    private LyricsStatus? _lastStatus;
 
     private bool _hasLine;
     private bool _isPlaying;
@@ -73,6 +81,12 @@ public sealed class OverlayService : Service
         {
             StopSelfCleanly();
             return StartCommandResult.NotSticky;
+        }
+
+        if (intent?.Action == ActionToggleTranslation)
+        {
+            ToggleApiTranslation();
+            return StartCommandResult.Sticky;
         }
 
         // 포그라운드 승격은 시작 직후(짧은 창) 안에 해야 한다.
@@ -163,14 +177,24 @@ public sealed class OverlayService : Service
         _onLineChanged = OnLineChanged;
         _onProgress = OnProgress;
         _onPlayingChanged = OnPlayingChanged;
+        // 알림바의 곡명·상태 갱신용 — 표시만 하고 엔진은 건드리지 않는다.
+        _onStatusChanged = status => { _lastStatus = status; UpdateNotification(); };
+        _onTranslationStatusChanged = _ => UpdateNotification();
+        _onTrackChanged = _ => UpdateNotification();
 
         _coordinator.CurrentLineChanged += _onLineChanged;
         _coordinator.LineProgressChanged += _onProgress;
+        _coordinator.StatusChanged += _onStatusChanged;
+        _coordinator.TranslationStatusChanged += _onTranslationStatusChanged;
         _source.IsPlayingChanged += _onPlayingChanged;
+        _source.TrackChanged += _onTrackChanged;
+
+        _lastStatus = _coordinator.CurrentStatus;
 
         // 현재 라인을 즉시 다시 발행받아 초기 표시(다음 틱에 CurrentLineChanged 재발화).
         _coordinator.RefreshCurrentLine();
         _lineView?.SetAnimating(_isPlaying);
+        UpdateNotification();
     }
 
     private void OnLineChanged(DisplayLine? line)
@@ -229,24 +253,64 @@ public sealed class OverlayService : Service
 
     private Notification BuildNotification()
     {
-        var stopIntent = new Intent(this, typeof(OverlayService)).SetAction(ActionStop);
         var flags = Build.VERSION.SdkInt >= BuildVersionCodes.S
             ? PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent
             : PendingIntentFlags.UpdateCurrent;
+
+        var stopIntent = new Intent(this, typeof(OverlayService)).SetAction(ActionStop);
         var stopPending = PendingIntent.GetService(this, 1, stopIntent, flags);
+        var toggleIntent = new Intent(this, typeof(OverlayService)).SetAction(ActionToggleTranslation);
+        var togglePending = PendingIntent.GetService(this, 2, toggleIntent, flags);
 
         // int-아이콘 Action.Builder는 API 23에서 폐기 — Icon 오버로드 사용.
         var stopIcon = Icon.CreateWithResource(this, global::Android.Resource.Drawable.IcMenuCloseClearCancel);
+        var toggleIcon = Icon.CreateWithResource(this, global::Android.Resource.Drawable.IcMenuRotate);
+
+        // 곡명이 있으면 제목 줄에, 아래 줄에 가사·번역 상태를 보여 준다.
+        var track = StatusText.Track(_source?.CurrentTrack ?? _coordinator?.CurrentTrack);
+        var status = StatusText.Combined(
+            _lastStatus ?? _coordinator?.CurrentStatus,
+            _coordinator?.CurrentTranslationStatus ?? TranslationDisplayStatus.None);
+
+        var apiOn = MusebaseApp.Instance?.Settings.ApiTranslationEnabled ?? true;
+        var toggleLabel = apiOn ? "번역 끄기" : "번역 켜기";
 
         var builder = new Notification.Builder(this, ChannelId)
-            .SetContentTitle("Musebase 가사 표시 중")
-            .SetContentText("다른 앱 위에 실시간 가사를 표시합니다")
+            .SetContentTitle(track ?? "Musebase 가사 표시 중")
+            .SetContentText(string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status)
+            .SetStyle(new Notification.BigTextStyle().BigText(
+                (track is null ? "" : track + "\n") +
+                (string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status)))
             .SetSmallIcon(global::Android.Resource.Drawable.IcMediaPlay)
             .SetOngoing(true)
+            .SetOnlyAlertOnce(true) // 곡이 바뀔 때마다 소리·진동으로 알리지 않는다
             .SetVisibility(NotificationVisibility.Public)
+            .AddAction(new Notification.Action.Builder(toggleIcon, toggleLabel, togglePending).Build())
             .AddAction(new Notification.Action.Builder(stopIcon, "정지", stopPending).Build());
 
         return builder.Build();
+    }
+
+    /// <summary>알림바 내용을 현재 곡·상태로 갱신한다(서비스가 떠 있을 때만).</summary>
+    private void UpdateNotification()
+    {
+        // 이미 StartForeground로 떠 있는 알림을 갱신하는 것이므로 엔진 구독 여부만 본다.
+        if (_coordinator is null) return;
+        var nm = (NotificationManager?)GetSystemService(NotificationService);
+        try { nm?.Notify(NotificationId, BuildNotification()); }
+        catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"notify: {e.Message}"); }
+    }
+
+    /// <summary>알림바 액션: API 번역 사용을 토글하고 즉시 반영한다(켤 때는 현재 곡을 바로 번역).</summary>
+    private void ToggleApiTranslation()
+    {
+        if (MusebaseApp.Instance is not { } app) return;
+        var next = !app.Settings.ApiTranslationEnabled;
+        app.Settings.ApiTranslationEnabled = next;
+        app.ApplyTranslationSettings(retranslateNow: next);
+        global::Android.Util.Log.Info("Musebase", $"notification: API 번역 {(next ? "켬" : "끔")}");
+        UpdateNotification();
+        Toast.MakeText(this, next ? "API 번역 켬" : "API 번역 끔 — 캐시된 번역만 표시", ToastLength.Short)?.Show();
     }
 
     // ---- 정리 ----
@@ -271,13 +335,23 @@ public sealed class OverlayService : Service
         {
             if (_onLineChanged is not null) _coordinator.CurrentLineChanged -= _onLineChanged;
             if (_onProgress is not null) _coordinator.LineProgressChanged -= _onProgress;
+            if (_onStatusChanged is not null) _coordinator.StatusChanged -= _onStatusChanged;
+            if (_onTranslationStatusChanged is not null)
+                _coordinator.TranslationStatusChanged -= _onTranslationStatusChanged;
         }
-        if (_source is not null && _onPlayingChanged is not null)
-            _source.IsPlayingChanged -= _onPlayingChanged;
+        if (_source is not null)
+        {
+            if (_onPlayingChanged is not null) _source.IsPlayingChanged -= _onPlayingChanged;
+            if (_onTrackChanged is not null) _source.TrackChanged -= _onTrackChanged;
+        }
 
         _onLineChanged = null;
         _onProgress = null;
         _onPlayingChanged = null;
+        _onStatusChanged = null;
+        _onTranslationStatusChanged = null;
+        _onTrackChanged = null;
+        _lastStatus = null;
         _coordinator = null;
         _source = null;
     }

@@ -81,7 +81,7 @@ public sealed class MainActivity : Activity
         root.AddView(_overlayToggleButton);
 
         // ---- 번역 설정(엔진/DeepL 키/대상 언어) ----
-        var settingsButton = new Button(this) { Text = "번역 설정" };
+        var settingsButton = new Button(this) { Text = "설정 (재생 소스 · 번역)" };
         settingsButton.Click += (_, _) => StartActivity(new Intent(this, typeof(SettingsActivity)));
         root.AddView(settingsButton);
 
@@ -171,30 +171,9 @@ public sealed class MainActivity : Activity
     private void RenderLyricsStatus()
     {
         if (_lyricsStatusText is null) return;
-        var s = _lastLyricsStatus;
-        var baseText = s.Kind switch
-        {
-            LyricsStatusKind.NoTrack => "재생 중인 곡 없음",
-            LyricsStatusKind.HiddenByUser => "이 곡은 틀린 가사로 표시되어 숨김",
-            LyricsStatusKind.Cache => $"가사: 캐시 · {s.Service}",
-            LyricsStatusKind.Searching => "가사 검색 중…",
-            LyricsStatusKind.Found => $"가사: {s.Service} (품질 {s.Quality ?? 0:0.00})",
-            LyricsStatusKind.NotFound => "가사를 찾지 못했습니다",
-            LyricsStatusKind.Wrong => "틀린 가사로 표시됨",
-            LyricsStatusKind.Manual => $"가사: 수동 선택 · {s.Service}",
-            LyricsStatusKind.Edited => "가사: 사용자 편집",
-            _ => "",
-        };
-        var suffix = (MusebaseApp.Instance?.Coordinator.CurrentTranslationStatus ?? TranslationDisplayStatus.None) switch
-        {
-            TranslationDisplayStatus.Translating => " · 번역: 번역 중",
-            TranslationDisplayStatus.Live => " · 번역: 정상 번역",
-            TranslationDisplayStatus.Cache => " · 번역: 캐시 이용",
-            TranslationDisplayStatus.Quota => " · 번역: 한도 초과",
-            TranslationDisplayStatus.Failed => " · 번역: 실패",
-            _ => "",
-        };
-        _lyricsStatusText.Text = baseText + suffix;
+        _lyricsStatusText.Text = Services.StatusText.Combined(
+            _lastLyricsStatus,
+            MusebaseApp.Instance?.Coordinator.CurrentTranslationStatus ?? TranslationDisplayStatus.None);
     }
 
     /// <summary>오버레이 그리기 권한 요청(시스템 설정의 "다른 앱 위에 표시" 화면으로 이동).</summary>
