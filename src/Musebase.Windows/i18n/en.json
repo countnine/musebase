@@ -155,6 +155,7 @@
   "translation.status.cache": "cached",
   "translation.status.quota": "quota exceeded",
   "translation.status.failed": "failed",
+  "translation.status.disabled": "API translation off",
 
   "search.title": "Search lyrics",
   "search.button": "Search",

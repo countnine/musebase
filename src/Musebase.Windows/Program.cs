@@ -690,17 +690,27 @@ internal static class Program
                     TranslationDisplayStatus.Cache => "translation.status.cache",
                     TranslationDisplayStatus.Quota => "translation.status.quota",
                     TranslationDisplayStatus.Failed => "translation.status.failed",
+                    TranslationDisplayStatus.Disabled => "translation.status.disabled",
                     _ => null, // None → 표기 안 함
                 };
                 return key is null ? "" : Loc.T("translation.status.suffix", ("status", Loc.T(key)));
             }
+
+            // 트레이 메뉴가 곡명·상태 때문에 화면 폭만큼 길어지지 않도록 일정 폭에서 줄바꿈한다.
+            // (MenuItem.Header에 문자열 대신 줄바꿈되는 TextBlock을 넣는다 — 매번 새 인스턴스여야 한다.)
+            static object MenuText(string text) => new TextBlock
+            {
+                Text = text,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 360,
+            };
 
             // 가사 상태 + 번역 상태를 합쳐 트레이/미니창에 표시(둘 중 하나만 바뀌어도 재렌더).
             void RenderStatus()
             {
                 var text = (coordinator.CurrentStatus is { } cs ? LocalizeStatus(cs) : "")
                     + TranslationSuffix(coordinator.CurrentTranslationStatus);
-                trackItem.Header = text;
+                trackItem.Header = MenuText(text);
                 if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
                 miniWindow?.SetStatus(text);
             }
@@ -783,7 +793,7 @@ internal static class Program
                 UpdateUpdateItemText();
                 if (coordinator.CurrentTrack is null)
                 {
-                    trackItem.Header = Loc.T("status.noTrack");
+                    trackItem.Header = MenuText(Loc.T("status.noTrack"));
                     if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.version", ("version", updater.CurrentVersion.ToString()));
                 }
                 // 미니창의 곡/상태 텍스트도 새 언어로 다시 현지화(버튼 라벨은 MiniWindow가 자체 처리).
