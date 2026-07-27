@@ -1,7 +1,12 @@
 # PROGRESS — Musebase for Windows (구 LyricsX for Windows)
 
-> **상태: windows-v0.14.0 (2026-07-27)** — Google Cloud Translation 엔진 + 엔진별 API 키 + 트레이 "API 번역 사용" 토글. 이전 0.13.0(번역 상태 표기)·0.12.0(브라우저 디스플레이) 포함.
+> **상태: windows-v0.15.0 (2026-07-27)** — "API 번역 꺼짐" 상태 표기 + 트레이 곡명·상태 줄바꿈. 이전 0.14.0(Google 번역 엔진·API 번역 토글)·0.13.0(번역 상태 표기) 포함.
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
+
+## v0.15.0 추가분
+- **"API 번역 꺼짐" 표기** — 트레이 토글로 API 번역을 끄면 "· 번역: API 번역 꺼짐"으로 표시(이전에는 "캐시 이용"과 구분되지 않았다). 코어 `TranslationDisplayStatus.Disabled` 추가, 꺼진 상태에서는 "번역 중"으로 깜빡이지 않는다.
+- **트레이 메뉴 줄바꿈** — 곡명·검색 상태가 길면 트레이 메뉴가 화면 폭만큼 늘어나던 것을 최대 폭 360 DIP + 자동 줄바꿈으로 수정.
+- (Android 병행: 알림바에 곡명·가사/번역 상태 표시 + "번역 끄기/켜기" 액션, 재생 소스 선택(영상·브라우저 앱 기본 제외 — YouTube 오인식 방지), Android 13+ 알림 권한 런타임 요청 — PR #17·#18)
 
 ## v0.14.0 추가분
 - **Google Cloud Translation 엔진** — Translation API v2(API 키). 원문 자동 감지, DeepL식 대상 언어 코드를 Google 코드로 변환(EN-US→en, ZH-HANT→zh-TW 등), 응답 HTML 엔티티 디코드. 레지스트리 한 줄 등록으로 Windows·Android 설정에 함께 노출.
