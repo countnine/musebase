@@ -53,6 +53,8 @@ public sealed class MusebaseApp : Application
 
         Source = new AndroidNowPlayingSource(this);
         Settings = new AndroidSettings(this);
+        // 재생 소스(자동/특정 앱 고정, 영상 앱 제외)를 시작 전에 적용한다.
+        Source.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps);
 
         _dbPath = Path.Combine(FilesDir!.AbsolutePath, "translations.db");
 
@@ -105,6 +107,10 @@ public sealed class MusebaseApp : Application
     /// <see cref="LyricsEngineFactory.ApplyTranslation"/>이 실패 라우팅·대상 언어·현재 라인 재발행을
     /// 처리한다. 새 엔진은 <b>다음 곡/재검색부터</b> 적용된다(현재 곡의 기존 tr 태그는 유지 — Windows와 동일).
     /// </summary>
+    /// <summary>재생 소스 설정을 다시 적용한다(설정 화면 저장 시 — 재시작 불필요).</summary>
+    public void ApplyPlaybackSourceSettings() =>
+        Source?.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps);
+
     /// <param name="retranslateNow">
     /// true면 현재 곡을 즉시 다시 번역한다(API 번역을 껐다가 다시 켠 직후 등 —
     /// 다음 곡을 기다리지 않고 바로 채우기 위해). Windows 트레이 토글과 같은 동작.

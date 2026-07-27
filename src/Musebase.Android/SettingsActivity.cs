@@ -18,7 +18,7 @@ namespace Musebase.Android;
 /// Exported=false — 앱 내부에서만 여는 화면이다.
 /// </summary>
 [Activity(
-    Label = "번역 설정",
+    Label = "Musebase 설정",
     Name = "com.countnine.musebase.SettingsActivity",
     Exported = false)]
 public sealed class SettingsActivity : Activity
@@ -63,6 +63,9 @@ public sealed class SettingsActivity : Activity
     private TextView? _fallbackNote;
     private CheckBox? _apiTranslationCheck;
     private TextView? _apiNote;
+    private Spinner? _sourceSpinner;
+    private (string Id, string Display)[] _sourceItems = Array.Empty<(string, string)>();
+    private CheckBox? _includeVideoCheck;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -73,9 +76,36 @@ public sealed class SettingsActivity : Activity
         var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
         root.SetPadding(48, 96, 48, 48);
 
-        var title = new TextView(this) { Text = "번역 설정" };
+        var title = new TextView(this) { Text = "설정" };
         title.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 20f);
         root.AddView(title);
+
+        // ---- 재생 소스(어느 앱의 재생을 따라갈지) ----
+        root.AddView(Label("재생 소스", topPad: 40));
+        _sourceItems = BuildSourceItems(settings);
+        _sourceSpinner = new Spinner(this);
+        var sourceAdapter = new ArrayAdapter<string>(
+            this, global::Android.Resource.Layout.SimpleSpinnerItem,
+            Array.ConvertAll(_sourceItems, s => s.Display));
+        sourceAdapter.SetDropDownViewResource(global::Android.Resource.Layout.SimpleSpinnerDropDownItem);
+        _sourceSpinner.Adapter = sourceAdapter;
+        _sourceSpinner.SetSelection(IndexOfSource(settings?.PlaybackSource));
+        root.AddView(_sourceSpinner);
+
+        _includeVideoCheck = new CheckBox(this)
+        {
+            Text = "영상·브라우저 앱도 소스로 사용",
+            Checked = settings?.IncludeVideoApps == true,
+        };
+        root.AddView(_includeVideoCheck);
+
+        var sourceNote = new TextView(this)
+        {
+            Text = "끄면 YouTube·브라우저 등 영상 앱의 재생은 무시합니다"
+                 + "(영상에 엉뚱한 곡의 가사가 뜨는 것을 막습니다). YouTube Music은 음악 앱이라 항상 포함됩니다.",
+        };
+        sourceNote.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        root.AddView(sourceNote);
 
         // ---- 번역 엔진 ----
         root.AddView(Label("번역 엔진", topPad: 40));
@@ -204,11 +234,68 @@ public sealed class SettingsActivity : Activity
         var apiTurnedOn = apiEnabled && !settings.ApiTranslationEnabled;
         settings.ApiTranslationEnabled = apiEnabled;
 
+        settings.PlaybackSource = SelectedSourceId();
+        settings.IncludeVideoApps = _includeVideoCheck?.Checked == true;
+
+        MusebaseApp.Instance?.ApplyPlaybackSourceSettings();
         MusebaseApp.Instance?.ApplyTranslationSettings(retranslateNow: apiTurnedOn);
 
         Toast.MakeText(this, "저장됨 — 다음 곡부터 적용됩니다.", ToastLength.Long)?.Show();
         Finish();
     }
+
+    /// <summary>
+    /// 재생 소스 선택 항목: "자동 감지" + 현재 감지된 세션 앱들(+ 목록에 없는 저장값).
+    /// 표시는 앱 이름을 쓰되, 조회에 실패하면 패키지명을 그대로 보여준다.
+    /// </summary>
+    private (string Id, string Display)[] BuildSourceItems(Services.AndroidSettings? settings)
+    {
+        var items = new List<(string, string)>
+        {
+            (Services.AndroidNowPlayingSource.AutoSource, "자동 감지 (재생 중인 앱)"),
+        };
+
+        var packages = new List<string>(
+            MusebaseApp.Instance?.Source.ActiveSessionPackages ?? (IReadOnlyList<string>)Array.Empty<string>());
+        var saved = settings?.PlaybackSource;
+        if (!string.IsNullOrWhiteSpace(saved)
+            && !string.Equals(saved, Services.AndroidNowPlayingSource.AutoSource, StringComparison.OrdinalIgnoreCase)
+            && !packages.Contains(saved!))
+        {
+            packages.Add(saved!); // 지금은 안 뜨는 앱이어도 선택은 유지한다
+        }
+
+        foreach (var package in packages) items.Add((package, AppLabel(package)));
+        return items.ToArray();
+    }
+
+    private string AppLabel(string package)
+    {
+        try
+        {
+            var pm = PackageManager;
+            if (pm is null) return package;
+            var info = pm.GetApplicationInfo(package, 0);
+            return $"{pm.GetApplicationLabel(info)} ({package})";
+        }
+        catch
+        {
+            return package; // 제거된 앱 등 — 패키지명으로 표시
+        }
+    }
+
+    private int IndexOfSource(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return 0;
+        for (var i = 0; i < _sourceItems.Length; i++)
+            if (string.Equals(_sourceItems[i].Id, id, StringComparison.OrdinalIgnoreCase)) return i;
+        return 0;
+    }
+
+    private string SelectedSourceId() =>
+        _sourceItems.Length == 0
+            ? Services.AndroidNowPlayingSource.AutoSource
+            : _sourceItems[Math.Clamp(_sourceSpinner?.SelectedItemPosition ?? 0, 0, _sourceItems.Length - 1)].Id;
 
     /// <summary>선택 중인 엔진 id(스피너 위치 → 목록).</summary>
     private string SelectedEngineId() =>
