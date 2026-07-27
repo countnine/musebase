@@ -389,7 +389,9 @@ public sealed class LyricsCoordinator : IDisposable
         if (TargetIsChinese) { SetTranslationStatus(TranslationDisplayStatus.None); return; }
         if (Translation is not { IsEnabled: true } service) { SetTranslationStatus(TranslationDisplayStatus.None); return; }
         _lastTranslationFailure = null;
-        SetTranslationStatus(TranslationDisplayStatus.Translating);
+        // API 번역을 껐으면 "번역 중"으로 깜빡이지 않고 처음부터 꺼짐으로 표시한다.
+        SetTranslationStatus(service.CacheOnly
+            ? TranslationDisplayStatus.Disabled : TranslationDisplayStatus.Translating);
         try
         {
             var stats = new TranslationRunStats();
@@ -401,7 +403,9 @@ public sealed class LyricsCoordinator : IDisposable
             // 이번에 API로 채웠으면 정상(Live), 그 외(전부 캐시/이미 번역됨)는 캐시.
             var apiFilled = changed - stats.CacheHits;          // 이번에 API로 채운 라인 수
             var apiNeeded = stats.LinesNeeded - stats.CacheHits; // API로 채워야 했던 라인 수
-            if (_lastTranslationFailure is { } f && apiFilled < apiNeeded)
+            if (service.CacheOnly)
+                SetTranslationStatus(TranslationDisplayStatus.Disabled); // 사용자가 끔 — 캐시로만 채웠다
+            else if (_lastTranslationFailure is { } f && apiFilled < apiNeeded)
                 SetTranslationStatus(f.Kind is TranslatorFailureKind.Quota or TranslatorFailureKind.RateLimit
                     ? TranslationDisplayStatus.Quota : TranslationDisplayStatus.Failed);
             else if (apiFilled > 0)
