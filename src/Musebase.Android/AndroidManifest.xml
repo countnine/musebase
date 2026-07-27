@@ -20,7 +20,9 @@
   <!-- 오버레이를 유지하는 포그라운드 서비스(Android 8+). specialUse 타입 → 전용 권한 필요(Android 14+). -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-  <!-- 포그라운드 알림 표시(Android 13+). FGS 알림은 미허용이어도 표시되지만 명시해 둔다. -->
+  <!-- 포그라운드 알림 표시(Android 13+). 런타임 권한이라 MainActivity에서 직접 요청해야 하며,
+       거부 상태면 포그라운드 서비스 알림(곡명·상태·번역 토글)이 아예 표시되지 않는다
+       (서비스·오버레이 자체는 정상 동작). -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <!-- android:name(커스텀 Application)은 MusebaseApp.cs의 [Application] 특성에서 병합된다. -->
   <application

@@ -27,8 +27,18 @@ public sealed class MainActivity : Activity
 {
     private const int UiRefreshMs = 1000;
 
+    /// <summary>알림 권한(Android 13+) 요청 코드.</summary>
+    private const int RequestPostNotifications = 0x9001;
+
+    /// <summary>
+    /// 알림 표시 권한 이름. <c>Manifest.Permission.PostNotifications</c> 상수는 API 33 전용이라
+    /// (SupportedOSPlatformVersion 26에서 CA1416) 문자열로 직접 쓴다 — 값은 동일하다.
+    /// </summary>
+    private const string PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS";
+
     private readonly Handler _handler = new(Looper.MainLooper!);
     private TextView? _permissionText;
+    private TextView? _notificationPermissionText;
     private TextView? _overlayPermissionText;
     private Button? _overlayToggleButton;
     private TextView? _lyricsStatusText;
@@ -66,6 +76,17 @@ public sealed class MainActivity : Activity
         permissionButton.Click += (_, _) =>
             StartActivity(new Intent(global::Android.Provider.Settings.ActionNotificationListenerSettings));
         root.AddView(permissionButton);
+
+        // ---- 알림 표시 권한(Android 13+) ----
+        // 없으면 포그라운드 서비스 알림(곡명·상태·번역 토글)이 아예 표시되지 않고,
+        // 시스템의 "다른 앱 위에 표시됨" 알림만 남는다.
+        _notificationPermissionText = new TextView(this);
+        _notificationPermissionText.SetPadding(0, 32, 0, 0);
+        root.AddView(_notificationPermissionText);
+
+        var notificationPermissionButton = new Button(this) { Text = "알림 표시 권한 허용" };
+        notificationPermissionButton.Click += (_, _) => RequestNotificationPermission();
+        root.AddView(notificationPermissionButton);
 
         // ---- 오버레이(다른 앱 위 표시) ----
         _overlayPermissionText = new TextView(this);
@@ -176,6 +197,60 @@ public sealed class MainActivity : Activity
             MusebaseApp.Instance?.Coordinator.CurrentTranslationStatus ?? TranslationDisplayStatus.None);
     }
 
+    /// <summary>알림 표시 권한이 있는지(Android 12 이하는 항상 true).</summary>
+    private bool HasNotificationPermission =>
+        Build.VERSION.SdkInt < BuildVersionCodes.Tiramisu
+        || CheckSelfPermission(PostNotificationsPermission)
+           == global::Android.Content.PM.Permission.Granted;
+
+    /// <summary>
+    /// 알림 표시 권한 요청(Android 13+). 거부돼 있으면 시스템 대화상자를 띄우고,
+    /// "다시 묻지 않음"으로 막힌 경우를 대비해 실패 시 앱 알림 설정 화면으로 유도한다.
+    /// </summary>
+    private void RequestNotificationPermission()
+    {
+        if (HasNotificationPermission)
+        {
+            Toast.MakeText(this, "알림 표시 권한이 이미 허용돼 있습니다.", ToastLength.Short)?.Show();
+            return;
+        }
+
+        // 한 번 거부된 뒤에는 시스템 대화상자가 뜨지 않으므로 설정 화면으로 보낸다.
+        if (ShouldShowRequestPermissionRationale(PostNotificationsPermission))
+        {
+            StartActivity(new Intent(global::Android.Provider.Settings.ActionAppNotificationSettings)
+                .PutExtra(global::Android.Provider.Settings.ExtraAppPackage, PackageName));
+            return;
+        }
+
+        RequestPermissions(
+            new[] { PostNotificationsPermission }, RequestPostNotifications);
+    }
+
+    public override void OnRequestPermissionsResult(
+        int requestCode, string[] permissions, global::Android.Content.PM.Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != RequestPostNotifications) return;
+
+        UpdateOverlayControls();
+        if (!HasNotificationPermission)
+        {
+            Toast.MakeText(this,
+                "알림을 허용하지 않으면 곡명·번역 상태 알림이 표시되지 않습니다(오버레이는 정상 동작).",
+                ToastLength.Long)?.Show();
+            return;
+        }
+
+        // 권한을 이제 받았는데 서비스가 이미 떠 있으면, 알림이 뜨도록 서비스를 한 번 깨운다.
+        if (Services.OverlayService.IsRunning)
+        {
+            var intent = new Intent(this, typeof(Services.OverlayService));
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(intent);
+            else StartService(intent);
+        }
+    }
+
     /// <summary>오버레이 그리기 권한 요청(시스템 설정의 "다른 앱 위에 표시" 화면으로 이동).</summary>
     private void RequestOverlayPermission()
     {
@@ -200,6 +275,9 @@ public sealed class MainActivity : Activity
                 RequestOverlayPermission();
                 return;
             }
+            // 알림 권한이 없으면 서비스는 돌지만 곡명·상태 알림이 표시되지 않는다 → 먼저 요청.
+            if (!HasNotificationPermission) RequestNotificationPermission();
+
             var intent = new Intent(this, typeof(Services.OverlayService));
             if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(intent);
             else StartService(intent);
@@ -215,6 +293,12 @@ public sealed class MainActivity : Activity
             _overlayPermissionText.Text = global::Android.Provider.Settings.CanDrawOverlays(this)
                 ? "다른 앱 위 표시: 허용됨 ✓"
                 : "다른 앱 위 표시: 미허용 — '오버레이 권한 허용'을 눌러 설정에서 켜 주세요.";
+        }
+        if (_notificationPermissionText is not null)
+        {
+            _notificationPermissionText.Text = HasNotificationPermission
+                ? "알림 표시: 허용됨 ✓ (곡명·번역 상태 알림)"
+                : "알림 표시: 미허용 — 곡명·상태 알림이 뜨지 않습니다. 아래 버튼으로 허용해 주세요.";
         }
         if (_overlayToggleButton is not null)
             _overlayToggleButton.Text = Services.OverlayService.IsRunning
