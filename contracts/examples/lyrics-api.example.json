@@ -1,0 +1,15 @@
+{
+  "_comment": "GET /v1/lyrics?title=Love%20Story&artist=Taylor%20Swift 의 200 응답 예시. PUT 요청은 title/artist/lrc/service/origin 만 보낸다.",
+  "key": "love story|taylor swift",
+  "title": "Love Story",
+  "artist": "Taylor Swift",
+  "lrc": "[ti:Love Story]\n[ar:Taylor Swift]\n[00:12.30]We were both young when I first saw you\n[00:12.30][tr:ko]널 처음 봤을 때 우린 둘 다 어렸지\n[00:17.80]I close my eyes and the flashback starts\n[00:17.80][tr:ko]눈을 감으면 그 장면이 시작돼\n",
+  "service": "LRCLIB",
+  "origin": "provider",
+  "langs": ["ko"],
+  "lineCount": 2,
+  "hasInlineTimeTags": false,
+  "revision": 3,
+  "updatedAt": "2026-07-28T13:05:00Z",
+  "match": "cleaned"
+}

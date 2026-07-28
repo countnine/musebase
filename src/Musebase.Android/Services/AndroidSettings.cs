@@ -27,6 +27,8 @@ public sealed class AndroidSettings
     private const string KeyPlaybackSource = "PlaybackSource";
     private const string KeyIncludeVideoApps = "IncludeVideoApps";
     private const string KeyPreferredSources = "PreferredSources";
+    private const string KeyLyricsServerEndpoint = "LyricsServerEndpoint";
+    private const string KeyLyricsServerToken = "LyricsServerToken";
     private const string KeyOverlayBubbleMode = "OverlayBubbleMode";
     private const string KeyOverlayPeekOnNewLine = "OverlayPeekOnNewLine";
     private const string KeyOverlayRatioX = "OverlayRatioX";
@@ -208,6 +210,28 @@ public sealed class AndroidSettings
             editor.PutBoolean(KeyIncludeVideoApps, value);
             editor.Apply();
         }
+    }
+
+    /// <summary>
+    /// 개인 가사 서버 주소(예: <c>https://oracle.example.ts.net</c>). 비면 사용하지 않는다.
+    /// 로컬 캐시 미스와 제공자 검색 사이에 이 서버를 조회하고 새로 찾은 가사를 올린다
+    /// (계약: <c>contracts/lyrics-api.md</c>). 못 붙으면 조용히 기존 동작으로 강등된다.
+    /// **Android는 평문 HTTP가 기본 차단되므로 https 주소를 쓴다**(Tailscale의 `tailscale serve` 권장).
+    /// </summary>
+    public string? LyricsServerEndpoint
+    {
+        get => NullIfBlank(_prefs.GetString(KeyLyricsServerEndpoint, null));
+        set => Put(KeyLyricsServerEndpoint, value);
+    }
+
+    /// <summary>
+    /// 가사 서버 공유 토큰. API 키와 같은 저장 한계를 갖는다(앱 private 저장이며 암호화는 아님) —
+    /// 테일넷 내부에서만 쓰는 개인 토큰이라는 전제로 수용한다.
+    /// </summary>
+    public string? LyricsServerToken
+    {
+        get => NullIfBlank(_prefs.GetString(KeyLyricsServerToken, null));
+        set => Put(KeyLyricsServerToken, value);
     }
 
     /// <summary>

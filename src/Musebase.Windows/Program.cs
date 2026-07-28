@@ -83,7 +83,10 @@ internal static class Program
                     && !string.Equals(settings.EffectiveTranslationEngine, Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine, StringComparison.OrdinalIgnoreCase)
                         ? Musebase.Core.Translation.TranslatorRegistry.DefaultFreeEngine : null,
                 // 트레이 토글: 끄면 API 호출 없이 캐시된 번역만 표시(유료 사용량 차단).
-                ApiTranslationEnabled: settings.ApiTranslationEnabled);
+                ApiTranslationEnabled: settings.ApiTranslationEnabled,
+                // 개인 가사 서버(선택) — 비면 사용하지 않는다.
+                LyricsServerEndpoint: settings.LyricsServerEndpoint,
+                LyricsServerToken: settings.LyricsServerToken);
 
             Log.Write($"[sources] 활성 가사 소스: {string.Join(", ", settings.EnabledLyricsSources)}");
             Log.Write($"[translate] 엔진={settings.EffectiveTranslationEngine}");
@@ -426,6 +429,8 @@ internal static class Program
                     overlay.ApplyStyle();
                     // 선호 음악 앱이 바뀌었을 수 있으므로 소스 선택도 다시 적용한다.
                     ApplySource(settings.PlaybackSource, settings.IncludeBrowsers);
+                    // 가사 서버 주소·토큰 변경도 재시작 없이 반영한다.
+                    LyricsEngineFactory.ApplyServer(coordinator, CurrentConfig(), Log.Write);
                 },
                 onCheckUpdates: () => _ = RunUpdateCheckAsync(userInitiated: true));
                 settingsWindow.Show();

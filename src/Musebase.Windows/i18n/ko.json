@@ -1,4 +1,7 @@
 {
+  "settings.lyricsServer.header": "개인 가사 서버 (선택)",
+  "settings.lyricsServer.hint": "주소를 넣으면 가사 제공자를 검색하기 전에 이 서버에 먼저 물어보고, 새로 찾은 가사(번역 포함)를 서버에 올려 다른 기기가 다시 검색·번역하지 않게 합니다. 비우면 사용하지 않습니다. 예: https://oracle.example.ts.net",
+  "settings.lyricsServer.token": "서버 토큰",
   "settings.tab.sources": "소스",
   "settings.preferredSources.header": "선호 음악 앱 (재생 소스)",
   "settings.preferredSources.hint": "하나 이상 고르면 그 앱들만 가사 소스로 씁니다 — 팟캐스트·영상 앱은 무시됩니다. 아무것도 고르지 않으면 자동 감지입니다(브라우저·영상·팟캐스트 앱은 자동으로 제외). 실행 중이 아닌 앱은 한 번 재생하기 전에는 목록에 뜨지 않습니다.",

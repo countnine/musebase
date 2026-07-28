@@ -1,0 +1,99 @@
+# 가사 서버 HTTP API 계약 (v1)
+
+개인용 가사 캐시 서버의 **언어 중립 계약**. 서버(`src/Musebase.Server`)와 클라이언트
+(`src/Musebase.Core/Search/HttpRemoteLyricsCache.cs`)는 이 문서를 단일 진실로 삼는다.
+장래 Swift(`apple/`, 코드 비공유)가 붙을 때는 이 문서가 유일한 기준이 된다.
+
+- 전송 형식: JSON, **camelCase 필드명** — `PlaybackViewState`(PascalCase)와 **다르다**.
+  설정 파일(`settings.json`)·텔레메트리 Worker와 같은 규칙이다. 혼동 주의.
+- 시각은 ISO-8601 UTC 문자열(`2026-07-28T13:05:00Z`).
+- 오류 응답은 `{"error":"..."}`.
+- 모든 경로에 `/v1` 프리픽스.
+
+## 인증
+
+`/v1/healthz`를 제외한 모든 요청은 공유 토큰을 요구한다.
+
+```
+Authorization: Bearer <서버가 발급한 임의 문자열>
+```
+
+불일치·누락은 `401 {"error":"unauthorized"}`. 서버는 고정시간 비교로 검사한다.
+1차 경계는 네트워크(테일넷 내부 전용), 토큰은 2차 방어선이다.
+
+## 엔드포인트
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/v1/healthz` | 무인증. 본문 `ok` |
+| GET | `/v1/lyrics?title=&artist=` | 가사 1건 조회. 히트 `200 LyricsEntry`, 미스 `404` |
+| PUT | `/v1/lyrics` | 가사 1건 업서트. 본문 `LyricsEntry`(요청 필드만) |
+| GET | `/v1/stats` | 곡 수·최근 갱신(검증·디버깅용) |
+
+요청 본문 상한은 256KB, `Content-Type: application/json`이 아니면 `415`.
+
+## LyricsEntry
+
+| 필드 | 타입 | 방향 | 의미 |
+|---|---|---|---|
+| `key` | string | 응답 | 서버가 계산한 정규화 키 |
+| `title` | string | 요청·응답 | 곡 제목(원본 표기 그대로) |
+| `artist` | string | 요청·응답 | 아티스트(원본 표기 그대로) |
+| `lrc` | string | 요청·응답 | 확장 LRC 전문. 번역 첨부(`[tr:ko]`)를 포함하며 **무손실로 보관**된다 |
+| `service` | string? | 요청·응답 | 출처 제공자명(`LRCLIB` 등) 또는 `사용자 편집` |
+| `origin` | string | 요청·응답 | `provider` \| `user`. 병합 정책 입력 |
+| `langs` | string[] | 응답 | LRC에 실린 번역 언어 태그(서버가 파싱해 채움). 예 `["ko","zh"]` |
+| `lineCount` | int | 응답 | 가사 줄 수 |
+| `hasInlineTimeTags` | bool | 응답 | 글자 단위 타임태그(카라오케) 유무 |
+| `revision` | int | 응답 | 서버 단조 증가. 갱신될 때마다 +1 |
+| `updatedAt` | string | 응답 | ISO-8601 UTC |
+| `match` | string | 응답 | `exact` \| `cleaned` — 어떤 키로 맞았는지 |
+
+`langs`가 실용적으로 중요하다. 서버 히트인데 내 대상 언어 번역이 없으면 클라이언트는
+그대로 채택한 뒤 부족한 줄만 번역해 다시 올린다 — 서버가 점점 다국어로 살찐다.
+
+### PUT 응답
+
+| 상태 | 본문 | 의미 |
+|---|---|---|
+| 200 | `LyricsEntry` | 저장됨(갱신된 `revision` 포함) |
+| 202 | `{"accepted":false,"reason":"..."}` | 병합 정책이 거부. `reason`은 `user-edit-protected` \| `poorer-content` |
+
+## 키 정규화
+
+클라이언트는 **항상 원본 title/artist를 그대로** 보낸다. 키 계산은 전적으로 서버 몫이며,
+정규화 정책은 서버 배포만으로 진화시킬 수 있다.
+
+1. **정확 키** = `LyricsCacheStore.MakeKey(title, artist)` — 소문자화 + 공백 축약 후 `제목|아티스트`.
+   클라이언트의 로컬 캐시 키와 **같은 코드**로 계산하므로 정의상 어긋나지 않는다.
+2. **느슨한 키** = `SearchTermCleaner.Variants()`가 만드는 정제 변형(피처링·리마스터 표기 등 제거)에
+   같은 `MakeKey`를 적용한 것. 기기마다 메타데이터 표기가 달라도(`Love Story (Taylor's Version)` vs
+   `Love Story`) 같은 곡으로 맞추기 위한 것이다.
+3. 조회는 **정확 키 → 미스면 느슨한 키** 순이며, 응답의 `match`로 어느 쪽인지 알린다.
+
+## 병합 정책 (PUT)
+
+서버가 순서대로 판정한다.
+
+1. 행이 없으면 저장(`revision = 1`).
+2. 저장본이 `origin=user`인데 들어온 것이 `origin=provider`면 **거부**(`user-edit-protected`).
+   손으로 고친 가사를 다른 기기의 자동 검색이 덮어쓰는 사고를 막는다.
+3. 둘 다 `provider`면 **풍부함 비교** — 줄 수, 글자 단위 타임태그 유무, 번역 언어 수를 가중합해
+   들어온 쪽이 명백히 빈약하면 거부(`poorer-content`). 글자 단위 카라오케 가사가 줄 단위로
+   퇴화하는 것을 막는다.
+4. 그 외에는 나중 것 우선(`revision++`). 번역은 점진적으로 채워지므로 "먼저 것 유지"는
+   누적을 막는다.
+
+만료(TTL)는 두지 않는다. 삭제 API도 없다 — 한 기기의 "틀린 가사" 판정이 모든 기기의 캐시를
+지우지 않도록, 억제는 로컬에만 남긴다.
+
+## 예시
+
+`contracts/examples/lyrics-api.example.json` 참고.
+
+## 변경 규칙
+
+- **필드 추가**는 하위 호환: 수신 측은 모르는 필드를 무시하고, 새 필드는 nullable이거나 기본값을 갖는다.
+  이 경우 버전(`/v1`)은 유지한다.
+- **의미 변경·필드 삭제·경로 변경**은 호환 파괴 → `/v2`로 올리고 ADR에 기록한다.
+- 이 문서와 서버·클라이언트 구현은 **같은 PR에서** 갱신한다.

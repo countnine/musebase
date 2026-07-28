@@ -19,7 +19,11 @@ public sealed record EngineConfig(
     string? TranslationFallbackEngineId = null,
     // false면 번역 API를 호출하지 않고 캐시된 번역만 표시한다(유료 API 사용량 차단 토글).
     // 엔진/키 설정은 그대로 유지되므로 다시 켜면 즉시 원래대로 동작한다.
-    bool ApiTranslationEnabled = true);
+    bool ApiTranslationEnabled = true,
+    // 개인 가사 서버(선택). 비면 사용하지 않는다 — 계약은 contracts/lyrics-api.md.
+    string? LyricsServerEndpoint = null,
+    string? LyricsServerToken = null,
+    int LyricsServerTimeoutMs = 2500);
 
 /// <summary>
 /// 코어 서비스(가사 검색·번역·캐시)를 조합해 <see cref="LyricsCoordinator"/>를 만드는
@@ -80,7 +84,36 @@ public static class LyricsEngineFactory
             Telemetry = telemetry ?? NoopTelemetry.Instance,
         };
         ApplyTranslation(coordinator, config, translationCache, onTranslationFailure);
+        ApplyServer(coordinator, config, log);
         return coordinator;
+    }
+
+    /// <summary>
+    /// 가사 서버 구성을 (재)적용한다 — 주소/토큰 변경 시 호출(설정 저장 등). 주소가 비면 끈다.
+    /// <see cref="LyricsCoordinator.RemoteCache"/>가 가변 속성이라 **재시작이 필요 없다**
+    /// (가사 소스 목록은 생성자 주입이라 재시작이 필요한 것과 대조적).
+    /// </summary>
+    public static void ApplyServer(LyricsCoordinator coordinator, EngineConfig config, Action<string>? log = null)
+    {
+        var endpoint = config.LyricsServerEndpoint;
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            coordinator.RemoteCache = null;
+            return;
+        }
+
+        try
+        {
+            coordinator.RemoteCache = new HttpRemoteLyricsCache(
+                endpoint!.Trim(), config.LyricsServerToken, config.LyricsServerTimeoutMs, log);
+            log?.Invoke($"[server] 가사 서버 사용: {endpoint!.Trim()}");
+        }
+        catch (Exception e)
+        {
+            // 주소 형식 오류 등 — 서버 없이 동작한다(기능 강등이지 오류가 아니다).
+            coordinator.RemoteCache = null;
+            log?.Invoke($"[server] 주소가 올바르지 않아 사용하지 않습니다: {e.Message}");
+        }
     }
 
     /// <summary>

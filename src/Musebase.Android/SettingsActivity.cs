@@ -94,6 +94,8 @@ public sealed class SettingsActivity : Activity
     private CheckBox? _includeVideoCheck;
     private CheckBox? _bubbleModeCheck;
     private CheckBox? _peekCheck;
+    private EditText? _serverEndpointEdit;
+    private EditText? _serverTokenEdit;
 
     // 탭 섹션(기능별 분리 — Windows 설정 창과 같은 구성).
     private LinearLayout? _sourceSection;
@@ -180,6 +182,33 @@ public sealed class SettingsActivity : Activity
             _preferredChecks.Add(check);
             _sourceSection.AddView(check);
         }
+
+        // ---- 개인 가사 서버(선택) ----
+        _sourceSection.AddView(Label("개인 가사 서버 (선택)", topPad: 32));
+        var serverNote = new TextView(this)
+        {
+            Text = "주소를 넣으면 가사를 검색하기 전에 이 서버에 먼저 물어보고, 새로 찾은 가사(번역 포함)를 "
+                 + "서버에 올려 다른 기기가 다시 검색·번역하지 않게 합니다. 비우면 사용하지 않습니다. "
+                 + "안드로이드는 평문 http를 막으므로 https 주소를 쓰세요.",
+        };
+        serverNote.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        _sourceSection.AddView(serverNote);
+
+        _serverEndpointEdit = new EditText(this)
+        {
+            Hint = "https://oracle.example.ts.net",
+            InputType = InputTypes.ClassText | InputTypes.TextVariationUri,
+        };
+        _serverEndpointEdit.SetText(settings?.LyricsServerEndpoint ?? "", TextView.BufferType.Editable);
+        _sourceSection.AddView(_serverEndpointEdit);
+
+        _serverTokenEdit = new EditText(this)
+        {
+            Hint = "서버 토큰",
+            InputType = InputTypes.ClassText | InputTypes.TextVariationPassword,
+        };
+        _serverTokenEdit.SetText(settings?.LyricsServerToken ?? "", TextView.BufferType.Editable);
+        _sourceSection.AddView(_serverTokenEdit);
 
         // ---- 번역 엔진 ----
         _translationSection.AddView(Label("번역 엔진", topPad: 40));
@@ -420,8 +449,12 @@ public sealed class SettingsActivity : Activity
         settings.OverlayTranslationColor = ColorOrDefault(_translationColorEdit, settings.OverlayTranslationColor);
         settings.OverlayBackgroundColor = ColorOrDefault(_backgroundColorEdit, settings.OverlayBackgroundColor);
 
+        settings.LyricsServerEndpoint = _serverEndpointEdit?.Text?.Trim();
+        settings.LyricsServerToken = _serverTokenEdit?.Text?.Trim();
+
         MusebaseApp.Instance?.ApplyPlaybackSourceSettings();
         MusebaseApp.Instance?.ApplyTranslationSettings(retranslateNow: apiTurnedOn);
+        MusebaseApp.Instance?.ApplyLyricsServerSettings(); // 주소·토큰 변경은 재시작 없이 반영
 
         // 표시 방식(버블/밴드)은 오버레이 서비스가 다시 읽어야 반영된다.
         if (Services.OverlayService.IsRunning)
