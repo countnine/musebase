@@ -33,6 +33,7 @@ internal static class StatusText
         TranslationDisplayStatus.Quota => " · 번역: 한도 초과",
         TranslationDisplayStatus.Failed => " · 번역: 실패",
         TranslationDisplayStatus.Disabled => " · 번역: API 꺼짐",
+        TranslationDisplayStatus.DisabledCached => " · 번역: 캐시 이용 (API 꺼짐)",
         _ => "",
     };
 

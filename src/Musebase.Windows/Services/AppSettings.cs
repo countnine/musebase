@@ -81,6 +81,14 @@ public sealed class AppSettings
     /// <summary>자동 모드에서 브라우저(Firefox/Chrome 등)를 음악 소스로 포함할지. 기본 제외(영상 오인식 방지).</summary>
     public bool IncludeBrowsers { get; set; }
 
+    /// <summary>
+    /// 선호 음악 앱(SourceAppUserModelId 목록). 비어 있으면(기본) 자동 —
+    /// 브라우저·영상·팟캐스트 앱을 제외한 나머지를 자동 감지한다. 하나라도 고르면
+    /// **그 앱들만** 재생 소스로 인정한다(Android의 PreferredSources와 같은 의미).
+    /// </summary>
+    [JsonPropertyName("preferredSources")]
+    public List<string> PreferredSources { get; set; } = new();
+
     // ---- 브라우저 디스플레이 (태블릿/TV 원격 표시, Musebase.Browser 인프로세스 호스팅) ----
 
     /// <summary>브라우저 디스플레이 서버(Kestrel)를 켤지. 켜면 앱 시작 시 자동 기동. 기본 꺼짐.</summary>

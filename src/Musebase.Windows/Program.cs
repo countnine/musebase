@@ -144,7 +144,9 @@ internal static class Program
             };
 
             // 재생 소스 선택 적용 (자동/특정 플레이어, 브라우저 제외 기본)
-            nowPlaying.SetSource(settings.PlaybackSource, settings.IncludeBrowsers);
+            nowPlaying.SetSource(settings.PlaybackSource, settings.IncludeBrowsers, settings.PreferredSources);
+            // 설정 창의 "선호 음악 앱" 목록은 지금 열려 있는 SMTC 세션에서 만든다.
+            SettingsWindow.AvailableSourcesProvider = nowPlaying.GetAvailableSources;
 
             // 일시정지 중 오버레이 자동 숨김 (--demo에서는 재생 상태가 없으므로 제외)
             if (!args.Contains("--demo"))
@@ -187,8 +189,9 @@ internal static class Program
                 settings.PlaybackSource = mode;
                 settings.IncludeBrowsers = includeBrowsers;
                 settings.Save();
-                nowPlaying.SetSource(mode, includeBrowsers);
-                Log.Write($"[source] 소스={mode}, 브라우저포함={includeBrowsers}");
+                nowPlaying.SetSource(mode, includeBrowsers, settings.PreferredSources);
+                Log.Write($"[source] 소스={mode}, 브라우저포함={includeBrowsers}, " +
+                          $"선호앱={(settings.PreferredSources.Count == 0 ? "(자동)" : string.Join(",", settings.PreferredSources))}");
             }
 
             // 트레이 열릴 때마다 현재 감지된 SMTC 세션으로 소스 하위 메뉴를 재구성한다.
@@ -421,6 +424,8 @@ internal static class Program
                 {
                     ApplyTranslationConfig("settings");
                     overlay.ApplyStyle();
+                    // 선호 음악 앱이 바뀌었을 수 있으므로 소스 선택도 다시 적용한다.
+                    ApplySource(settings.PlaybackSource, settings.IncludeBrowsers);
                 },
                 onCheckUpdates: () => _ = RunUpdateCheckAsync(userInitiated: true));
                 settingsWindow.Show();
@@ -691,6 +696,7 @@ internal static class Program
                     TranslationDisplayStatus.Quota => "translation.status.quota",
                     TranslationDisplayStatus.Failed => "translation.status.failed",
                     TranslationDisplayStatus.Disabled => "translation.status.disabled",
+                    TranslationDisplayStatus.DisabledCached => "translation.status.disabledCache",
                     _ => null, // None → 표기 안 함
                 };
                 return key is null ? "" : Loc.T("translation.status.suffix", ("status", Loc.T(key)));

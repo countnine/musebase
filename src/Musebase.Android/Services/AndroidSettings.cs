@@ -26,6 +26,108 @@ public sealed class AndroidSettings
     private const string KeyApiTranslationEnabled = "ApiTranslationEnabled";
     private const string KeyPlaybackSource = "PlaybackSource";
     private const string KeyIncludeVideoApps = "IncludeVideoApps";
+    private const string KeyPreferredSources = "PreferredSources";
+    private const string KeyOverlayBubbleMode = "OverlayBubbleMode";
+    private const string KeyOverlayPeekOnNewLine = "OverlayPeekOnNewLine";
+    private const string KeyOverlayRatioX = "OverlayRatioX";
+    private const string KeyOverlayRatioY = "OverlayRatioY";
+    private const string KeyBubbleRatioX = "BubbleRatioX";
+    private const string KeyBubbleRatioY = "BubbleRatioY";
+
+    // 오버레이 스타일(Windows AppSettings와 같은 키·의미 — 색은 "#RRGGBB" 문자열).
+    private const string KeyOverlayTextColor = "TextColor";
+    private const string KeyOverlayKaraokeColor = "KaraokeColor";
+    private const string KeyOverlayTranslationColor = "TranslationColor";
+    private const string KeyOverlayBackgroundEnabled = "OverlayBackgroundEnabled";
+    private const string KeyOverlayBackgroundColor = "OverlayBackgroundColor";
+    private const string KeyOverlayBackgroundOpacity = "OverlayBackgroundOpacity";
+    private const string KeyOverlayCornerRadius = "OverlayCornerRadius";
+    private const string KeyOverlayFontSizeSp = "OverlayFontSizeSp";
+    private const string KeyOverlayFadeAnimation = "FadeAnimation";
+    private const string KeyCharacterKaraoke = "CharacterKaraoke";
+    private const string KeyShowOnlyTargetTranslation = "ShowOnlyTargetTranslation";
+
+    /// <summary>위치 비율 미설정 표식(기본 위치를 쓰라는 뜻).</summary>
+    public const float UnsetRatio = -1f;
+
+    // ---- 오버레이 스타일 ----
+
+    /// <summary>가사 원문 색("#RRGGBB"). Windows 기본과 동일.</summary>
+    public string OverlayTextColor
+    {
+        get => _prefs.GetString(KeyOverlayTextColor, "#FFFFFF")!;
+        set => Put(KeyOverlayTextColor, value);
+    }
+
+    /// <summary>카라오케 채움 색.</summary>
+    public string OverlayKaraokeColor
+    {
+        get => _prefs.GetString(KeyOverlayKaraokeColor, "#FFEB3B")!;
+        set => Put(KeyOverlayKaraokeColor, value);
+    }
+
+    /// <summary>번역 줄 색.</summary>
+    public string OverlayTranslationColor
+    {
+        get => _prefs.GetString(KeyOverlayTranslationColor, "#E8E8E8")!;
+        set => Put(KeyOverlayTranslationColor, value);
+    }
+
+    /// <summary>가사 뒤 반투명 배경판 표시 여부.</summary>
+    public bool OverlayBackgroundEnabled
+    {
+        get => _prefs.GetBoolean(KeyOverlayBackgroundEnabled, true);
+        set => PutBool(KeyOverlayBackgroundEnabled, value);
+    }
+
+    /// <summary>배경판 색.</summary>
+    public string OverlayBackgroundColor
+    {
+        get => _prefs.GetString(KeyOverlayBackgroundColor, "#000000")!;
+        set => Put(KeyOverlayBackgroundColor, value);
+    }
+
+    /// <summary>배경판 불투명도(0~1).</summary>
+    public float OverlayBackgroundOpacity
+    {
+        get => _prefs.GetFloat(KeyOverlayBackgroundOpacity, 0.7f);
+        set => PutFloat(KeyOverlayBackgroundOpacity, Math.Clamp(value, 0f, 1f));
+    }
+
+    /// <summary>배경판 모서리 둥글기(dp).</summary>
+    public int OverlayCornerRadius
+    {
+        get => _prefs.GetInt(KeyOverlayCornerRadius, 18);
+        set => PutInt(KeyOverlayCornerRadius, Math.Clamp(value, 0, 40));
+    }
+
+    /// <summary>가사 원문 글자 크기(sp). 번역 줄은 이 값에 비례한다.</summary>
+    public int OverlayFontSizeSp
+    {
+        get => _prefs.GetInt(KeyOverlayFontSizeSp, 22);
+        set => PutInt(KeyOverlayFontSizeSp, Math.Clamp(value, 12, 40));
+    }
+
+    /// <summary>오버레이가 나타나고 사라질 때 페이드 효과를 쓸지.</summary>
+    public bool OverlayFadeAnimation
+    {
+        get => _prefs.GetBoolean(KeyOverlayFadeAnimation, true);
+        set => PutBool(KeyOverlayFadeAnimation, value);
+    }
+
+    /// <summary>글자 단위 카라오케(끄면 줄 단위 채움).</summary>
+    public bool CharacterKaraoke
+    {
+        get => _prefs.GetBoolean(KeyCharacterKaraoke, true);
+        set => PutBool(KeyCharacterKaraoke, value);
+    }
+
+    /// <summary>대상 언어로 번역된 줄만 표시(끄면 제공자 번역도 함께 — 중국어 등이 뜰 수 있다).</summary>
+    public bool ShowOnlyTargetTranslation
+    {
+        get => _prefs.GetBoolean(KeyShowOnlyTargetTranslation, true);
+        set => PutBool(KeyShowOnlyTargetTranslation, value);
+    }
 
     private readonly ISharedPreferences _prefs;
 
@@ -109,6 +211,22 @@ public sealed class AndroidSettings
     }
 
     /// <summary>
+    /// 선호 음악 앱(패키지) 목록. 비어 있으면(기본) 자동 — 종전대로 영상 앱 제외 규칙만 쓴다.
+    /// 하나 이상 고르면 **그 앱들만** 가사 소스로 인정해, 팟캐스트·영상 앱이 잡히지 않는다.
+    /// 쉼표로 이어 저장한다(직렬화 키·값은 영어 패키지명 유지).
+    /// </summary>
+    public IReadOnlyList<string> PreferredSources
+    {
+        get
+        {
+            var raw = _prefs.GetString(KeyPreferredSources, null);
+            if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
+            return raw!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        set => Put(KeyPreferredSources, value is null ? null : string.Join(",", value));
+    }
+
+    /// <summary>
     /// 번역 API 사용 여부. 끄면 새 번역 요청을 보내지 않고 이미 캐시된 번역만 표시한다 —
     /// 유료 API(DeepL/Google) 사용량을 그 자리에서 끊는 스위치(Windows 트레이 토글과 같은 키·의미).
     /// 엔진·키 설정은 보존되므로 다시 켜면 원래대로 동작한다. 기본 켬.
@@ -140,6 +258,43 @@ public sealed class AndroidSettings
     }
 
     /// <summary>
+    /// 버블(플로팅) 모드. 켜면 가사 밴드 대신 작은 원형 버블이 떠 있고, 버블을 탭할 때만
+    /// 가사 밴드를 펼친다 — 화면 하단이 가려지거나 밴드가 방해될 때 쓰는 표시 방식. 기본 꺼짐.
+    /// </summary>
+    public bool OverlayBubbleMode
+    {
+        get => _prefs.GetBoolean(KeyOverlayBubbleMode, false);
+        set => PutBool(KeyOverlayBubbleMode, value);
+    }
+
+    /// <summary>
+    /// 버블 모드에서 접혀 있을 때 새 가사 줄이 나오면 잠깐(약 3초) 자동으로 펼쳤다 접는다. 기본 켬.
+    /// (끄면 버블을 직접 탭할 때만 가사가 보인다.)
+    /// </summary>
+    public bool OverlayPeekOnNewLine
+    {
+        get => _prefs.GetBoolean(KeyOverlayPeekOnNewLine, true);
+        set => PutBool(KeyOverlayPeekOnNewLine, value);
+    }
+
+    /// <summary>
+    /// 가사 밴드 위치(화면 여유 공간 대비 0~1 비율, <see cref="UnsetRatio"/>면 기본 위치=하단 중앙).
+    /// 픽셀이 아닌 비율로 저장해 화면 회전·해상도 변화에도 화면 밖으로 나가지 않는다.
+    /// </summary>
+    public (float X, float Y) OverlayRatio
+    {
+        get => (_prefs.GetFloat(KeyOverlayRatioX, UnsetRatio), _prefs.GetFloat(KeyOverlayRatioY, UnsetRatio));
+        set => PutRatio(KeyOverlayRatioX, KeyOverlayRatioY, value);
+    }
+
+    /// <summary>버블 위치(같은 규칙. 미설정이면 오른쪽 아래).</summary>
+    public (float X, float Y) BubbleRatio
+    {
+        get => (_prefs.GetFloat(KeyBubbleRatioX, UnsetRatio), _prefs.GetFloat(KeyBubbleRatioY, UnsetRatio));
+        set => PutRatio(KeyBubbleRatioX, KeyBubbleRatioY, value);
+    }
+
+    /// <summary>
     /// 실효 번역 엔진 판정(Windows AppSettings.EffectiveTranslationEngine과 동일 규칙):
     /// 명시 엔진이 있으면 그대로, 없으면 DeepL 키가 있으면 "deepl", 아니면 "mymemory".
     /// (Google 키만 있는 경우는 명시 선택으로만 도달하므로 판정에 넣지 않는다 — Windows와 동일.)
@@ -156,6 +311,43 @@ public sealed class AndroidSettings
                 ? TranslatorRegistry.DefaultFreeEngine
                 : "deepl";
         }
+    }
+
+    private void PutBool(string key, bool value)
+    {
+        var editor = _prefs.Edit()!;
+        editor.PutBoolean(key, value);
+        editor.Apply();
+    }
+
+    private void PutInt(string key, int value)
+    {
+        var editor = _prefs.Edit()!;
+        editor.PutInt(key, value);
+        editor.Apply();
+    }
+
+    private void PutFloat(string key, float value)
+    {
+        var editor = _prefs.Edit()!;
+        editor.PutFloat(key, value);
+        editor.Apply();
+    }
+
+    /// <summary>"#RRGGBB" 문자열 → 안드로이드 Color. 형식이 틀리면 기본값을 쓴다.</summary>
+    public static global::Android.Graphics.Color ParseColor(string? hex, global::Android.Graphics.Color fallback)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return fallback;
+        try { return global::Android.Graphics.Color.ParseColor(hex!.Trim()); }
+        catch { return fallback; }
+    }
+
+    private void PutRatio(string keyX, string keyY, (float X, float Y) value)
+    {
+        var editor = _prefs.Edit()!;
+        editor.PutFloat(keyX, value.X);
+        editor.PutFloat(keyY, value.Y);
+        editor.Apply();
     }
 
     private void Put(string key, string? value)

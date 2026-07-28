@@ -43,6 +43,54 @@ public sealed class SettingsWindow : Window
         catch { return new SolidColorBrush(Colors.Transparent); }
     }
 
+    /// <summary>
+    /// 선호 음악 앱 목록을 만들 때 쓰는, 현재 열려 있는 SMTC 세션의 앱 id 공급자.
+    /// (설정 창은 NowPlayingService를 직접 알지 않는다 — Program이 주입한다.)
+    /// </summary>
+    public static Func<IReadOnlyList<string>>? AvailableSourcesProvider { get; set; }
+
+    /// <summary>
+    /// 잘 알려진 음악 앱의 SMTC 앱 id(부분 일치용 표시명 포함). 실제 목록은
+    /// "지금 열려 있는 세션 + 이미 고른 앱 + 이 중 현재 보이는 것"으로 만든다 —
+    /// 실행 중이 아닌 앱의 id는 SMTC가 알려 주지 않기 때문이다.
+    /// </summary>
+    private static readonly (string Id, string Label)[] KnownMusicApps =
+    {
+        ("Spotify.exe", "Spotify"),
+        ("AppleInc.AppleMusicWin_nzyj5cx40ttqa!App", "Apple Music"),
+        ("iTunes.exe", "iTunes"),
+        ("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic", "미디어 플레이어(그루브)"),
+        ("MusicBee.exe", "MusicBee"),
+        ("foobar2000.exe", "foobar2000"),
+        ("AIMP.exe", "AIMP"),
+    };
+
+    /// <summary>
+    /// 선호 음악 앱 후보: 현재 열려 있는 SMTC 세션 + 저장된 선택 + 알려진 음악 앱(이름 붙여 표시).
+    /// 브라우저·영상/팟캐스트로 보이는 앱은 후보에서 뺀다(고르라고 권하지 않는다).
+    /// </summary>
+    private static List<(string Id, string Label)> BuildPreferredSourceItems(AppSettings settings)
+    {
+        var ids = new List<string>();
+        foreach (var id in AvailableSourcesProvider?.Invoke() ?? Array.Empty<string>())
+            if (!ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+        foreach (var id in settings.PreferredSources)
+            if (!ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+        foreach (var (id, _) in KnownMusicApps)
+            if (!ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+
+        var items = new List<(string, string)>();
+        foreach (var id in ids)
+        {
+            // 실행 중이 아니면서 알려진 앱도, 선택된 적도 없는 것은 목록에서 뺀다.
+            var known = KnownMusicApps.FirstOrDefault(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (NowPlayingService.IsBrowser(id) && !settings.PreferredSources.Contains(id, StringComparer.OrdinalIgnoreCase))
+                continue;
+            items.Add((id, known.Label is { Length: > 0 } ? $"{known.Label} ({id})" : id));
+        }
+        return items;
+    }
+
     public SettingsWindow(AppSettings settings, Action onSaved, Action? onCheckUpdates = null)
     {
         _settings = settings;
@@ -97,6 +145,8 @@ public sealed class SettingsWindow : Window
             // 폭을 명시(SizeToContent.Height에서 폭 전파 누락으로 글자단위 줄바꿈되는 문제 방지)
             var general = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
             var translation = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
+            // 소스 탭: 재생 소스(선호 음악 앱)와 가사 소스를 [일반]에서 분리해 한곳에 모았다.
+            var sources = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
 
             // 표시 언어
             var langChoices = new List<LanguageChoice> { new(Loc.SystemSetting, Loc.T("settings.language.system")) };
@@ -293,9 +343,32 @@ public sealed class SettingsWindow : Window
             var fadeCheck = WrapCheck("settings.fade", settings.FadeAnimation, new Thickness(0, 6, 0, 0));
             var hideOnHoverCheck = WrapCheck("settings.hideOnMouseOver", settings.HideOnMouseOver, new Thickness(0, 6, 0, 0));
 
+            // ---- 선호 음악 앱(재생 소스) — 고르면 그 앱들만 인식, 비우면 자동 ----
+            sources.Children.Add(Header("settings.preferredSources.header"));
+            sources.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.preferredSources.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 2),
+            });
+            var preferredChecks = new List<(string Id, CheckBox Box)>();
+            foreach (var (id, label) in BuildPreferredSourceItems(settings))
+            {
+                var cb = new CheckBox
+                {
+                    Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap },
+                    IsChecked = settings.PreferredSources.Contains(id, StringComparer.OrdinalIgnoreCase),
+                    Margin = new Thickness(0, 4, 0, 0),
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                };
+                preferredChecks.Add((id, cb));
+                sources.Children.Add(cb);
+            }
+
             // 가사 소스 선택 (레지스트리). 공식/비공식 표시 — 비공식은 공개 배포 리스크 안내.
-            general.Children.Add(Header("settings.sources.header"));
-            general.Children.Add(new TextBlock
+            sources.Children.Add(Header("settings.sources.header"));
+            sources.Children.Add(new TextBlock
             {
                 Text = Loc.T("settings.sources.hint"),
                 Opacity = 0.7,
@@ -314,9 +387,9 @@ public sealed class SettingsWindow : Window
                     HorizontalContentAlignment = HorizontalAlignment.Left,
                 };
                 sourceChecks.Add((d.Id, cb));
-                general.Children.Add(cb);
+                sources.Children.Add(cb);
             }
-            general.Children.Add(new TextBlock
+            sources.Children.Add(new TextBlock
             {
                 Text = Loc.T("settings.sources.restart"),
                 Opacity = 0.7,
@@ -534,6 +607,7 @@ public sealed class SettingsWindow : Window
             // ScrollViewer 없이 각 탭 내용을 직접 넣고, 창을 SizeToContent로 맞춰 세로 스크롤이 없게 한다.
             var tabs = new TabControl { Margin = new Thickness(8, 8, 8, 0) };
             tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.general"), Content = general });
+            tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.sources"), Content = sources });
             tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.translation"), Content = translation });
             tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.appearance"), Content = appearance });
             tabs.Items.Add(new TabItem { Header = Loc.T("settings.tab.about"), Content = about });
@@ -572,6 +646,7 @@ public sealed class SettingsWindow : Window
                 settings.LibreTranslateEndpoint = string.IsNullOrWhiteSpace(endpointBox.Text) ? null : endpointBox.Text.Trim();
                 settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;
                 settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
+                settings.PreferredSources = preferredChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
                 settings.MiniWindowCloseToTray = closeToTrayCheck.IsChecked == true;
                 // 브라우저 디스플레이 포트/LAN (실행 중 변경은 다음 시작부터 적용 — 토글 재시작)
                 if (int.TryParse(browserPortBox.Text.Trim(), out var browserPort) && browserPort is >= 0 and <= 65535)

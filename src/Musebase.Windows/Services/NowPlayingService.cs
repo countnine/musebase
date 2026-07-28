@@ -32,6 +32,23 @@ public sealed class NowPlayingService : INowPlayingSource, IDisposable
         "opera", "brave", "vivaldi", "iexplore", "internetexplorer", "waterfox", "librewolf",
     };
 
+    /// <summary>
+    /// 영상·팟캐스트로 간주해 자동 모드에서 제외할 토큰(소문자). 브라우저와 같은 이유 —
+    /// 영상·팟캐스트에 엉뚱한 곡의 가사가 뜨는 것을 막는다(Android의 VideoAppTokens와 대칭).
+    /// </summary>
+    private static readonly string[] NonMusicTokens =
+    {
+        "youtube", "netflix", "disneyplus", "primevideo", "twitch", "vlc", "potplayer",
+        "kmplayer", "gomplayer", "mpc-hc", "kodi", "plex", "wavve", "tving", "coupangplay",
+        "podcast", "pocketcasts", "overcast", "castbox", "audible", "spreaker", "stitcher",
+    };
+
+    /// <summary>
+    /// 선호 음악 앱(SourceAppUserModelId). 하나라도 지정되면 자동 모드에서 이 앱들만 후보가 된다.
+    /// 비어 있으면(기본) 종전대로 브라우저·영상 앱 제외 규칙만 적용한다.
+    /// </summary>
+    private string[] _preferredSources = Array.Empty<string>();
+
     /// <summary>자동 소스 감지 모드 여부.</summary>
     private bool IsAuto => string.Equals(_sourceMode, "auto", StringComparison.OrdinalIgnoreCase);
 
@@ -39,6 +56,17 @@ public sealed class NowPlayingService : INowPlayingSource, IDisposable
     {
         if (string.IsNullOrEmpty(appId)) return false;
         foreach (var token in BrowserTokens)
+            if (appId.Contains(token, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>영상·팟캐스트 앱인지(YouTube Music은 음악이므로 예외).</summary>
+    private static bool IsNonMusicSource(string? appId)
+    {
+        if (string.IsNullOrEmpty(appId)) return false;
+        if (appId!.Contains("youtubemusic", StringComparison.OrdinalIgnoreCase)
+            || appId.Contains("youtube music", StringComparison.OrdinalIgnoreCase)) return false;
+        foreach (var token in NonMusicTokens)
             if (appId.Contains(token, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
@@ -135,7 +163,19 @@ public sealed class NowPlayingService : INowPlayingSource, IDisposable
             return null; // 지정 플레이어가 실행 중이 아니면 표시하지 않음
         }
 
-        bool Eligible(Session s) => _includeBrowsers || !IsBrowserSource(s.SourceAppUserModelId);
+        // 선호 앱을 지정했으면 그 앱들만, 아니면 브라우저·영상/팟캐스트 앱 제외.
+        bool Eligible(Session s)
+        {
+            var id = s.SourceAppUserModelId;
+            if (_preferredSources.Length > 0)
+            {
+                foreach (var preferred in _preferredSources)
+                    if (string.Equals(id, preferred, StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
+            }
+            if (!_includeBrowsers && IsBrowserSource(id)) return false;
+            return _includeBrowsers || !IsNonMusicSource(id);
+        }
 
         Session? current = null;
         try { current = manager.GetCurrentSession(); } catch { /* 레이스 */ }
@@ -185,12 +225,16 @@ public sealed class NowPlayingService : INowPlayingSource, IDisposable
     public bool IncludeBrowsers { get { lock (_lock) return _includeBrowsers; } }
 
     /// <summary>재생 소스 선택을 변경하고 즉시 세션을 재선택한다.</summary>
-    public void SetSource(string? mode, bool includeBrowsers)
+    public void SetSource(string? mode, bool includeBrowsers, IEnumerable<string>? preferredSources = null)
     {
         lock (_lock)
         {
             _sourceMode = string.IsNullOrWhiteSpace(mode) ? "auto" : mode;
             _includeBrowsers = includeBrowsers;
+            _preferredSources = preferredSources?
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p.Trim())
+                .ToArray() ?? Array.Empty<string>();
         }
         SelectBestSession();
         RefreshPlayback();
