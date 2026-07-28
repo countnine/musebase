@@ -43,6 +43,8 @@ public sealed class OverlayWindow : Window
     private bool _userVisible = true;
     private bool _fullscreenSuppressed;
     private bool _pausedSuppressed;
+    // 표시할 글자가 없는 구간(전주·간주 — LRC의 공백뿐인 줄 포함)에는 빈 배경판만 남으므로 숨긴다.
+    private bool _emptyLineSuppressed = true;
     private bool _mouseOverSuppressed; // 마우스 오버 시 숨김(설정)
     private string _shownContent = string.Empty; // 페이드 크로스페이드 판단용
 
@@ -194,10 +196,15 @@ public sealed class OverlayWindow : Window
         var translation = _translationSuppressedAsSame ? null : rawTranslation;
 
         _translationLine.Text = translation ?? string.Empty;
-        _translationLine.Visibility = string.IsNullOrEmpty(translation)
+        _translationLine.Visibility = string.IsNullOrWhiteSpace(translation)
             ? Visibility.Collapsed
             : Visibility.Visible;
         UpdateTextLayout();
+
+        // 원문이 비었거나 공백뿐이면(간주 표시 줄 등) 글자 없는 배경판만 남는다 — 그 구간은 숨긴다.
+        // (Android 오버레이와 같은 규칙. 이동 모드에서는 ShouldBeVisible이 억제를 무시한다.)
+        _emptyLineSuppressed = string.IsNullOrWhiteSpace(line?.Content);
+        ApplyVisibility();
     }
 
     /// <summary>라인 시작 이후 경과 시간(초). 글자단위 태그가 있으면 글자 위치까지, 없으면 구간 비율로 채운다.</summary>
@@ -249,7 +256,7 @@ public sealed class OverlayWindow : Window
         _backgroundBorder.Background = moveMode
             ? new SolidColorBrush(Color.FromArgb(0x50, 0x20, 0x20, 0x20))
             : ComputeBackgroundBrush();
-        if (moveMode && string.IsNullOrEmpty(_originalLine.Text))
+        if (moveMode && string.IsNullOrWhiteSpace(_originalLine.Text))
         {
             _originalLine.Text = Loc.T("overlay.moveHint");
             UpdateTextLayout();
@@ -398,7 +405,8 @@ public sealed class OverlayWindow : Window
     /// <summary>이동 모드 중에는 억제(전체화면/일시정지/마우스오버)를 무시 — 사용자가 조작 중.</summary>
     private bool ShouldBeVisible() =>
         _userVisible
-        && (IsMoveMode || (!_fullscreenSuppressed && !_pausedSuppressed && !_mouseOverSuppressed));
+        && (IsMoveMode
+            || (!_fullscreenSuppressed && !_pausedSuppressed && !_mouseOverSuppressed && !_emptyLineSuppressed));
 
     private void ApplyVisibility()
     {

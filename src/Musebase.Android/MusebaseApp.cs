@@ -54,7 +54,7 @@ public sealed class MusebaseApp : Application
         Source = new AndroidNowPlayingSource(this);
         Settings = new AndroidSettings(this);
         // 재생 소스(자동/특정 앱 고정, 영상 앱 제외)를 시작 전에 적용한다.
-        Source.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps);
+        Source.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps, Settings.PreferredSources);
 
         _dbPath = Path.Combine(FilesDir!.AbsolutePath, "translations.db");
 
@@ -90,7 +90,7 @@ public sealed class MusebaseApp : Application
                 DeeplApiKey: Settings.DeeplApiKey,
                 GoogleApiKey: Settings.GoogleApiKey),
             TargetLanguage: target,
-            ShowOnlyTargetTranslation: true,
+            ShowOnlyTargetTranslation: Settings.ShowOnlyTargetTranslation,
             ManualOffsetSeconds: 0,
             CacheDbPath: _dbPath,
             // 폴백 켬 + 주 엔진이 무키 무료 기본이 아닐 때만 무료 엔진(MyMemory)으로 자동 전환(Windows와 동일 규칙).
@@ -107,9 +107,34 @@ public sealed class MusebaseApp : Application
     /// <see cref="LyricsEngineFactory.ApplyTranslation"/>이 실패 라우팅·대상 언어·현재 라인 재발행을
     /// 처리한다. 새 엔진은 <b>다음 곡/재검색부터</b> 적용된다(현재 곡의 기존 tr 태그는 유지 — Windows와 동일).
     /// </summary>
+    /// <summary>
+    /// 앱을 완전히 종료한다(A안): ① 오버레이 서비스 중지 → ② 재생 감지 폴링 중지 →
+    /// ③ 알림 리스너의 시스템 바인드 해제(<see cref="Services.MediaListenerService.Unbind"/>).
+    ///
+    /// ③이 핵심이다 — 알림 접근이 켜져 있으면 시스템이 리스너를 계속 바인드해 프로세스가 살아 있다.
+    /// 권한 설정 자체는 건드리지 않으므로, 앱을 다시 열면 <c>MediaListenerService.Rebind</c>로 복귀한다
+    /// (사용자가 권한을 다시 허용할 필요가 없다).
+    /// </summary>
+    public void QuitCompletely()
+    {
+        try { StopService(new global::Android.Content.Intent(this, typeof(Services.OverlayService))); }
+        catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"quit(stop overlay): {e.Message}"); }
+
+        Source?.Stop();
+        Services.MediaListenerService.Unbind();
+        global::Android.Util.Log.Info("Musebase", "quit: 오버레이 중지 + 감지 중지 + 리스너 언바인드");
+    }
+
+    /// <summary>앱을 다시 열었을 때 종료로 끊어 둔 리스너 바인드를 복구하고 감지를 재개한다.</summary>
+    public void ResumeAfterQuit()
+    {
+        Services.MediaListenerService.Rebind(this);
+        Source?.Start();
+    }
+
     /// <summary>재생 소스 설정을 다시 적용한다(설정 화면 저장 시 — 재시작 불필요).</summary>
     public void ApplyPlaybackSourceSettings() =>
-        Source?.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps);
+        Source?.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps, Settings.PreferredSources);
 
     /// <param name="retranslateNow">
     /// true면 현재 곡을 즉시 다시 번역한다(API 번역을 껐다가 다시 켠 직후 등 —

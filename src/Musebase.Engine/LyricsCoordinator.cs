@@ -403,8 +403,11 @@ public sealed class LyricsCoordinator : IDisposable
             // 이번에 API로 채웠으면 정상(Live), 그 외(전부 캐시/이미 번역됨)는 캐시.
             var apiFilled = changed - stats.CacheHits;          // 이번에 API로 채운 라인 수
             var apiNeeded = stats.LinesNeeded - stats.CacheHits; // API로 채워야 했던 라인 수
+            // 사용자가 끔 — 캐시로만 채웠다. 캐시로 전부 덮였으면(=API가 필요한 줄이 남지 않으면)
+            // 번역이 정상 표시되는 상태이므로 "꺼짐"만 보여 오해를 주지 않도록 구분한다.
             if (service.CacheOnly)
-                SetTranslationStatus(TranslationDisplayStatus.Disabled); // 사용자가 끔 — 캐시로만 채웠다
+                SetTranslationStatus(apiNeeded > 0
+                    ? TranslationDisplayStatus.Disabled : TranslationDisplayStatus.DisabledCached);
             else if (_lastTranslationFailure is { } f && apiFilled < apiNeeded)
                 SetTranslationStatus(f.Kind is TranslatorFailureKind.Quota or TranslatorFailureKind.RateLimit
                     ? TranslationDisplayStatus.Quota : TranslationDisplayStatus.Failed);

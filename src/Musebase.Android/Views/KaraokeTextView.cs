@@ -31,12 +31,17 @@ namespace Musebase.Android.Views;
 /// </summary>
 public sealed class KaraokeTextView : View
 {
-    private static readonly Color BaseColor = Color.White;
-    // Windows 기본 KaraokeColor와 통일(#FFEB3B).
-    private static readonly Color FillColor = Color.Argb(0xFF, 0xFF, 0xEB, 0x3B);
+    /// <summary>기본 원문 색(설정에서 바꿀 수 있다).</summary>
+    public static readonly Color DefaultBaseColor = Color.White;
+    /// <summary>기본 카라오케 채움 색 — Windows 기본 KaraokeColor와 통일(#FFEB3B).</summary>
+    public static readonly Color DefaultFillColor = Color.Argb(0xFF, 0xFF, 0xEB, 0x3B);
+
+    private Color _baseColor = DefaultBaseColor;
+    private Color _fillColor = DefaultFillColor;
 
     private readonly TextPaint _paint;
-    private readonly int _maxWidthPx;
+    // 화면 회전 시 새 화면 폭으로 갱신된다(고정해 두면 세로/가로 전환 후 줄바꿈·가운데 정렬이 어긋난다).
+    private int _maxWidthPx;
 
     private string _text = "";
     private InlineTimeTags? _karaoke;
@@ -57,13 +62,46 @@ public sealed class KaraokeTextView : View
         var metrics = context.Resources!.DisplayMetrics!;
         _paint = new TextPaint(PaintFlags.AntiAlias | PaintFlags.SubpixelText)
         {
-            Color = BaseColor,
+            Color = _baseColor,
             // ScaledDensity(API 34 deprecated) 대신 비-폐기 API로 sp→px 변환.
             TextSize = TypedValue.ApplyDimension(ComplexUnitType.Sp, textSizeSp, metrics),
         };
         _paint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
         // 앱 위에 떠 있어도 읽히도록 얇은 그림자.
         _paint.SetShadowLayer(6f, 0f, 2f, Color.Argb(0xC8, 0, 0, 0));
+    }
+
+    /// <summary>원문·카라오케 채움 색 갱신(설정에서 바꿀 때).</summary>
+    public void SetColors(Color baseColor, Color fillColor)
+    {
+        _baseColor = baseColor;
+        _fillColor = fillColor;
+        _paint.Color = baseColor;
+        Invalidate();
+    }
+
+    /// <summary>글자 크기(sp) 갱신 — 레이아웃을 다시 만들어야 줄바꿈·높이가 맞는다.</summary>
+    public void SetTextSizeSp(float sp)
+    {
+        var metrics = Context!.Resources!.DisplayMetrics!;
+        var px = TypedValue.ApplyDimension(ComplexUnitType.Sp, sp, metrics);
+        if (Math.Abs(px - _paint.TextSize) < 0.5f) return;
+        _paint.TextSize = px;
+        _layout = null;
+        _builtWidth = -1;
+        RequestLayout();
+        Invalidate();
+    }
+
+    /// <summary>표시 최대 폭 갱신(화면 회전 등). 레이아웃을 버려 다음 측정에서 새 폭으로 다시 만든다.</summary>
+    public void SetMaxWidth(int maxWidthPx)
+    {
+        if (maxWidthPx <= 0 || maxWidthPx == _maxWidthPx) return;
+        _maxWidthPx = maxWidthPx;
+        _layout = null;
+        _builtWidth = -1;
+        RequestLayout();
+        Invalidate();
     }
 
     /// <summary>새 라인 설정(원문 + 글자 타임태그 + 라인 표시 구간). 경과는 0으로 리셋.</summary>
@@ -139,7 +177,7 @@ public sealed class KaraokeTextView : View
         if (layout is null) return;
 
         // 1) 베이스(흰색) 전체.
-        _paint.Color = BaseColor;
+        _paint.Color = _baseColor;
         layout.Draw(canvas);
 
         // 2) 채움(노랑)을 진행 글자 위치까지 클립해 덧그린다.
@@ -151,9 +189,9 @@ public sealed class KaraokeTextView : View
             {
                 canvas.Save();
                 canvas.ClipPath(clip);
-                _paint.Color = FillColor;
+                _paint.Color = _fillColor;
                 layout.Draw(canvas);
-                _paint.Color = BaseColor;
+                _paint.Color = _baseColor;
                 canvas.Restore();
                 clip.Dispose();
             }

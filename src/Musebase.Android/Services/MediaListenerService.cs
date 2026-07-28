@@ -27,9 +27,13 @@ public sealed class MediaListenerService : NotificationListenerService
     /// <summary>시스템이 리스너를 바인드했는지(알림 접근 허용 + 연결 완료).</summary>
     public static bool IsConnected { get; private set; }
 
+    /// <summary>바인드된 인스턴스(앱 종료 시 <c>RequestUnbind()</c>를 호출하기 위해 보관).</summary>
+    private static MediaListenerService? _instance;
+
     public override void OnListenerConnected()
     {
         base.OnListenerConnected();
+        _instance = this;
         IsConnected = true;
         global::Android.Util.Log.Info("Musebase", "MediaListenerService connected (notification access granted).");
     }
@@ -37,8 +41,32 @@ public sealed class MediaListenerService : NotificationListenerService
     public override void OnListenerDisconnected()
     {
         base.OnListenerDisconnected();
+        if (ReferenceEquals(_instance, this)) _instance = null;
         IsConnected = false;
         global::Android.Util.Log.Info("Musebase", "MediaListenerService disconnected.");
+    }
+
+    /// <summary>
+    /// 시스템 바인드를 스스로 끊는다(앱 완전 종료용). 권한 설정은 그대로 유지되므로,
+    /// 앱을 다시 열 때 <see cref="Rebind"/>로 복귀한다. API 24 미만은 지원하지 않아 무시된다.
+    /// </summary>
+    public static void Unbind()
+    {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(24)) return;
+        try { _instance?.RequestUnbind(); }
+        catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"unbind: {e.Message}"); }
+    }
+
+    /// <summary>끊어 둔 바인드를 다시 요청한다(앱 재실행 시). 이미 연결돼 있으면 아무 일도 하지 않는다.</summary>
+    public static void Rebind(global::Android.Content.Context context)
+    {
+        if (IsConnected || !OperatingSystem.IsAndroidVersionAtLeast(24)) return;
+        try
+        {
+            RequestRebind(new global::Android.Content.ComponentName(
+                context, Java.Lang.Class.FromType(typeof(MediaListenerService))));
+        }
+        catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"rebind: {e.Message}"); }
     }
 
     // 알림 내용은 사용하지 않는다 — 재생 정보는 MediaSessionManager 경유(AndroidNowPlayingSource).

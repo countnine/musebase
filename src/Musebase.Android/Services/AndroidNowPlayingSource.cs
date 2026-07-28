@@ -46,6 +46,8 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     // 자동 모드에서 영상·브라우저 앱(YouTube·크롬 등)을 음악 소스로 포함할지. 기본 제외 —
     // 영상 재생 중 엉뚱한 곡의 가사를 찾아 표시하는 것을 막는다.
     private bool _includeVideoApps;
+    // 자동 모드에서 "이 앱들만" 음악 소스로 인정하는 화이트리스트(비면 자동 = 종전 규칙).
+    private readonly HashSet<string> _preferredSources = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>자동 감지 식별자.</summary>
     public const string AutoSource = "auto";
@@ -83,12 +85,18 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     /// 재생 소스를 적용한다(설정 저장 시 호출). Windows <c>NowPlayingService.SetSource</c>와 대칭.
     /// 즉시 재선택하므로 다음 폴링을 기다리지 않는다.
     /// </summary>
-    public void SetSource(string? mode, bool includeVideoApps)
+    public void SetSource(string? mode, bool includeVideoApps, IEnumerable<string>? preferredSources = null)
     {
         _sourceMode = string.IsNullOrWhiteSpace(mode) ? AutoSource : mode!.Trim();
         _includeVideoApps = includeVideoApps;
+        _preferredSources.Clear();
+        if (preferredSources is not null)
+            foreach (var p in preferredSources)
+                if (!string.IsNullOrWhiteSpace(p)) _preferredSources.Add(p.Trim());
+
         global::Android.Util.Log.Info("Musebase",
-            $"source: 모드={_sourceMode}, 영상앱포함={_includeVideoApps}");
+            $"source: 모드={_sourceMode}, 영상앱포함={_includeVideoApps}, " +
+            $"선호앱={(_preferredSources.Count == 0 ? "(자동)" : string.Join(",", _preferredSources))}");
         if (_started) PollOnce();
     }
 
@@ -215,10 +223,17 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
         AttachController(best);
     }
 
-    /// <summary>이 세션을 가사 소스로 쓸지: 고정 모드면 패키지 일치, 자동이면 영상 앱 제외 여부.</summary>
+    /// <summary>
+    /// 이 세션을 가사 소스로 쓸지 판정한다.
+    /// 고정 모드면 패키지 일치. 자동 모드에서는 <see cref="_preferredSources"/>가 지정돼 있으면
+    /// **그 앱들만** 후보로 본다(팟캐스트·영상 앱이 끼어드는 것을 원천 차단).
+    /// 비어 있으면(기본) 종전대로 영상 앱 제외 규칙만 적용한다.
+    /// </summary>
     private bool IsCandidate(string? package)
     {
         if (!IsAuto) return string.Equals(package, _sourceMode, StringComparison.OrdinalIgnoreCase);
+        if (_preferredSources.Count > 0)
+            return package is not null && _preferredSources.Contains(package);
         return _includeVideoApps || !IsVideoApp(package);
     }
 

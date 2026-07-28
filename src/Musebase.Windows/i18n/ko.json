@@ -1,4 +1,7 @@
 {
+  "settings.tab.sources": "소스",
+  "settings.preferredSources.header": "선호 음악 앱 (재생 소스)",
+  "settings.preferredSources.hint": "하나 이상 고르면 그 앱들만 가사 소스로 씁니다 — 팟캐스트·영상 앱은 무시됩니다. 아무것도 고르지 않으면 자동 감지입니다(브라우저·영상·팟캐스트 앱은 자동으로 제외). 실행 중이 아닌 앱은 한 번 재생하기 전에는 목록에 뜨지 않습니다.",
   "common.save": "저장",
   "common.cancel": "취소",
 
@@ -156,6 +159,7 @@
   "translation.status.quota": "한도 초과",
   "translation.status.failed": "실패",
   "translation.status.disabled": "API 번역 꺼짐",
+  "translation.status.disabledCache": "캐시 이용 (API 꺼짐)",
 
   "search.title": "가사 검색",
   "search.button": "검색",

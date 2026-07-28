@@ -4,17 +4,23 @@ using Android.Graphics;
 using Android.OS;
 using Android.Views;
 using Android.Widget;
+using Musebase.Core;
 using Musebase.Engine;
 
 namespace Musebase.Android;
 
 /// <summary>
-/// Phase 2 UI — 앱 내 동기 가사 표시(오버레이는 다음 단계). 하는 일:
-/// 1) 알림 접근 권한 상태 표시 + 시스템 설정으로 이동하는 버튼
-/// 2) 가사 영역: 현재 줄(크게) + 번역(아래) + 검색 상태 문구
-///    — <see cref="MusebaseApp"/>이 조립한 <see cref="LyricsCoordinator"/>의
-///    StateChanged/StatusChanged 구독으로 갱신(이벤트는 메인 스레드로 정렬돼 있다)
-/// 3) 감지된 곡명/아티스트/위치/소스앱을 1초마다 갱신 표시(스파이크 유지)
+/// 메인 화면 — **전체 가사를 보여 주는 스크롤 뷰**(Apple Music 가사처럼 현재 줄을 강조하고
+/// 자동으로 가운데로 스크롤) + 하단 **재생 컨트롤**(이전/재생·정지/다음). 나머지 기능
+/// (설정·오버레이 토글·권한·종료)은 상단 아이콘 줄로 접어 화면을 가사에 내준다.
+///
+/// 하는 일:
+/// 1) 상단 아이콘 바: 오버레이 켜기/끄기, 오버레이 위치 이동, 설정, 앱 종료
+/// 2) 권한 배너: 필요한 권한이 빠졌을 때만 나타난다(허용되면 사라져 공간을 돌려준다)
+/// 3) 가사: <see cref="LyricsCoordinator.CurrentLyrics"/>의 전 줄을 그리고, 현재 줄만 흰색·굵게.
+///    현재 줄은 <see cref="Lyrics.LineIndexesAt"/>로 재생 위치에서 직접 계산한다(엔진 변경 없음).
+/// 4) 재생 컨트롤: <see cref="INowPlayingSource"/>의 컨트롤 API를 그대로 쓴다(가용 여부에 따라 흐림).
+///
 /// 엔진·소스는 Application 소유이므로 화면 회전에도 유지되고, 이 Activity는 구독만 붙였다 뗀다.
 /// 레이아웃 리소스 없이 코드로 UI를 만들어 표면적을 최소화한다.
 /// </summary>
@@ -25,7 +31,8 @@ namespace Musebase.Android;
     Exported = true)]
 public sealed class MainActivity : Activity
 {
-    private const int UiRefreshMs = 1000;
+    /// <summary>가사 진행·권한 표시 갱신 주기(현재 줄 추적이 있어 1초보다 촘촘하게).</summary>
+    private const int UiRefreshMs = 300;
 
     /// <summary>알림 권한(Android 13+) 요청 코드.</summary>
     private const int RequestPostNotifications = 0x9001;
@@ -36,117 +43,165 @@ public sealed class MainActivity : Activity
     /// </summary>
     private const string PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS";
 
+    private static readonly Color ActiveColor = Color.White;
+    private static readonly Color InactiveColor = Color.Argb(0xFF, 0x8A, 0x8A, 0x8A);
+    private static readonly Color TranslationColor = Color.Argb(0xFF, 0xC8, 0xC8, 0xC8);
+
     private readonly Handler _handler = new(Looper.MainLooper!);
-    private TextView? _permissionText;
-    private TextView? _notificationPermissionText;
-    private TextView? _overlayPermissionText;
-    private Button? _overlayToggleButton;
-    private TextView? _lyricsStatusText;
-    private TextView? _lineText;
-    private TextView? _translationText;
+
+    private TextView? _trackText;
     private TextView? _statusText;
+    private TextView? _permissionBanner;
+    private ImageButton? _overlayButton;
+    private ImageButton? _moveButton;
+    private ImageButton? _playPauseButton;
+    private ImageButton? _prevButton;
+    private ImageButton? _nextButton;
+    private ScrollView? _lyricsScroll;
+    private LinearLayout? _lyricsColumn;
+    private TextView? _emptyLyricsText;
+
     private bool _uiLoopRunning;
 
-    // 구독 해제를 위해 델리게이트 보관
-    private Action<PlaybackViewState>? _onStateChanged;
+    // 현재 그려 둔 가사(같은 곡이면 다시 만들지 않는다)와 줄별 뷰.
+    private Lyrics? _renderedLyrics;
+    private readonly List<TextView> _lineViews = new();
+    // 줄별 번역 뷰 — 번역이 나중에 채워지면(엔진이 같은 Lyrics를 갱신) 여기만 다시 칠한다.
+    private readonly List<TextView> _translationViews = new();
+    private int _activeLineIndex = -1;
+    private bool _userScrolling; // 사용자가 직접 스크롤 중이면 자동 스크롤을 잠시 멈춘다
+    private long _userScrollUntilMs;
+
     private Action<LyricsStatus>? _onStatusChanged;
     private Action<TranslationDisplayStatus>? _onTranslationStatusChanged;
-    private LyricsStatus _lastLyricsStatus = new(LyricsStatusKind.NoTrack); // 번역상태만 바뀔 때 재렌더용
+    private Action<TrackInfo?>? _onTrackChanged;
+    private LyricsStatus _lastLyricsStatus = new(LyricsStatusKind.NoTrack);
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
 
-        // ---- UI (코드 생성) ----
-        var root = new LinearLayout(this)
-        {
-            Orientation = Orientation.Vertical,
-        };
-        root.SetPadding(48, 96, 48, 48);
+        var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        root.SetBackgroundColor(Color.Argb(0xFF, 0x11, 0x11, 0x11));
+        root.SetPadding(Dp(16), Dp(20), Dp(16), Dp(8));
 
-        var title = new TextView(this) { Text = "Musebase" };
-        title.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 20f);
-        root.AddView(title);
+        // ---- 상단 우측: 기능 아이콘 바(상태표시줄 아래 빈 영역) ----
+        var iconBar = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        iconBar.SetGravity(GravityFlags.End | GravityFlags.CenterVertical);
 
-        _permissionText = new TextView(this);
-        _permissionText.SetPadding(0, 32, 0, 0);
-        root.AddView(_permissionText);
+        // ---- 곡 정보 ----
+        var header = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        header.SetGravity(GravityFlags.CenterVertical);
 
-        var permissionButton = new Button(this) { Text = "알림 접근 권한 설정 열기" };
-        permissionButton.Click += (_, _) =>
-            StartActivity(new Intent(global::Android.Provider.Settings.ActionNotificationListenerSettings));
-        root.AddView(permissionButton);
+        var titleColumn = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        _trackText = new TextView(this) { Text = "재생 중인 곡 없음" };
+        _trackText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 16f);
+        _trackText.SetTextColor(ActiveColor);
+        _trackText.SetSingleLine(true);
+        _trackText.Ellipsize = global::Android.Text.TextUtils.TruncateAt.End;
+        titleColumn.AddView(_trackText);
 
-        // ---- 알림 표시 권한(Android 13+) ----
-        // 없으면 포그라운드 서비스 알림(곡명·상태·번역 토글)이 아예 표시되지 않고,
-        // 시스템의 "다른 앱 위에 표시됨" 알림만 남는다.
-        _notificationPermissionText = new TextView(this);
-        _notificationPermissionText.SetPadding(0, 32, 0, 0);
-        root.AddView(_notificationPermissionText);
+        _statusText = new TextView(this) { Text = "가사 대기 중" };
+        _statusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        _statusText.SetTextColor(InactiveColor);
+        _statusText.SetSingleLine(true);
+        _statusText.Ellipsize = global::Android.Text.TextUtils.TruncateAt.End;
+        titleColumn.AddView(_statusText);
 
-        var notificationPermissionButton = new Button(this) { Text = "알림 표시 권한 허용" };
-        notificationPermissionButton.Click += (_, _) => RequestNotificationPermission();
-        root.AddView(notificationPermissionButton);
+        header.AddView(titleColumn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-        // ---- 오버레이(다른 앱 위 표시) ----
-        _overlayPermissionText = new TextView(this);
-        _overlayPermissionText.SetPadding(0, 32, 0, 0);
-        root.AddView(_overlayPermissionText);
+        _overlayButton = IconButton(global::Android.Resource.Drawable.IcMenuView, "가사 오버레이", ToggleOverlay);
+        _moveButton = IconButton(global::Android.Resource.Drawable.IcMenuCompass, "오버레이 위치 이동", ToggleOverlayMoveMode);
+        var searchButton = IconButton(global::Android.Resource.Drawable.IcMenuSearch, "가사 검색",
+            () => StartActivity(new Intent(this, typeof(SearchActivity))));
+        var wrongButton = IconButton(global::Android.Resource.Drawable.IcMenuDelete, "틀린 가사로 표시", ConfirmMarkWrong);
+        var settingsButton = IconButton(global::Android.Resource.Drawable.IcMenuPreferences, "설정",
+            () => StartActivity(new Intent(this, typeof(SettingsActivity))));
+        var quitButton = IconButton(global::Android.Resource.Drawable.IcMenuCloseClearCancel, "앱 종료", ConfirmQuit);
+        iconBar.AddView(searchButton);
+        iconBar.AddView(wrongButton);
+        iconBar.AddView(_overlayButton);
+        iconBar.AddView(_moveButton);
+        iconBar.AddView(settingsButton);
+        iconBar.AddView(quitButton);
 
-        var overlayPermissionButton = new Button(this) { Text = "오버레이 권한 허용" };
-        overlayPermissionButton.Click += (_, _) => RequestOverlayPermission();
-        root.AddView(overlayPermissionButton);
-
-        _overlayToggleButton = new Button(this) { Text = "가사 오버레이 켜기" };
-        _overlayToggleButton.Click += (_, _) => ToggleOverlay();
-        root.AddView(_overlayToggleButton);
-
-        // ---- 번역 설정(엔진/DeepL 키/대상 언어) ----
-        var settingsButton = new Button(this) { Text = "설정 (재생 소스 · 번역)" };
-        settingsButton.Click += (_, _) => StartActivity(new Intent(this, typeof(SettingsActivity)));
-        root.AddView(settingsButton);
-
-        // ---- 가사 영역 ----
-        _lyricsStatusText = new TextView(this) { Text = "가사 대기 중" };
-        _lyricsStatusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 13f);
-        _lyricsStatusText.SetPadding(0, 48, 0, 0);
-        root.AddView(_lyricsStatusText);
-
-        _lineText = new TextView(this) { Text = "♪" };
-        _lineText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 26f);
-        _lineText.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
-        _lineText.SetPadding(0, 16, 0, 0);
-        root.AddView(_lineText);
-
-        _translationText = new TextView(this) { Visibility = ViewStates.Gone };
-        _translationText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 17f);
-        _translationText.SetPadding(0, 8, 0, 0);
-        root.AddView(_translationText);
-
-        // ---- 재생 감지 정보(스파이크 유지) ----
-        _statusText = new TextView(this) { Text = "감지 대기 중…" };
-        _statusText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 14f);
-        _statusText.SetPadding(0, 64, 0, 0);
-        root.AddView(_statusText);
-
-        var scroll = new ScrollView(this) { FillViewport = true };
-        scroll.AddView(root, new ViewGroup.LayoutParams(
+        // 아이콘 줄을 곡 정보 위(우상단 빈 영역)에 둔다 — 곡명이 길어도 아이콘과 다투지 않는다.
+        root.AddView(iconBar, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        SetContentView(scroll, new ViewGroup.LayoutParams(
+        root.AddView(header);
+
+        // ---- 권한 배너(빠진 권한이 있을 때만) ----
+        _permissionBanner = new TextView(this) { Visibility = ViewStates.Gone };
+        _permissionBanner.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 13f);
+        _permissionBanner.SetTextColor(Color.Argb(0xFF, 0xFF, 0xD5, 0x4F));
+        _permissionBanner.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        _permissionBanner.Click += (_, _) => RequestNextMissingPermission();
+        var bannerParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(8) };
+        root.AddView(_permissionBanner, bannerParams);
+
+        // ---- 가사(전체 스크롤) ----
+        _lyricsColumn = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        _lyricsColumn.SetGravity(GravityFlags.CenterHorizontal);
+        _lyricsColumn.SetPadding(0, Dp(24), 0, Dp(24));
+
+        _emptyLyricsText = new TextView(this) { Text = "♪", Gravity = GravityFlags.Center };
+        _emptyLyricsText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 20f);
+        _emptyLyricsText.SetTextColor(InactiveColor);
+        _lyricsColumn.AddView(_emptyLyricsText);
+
+        _lyricsScroll = new ScrollView(this) { FillViewport = true };
+        _lyricsScroll.AddView(_lyricsColumn, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        // 사용자가 직접 스크롤하면 몇 초간 자동 스크롤을 양보한다(읽는 중에 끌려가지 않도록).
+        _lyricsScroll.Touch += (_, e) =>
+        {
+            if (e.Event?.Action is MotionEventActions.Down or MotionEventActions.Move)
+            {
+                _userScrolling = true;
+                _userScrollUntilMs = SystemClock.UptimeMillis() + 5000;
+            }
+            e.Handled = false;
+        };
+        root.AddView(_lyricsScroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, 0, 1f));
+
+        // ---- 하단: 재생 컨트롤 ----
+        var controls = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        controls.SetGravity(GravityFlags.Center);
+        controls.SetPadding(0, Dp(8), 0, Dp(8));
+        _prevButton = IconButton(global::Android.Resource.Drawable.IcMediaPrevious, "이전 곡",
+            () => Control(s => s.SkipPreviousAsync()), sizeDp: 56);
+        _playPauseButton = IconButton(global::Android.Resource.Drawable.IcMediaPlay, "재생/일시정지",
+            () => Control(s => s.TogglePlayPauseAsync()), sizeDp: 64);
+        _nextButton = IconButton(global::Android.Resource.Drawable.IcMediaNext, "다음 곡",
+            () => Control(s => s.SkipNextAsync()), sizeDp: 56);
+        controls.AddView(_prevButton);
+        controls.AddView(_playPauseButton);
+        controls.AddView(_nextButton);
+        root.AddView(controls);
+
+        SetContentView(root, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
         // ---- 엔진 구독 (조립은 MusebaseApp이 이미 완료) ----
         if (MusebaseApp.Instance is { } app)
         {
-            _onStateChanged = RenderLine;
-            _onStatusChanged = s => { _lastLyricsStatus = s; RenderLyricsStatus(); };
-            _onTranslationStatusChanged = _ => RenderLyricsStatus(); // 번역 상태만 바뀌어도 소스 옆 표기 갱신
-            app.Coordinator.StateChanged += _onStateChanged;
+            // 종료(A안)로 리스너 바인드를 끊어 둔 상태였다면 여기서 복구한다.
+            app.ResumeAfterQuit();
+
+            _onStatusChanged = s => { _lastLyricsStatus = s; RenderStatusLine(); RenderLyrics(); };
+            // 번역이 끝나면 화면의 가사도 즉시 번역본으로 바꿔 준다(같은 곡 = 뷰 재생성 없이 글자만).
+            _onTranslationStatusChanged = _ => { RenderStatusLine(); RenderLyrics(); RefreshTranslations(); };
+            _onTrackChanged = _ => { RenderTrack(); RenderLyrics(); };
             app.Coordinator.StatusChanged += _onStatusChanged;
             app.Coordinator.TranslationStatusChanged += _onTranslationStatusChanged;
-            RenderLine(app.Coordinator.CurrentState); // 초기 스냅샷 반영
+            app.Source.TrackChanged += _onTrackChanged;
+
             _lastLyricsStatus = app.LastStatus;
-            RenderLyricsStatus();
+            RenderTrack();
+            RenderStatusLine();
+            RenderLyrics();
         }
     }
 
@@ -163,38 +218,232 @@ public sealed class MainActivity : Activity
         _handler.RemoveCallbacksAndMessages(null);
     }
 
-    /// <summary>1초마다 권한/감지 상태 텍스트 갱신.</summary>
+    // ---- 주기 갱신 ----
+
     private void UiTick()
     {
         if (!_uiLoopRunning) return;
-        RenderStatus();
+        UpdatePermissionBanner();
+        UpdateControlButtons();
+        RenderLyrics();
+        RefreshTranslations(); // 줄 단위로 번역이 채워지는 경우까지 놓치지 않는다(바뀐 줄만 손댄다)
+        UpdateActiveLine();
         _handler.PostDelayed(UiTick, UiRefreshMs);
     }
 
-    /// <summary>현재 가사 줄 + 번역 갱신(StateChanged — 라인/재생상태 변화 시 발화).</summary>
-    private void RenderLine(PlaybackViewState state)
-    {
-        if (_lineText is null || _translationText is null) return;
+    // ---- 가사 ----
 
-        _lineText.Text = string.IsNullOrEmpty(state.LineContent) ? "♪" : state.LineContent;
-        if (string.IsNullOrEmpty(state.LineTranslation))
+    /// <summary>곡이 바뀌었거나 가사가 새로 들어왔을 때만 줄 뷰를 다시 만든다.</summary>
+    private void RenderLyrics()
+    {
+        var lyrics = MusebaseApp.Instance?.Coordinator.CurrentLyrics;
+        if (ReferenceEquals(lyrics, _renderedLyrics)) return;
+        _renderedLyrics = lyrics;
+        _activeLineIndex = -1;
+
+        if (_lyricsColumn is null || _emptyLyricsText is null) return;
+        _lyricsColumn.RemoveAllViews();
+        _lineViews.Clear();
+        _translationViews.Clear();
+
+        if (lyrics is null || lyrics.Lines.Count == 0)
         {
-            _translationText.Visibility = ViewStates.Gone;
+            _emptyLyricsText.Text = Services.StatusText.Lyrics(_lastLyricsStatus) is { Length: > 0 } s ? s : "♪";
+            _lyricsColumn.AddView(_emptyLyricsText);
+            return;
         }
-        else
+
+        foreach (var line in lyrics.Lines)
         {
-            _translationText.Text = state.LineTranslation;
-            _translationText.Visibility = ViewStates.Visible;
+            var block = new LinearLayout(this) { Orientation = Orientation.Vertical };
+            block.SetPadding(Dp(8), Dp(10), Dp(8), Dp(10));
+
+            var original = new TextView(this)
+            {
+                Text = string.IsNullOrWhiteSpace(line.Content) ? "♪" : line.Content,
+                Gravity = GravityFlags.Center,
+            };
+            original.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 19f);
+            original.SetTextColor(InactiveColor);
+            block.AddView(original);
+
+            // 번역 줄은 처음엔 비어 있을 수 있다(번역이 나중에 도착) — 뷰는 미리 만들어 두고
+            // 채워지는 시점에 RefreshTranslations()가 글자만 넣는다.
+            var translation = ResolveTranslation(line);
+            var tr = new TextView(this)
+            {
+                Text = translation ?? "",
+                Gravity = GravityFlags.Center,
+                Visibility = string.IsNullOrWhiteSpace(translation) ? ViewStates.Gone : ViewStates.Visible,
+            };
+            tr.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 14f);
+            tr.SetTextColor(TranslationColor);
+            tr.SetPadding(0, Dp(2), 0, 0);
+            block.AddView(tr);
+
+            _lyricsColumn.AddView(block, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            _lineViews.Add(original); // 강조·스크롤 기준은 원문 줄
+            _translationViews.Add(tr);
         }
     }
 
-    /// <summary>가사 검색 상태 문구(엔진의 구조화 상태 → 간단 한국어. i18n은 다음 단계).</summary>
-    private void RenderLyricsStatus()
+    /// <summary>
+    /// 번역이 채워졌을 때(엔진이 같은 <see cref="Lyrics"/> 객체의 줄에 태그를 붙인다) 번역 줄만 갱신한다.
+    /// 곡이 바뀐 게 아니므로 뷰를 다시 만들지 않고 글자만 넣어, 스크롤 위치·강조가 튀지 않는다.
+    /// </summary>
+    private void RefreshTranslations()
     {
-        if (_lyricsStatusText is null) return;
-        _lyricsStatusText.Text = Services.StatusText.Combined(
+        if (_renderedLyrics is not { } lyrics) return;
+        var count = Math.Min(_translationViews.Count, lyrics.Lines.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var text = ResolveTranslation(lyrics.Lines[i]);
+            var view = _translationViews[i];
+            var empty = string.IsNullOrWhiteSpace(text);
+            if (!empty && view.Text == text) continue; // 바뀐 것만 손댄다
+            view.Text = text ?? "";
+            view.Visibility = empty ? ViewStates.Gone : ViewStates.Visible;
+        }
+    }
+
+    /// <summary>
+    /// 표시할 번역 — **오버레이(플로팅)와 똑같은 규칙**을 쓴다(`LyricsCoordinator.ResolveDisplayTranslation`).
+    /// 대상이 중국어면 제공자 번역(중국어)을 그대로, "대상 언어 번역만 표시"가 켜져 있으면 대상 태그만,
+    /// 꺼져 있으면 대상 → 제공자 순. 이 규칙이 없으면 제공자의 중국어 번역이 그대로 떠 버린다.
+    /// </summary>
+    private static string? ResolveTranslation(LyricsLine line)
+    {
+        if (MusebaseApp.Instance?.Coordinator is not { } coordinator) return null;
+        var target = (coordinator.TargetLanguage ?? "").ToLowerInvariant();
+        var att = line.Attachments;
+        if (target.StartsWith("zh", StringComparison.Ordinal)) return att.Translation(null, target);
+        if (coordinator.ShowOnlyTargetTranslation) return att.Translation(target);
+        return att.Translation(target, null);
+    }
+
+    /// <summary>
+    /// 재생 위치로 현재 줄을 찾아 강조하고, 화면 가운데로 부드럽게 스크롤한다
+    /// (사용자가 직접 스크롤한 직후에는 양보한다).
+    /// </summary>
+    private void UpdateActiveLine()
+    {
+        if (MusebaseApp.Instance is not { } app || _renderedLyrics is not { } lyrics) return;
+        if (_lineViews.Count == 0 || _lyricsScroll is null) return;
+
+        var position = app.Source.GetEstimatedPosition();
+        if (position is null) return;
+
+        var adjusted = position.Value.TotalSeconds + lyrics.TimeDelay + app.Coordinator.ManualOffsetSeconds;
+        var (current, _) = lyrics.LineIndexesAt(adjusted);
+        var index = current ?? -1;
+        if (index == _activeLineIndex) return;
+
+        if (_activeLineIndex >= 0 && _activeLineIndex < _lineViews.Count)
+        {
+            var previous = _lineViews[_activeLineIndex];
+            previous.SetTextColor(InactiveColor);
+            previous.SetTypeface(Typeface.Default, TypefaceStyle.Normal);
+        }
+
+        _activeLineIndex = index;
+        if (index < 0 || index >= _lineViews.Count) return;
+
+        var view = _lineViews[index];
+        view.SetTextColor(ActiveColor);
+        view.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+
+        if (_userScrolling && SystemClock.UptimeMillis() < _userScrollUntilMs) return;
+        _userScrolling = false;
+
+        // 현재 줄이 화면 가운데 오도록(뷰 최상단 기준 y - 화면 높이 절반 + 줄 높이 절반).
+        var target = ((View?)view.Parent)?.Top ?? view.Top;
+        var y = Math.Max(0, target - _lyricsScroll.Height / 2 + view.Height);
+        _lyricsScroll.SmoothScrollTo(0, y);
+    }
+
+    // ---- 상단/컨트롤 ----
+
+    private void RenderTrack()
+    {
+        if (_trackText is null) return;
+        var track = MusebaseApp.Instance?.Source.CurrentTrack;
+        _trackText.Text = Services.StatusText.Track(track) ?? "재생 중인 곡 없음";
+    }
+
+    private void RenderStatusLine()
+    {
+        if (_statusText is null) return;
+        _statusText.Text = Services.StatusText.Combined(
             _lastLyricsStatus,
             MusebaseApp.Instance?.Coordinator.CurrentTranslationStatus ?? TranslationDisplayStatus.None);
+    }
+
+    private void UpdateControlButtons()
+    {
+        RenderTrack();
+        var source = MusebaseApp.Instance?.Source;
+        if (source is null) return;
+
+        var controls = source.GetControls();
+        SetEnabled(_prevButton, controls.CanPrevious);
+        SetEnabled(_nextButton, controls.CanNext);
+        SetEnabled(_playPauseButton, controls.CanPlayPause);
+        _playPauseButton?.SetImageResource(source.IsPlaying
+            ? global::Android.Resource.Drawable.IcMediaPause
+            : global::Android.Resource.Drawable.IcMediaPlay);
+
+        // 오버레이 버튼은 켜져 있을 때 밝게 — 상태를 아이콘 하나로 알린다.
+        if (_overlayButton is not null)
+            _overlayButton.Alpha = Services.OverlayService.IsRunning ? 1f : 0.45f;
+        if (_moveButton is not null)
+            _moveButton.Alpha = Services.OverlayService.IsRunning ? 1f : 0.3f;
+    }
+
+    private static void SetEnabled(ImageButton? button, bool enabled)
+    {
+        if (button is null) return;
+        button.Enabled = enabled;
+        button.Alpha = enabled ? 1f : 0.3f;
+    }
+
+    private void Control(Func<INowPlayingSource, Task<bool>> action)
+    {
+        if (MusebaseApp.Instance?.Source is not { } source) return;
+        _ = action(source);
+    }
+
+    // ---- 권한 ----
+
+    /// <summary>빠진 권한이 있을 때만 배너를 띄운다(다 갖춰지면 사라져 가사에 공간을 준다).</summary>
+    private void UpdatePermissionBanner()
+    {
+        if (_permissionBanner is null) return;
+        var source = MusebaseApp.Instance?.Source;
+
+        string? message = null;
+        if (source is not null && !source.HasNotificationAccess)
+            message = "알림 접근 권한이 필요합니다 — 눌러서 설정 열기 (재생 감지)";
+        else if (!global::Android.Provider.Settings.CanDrawOverlays(this))
+            message = "다른 앱 위에 표시 권한이 없습니다 — 눌러서 허용 (가사 오버레이)";
+        else if (!HasNotificationPermission)
+            message = "알림 표시 권한이 없습니다 — 눌러서 허용 (곡명·번역 상태 알림)";
+
+        _permissionBanner.Text = message ?? "";
+        _permissionBanner.Visibility = message is null ? ViewStates.Gone : ViewStates.Visible;
+    }
+
+    /// <summary>배너를 누르면 지금 빠진 권한 하나를 요청한다(위 순서대로).</summary>
+    private void RequestNextMissingPermission()
+    {
+        var source = MusebaseApp.Instance?.Source;
+        if (source is not null && !source.HasNotificationAccess)
+        {
+            StartActivity(new Intent(global::Android.Provider.Settings.ActionNotificationListenerSettings));
+            return;
+        }
+        if (!global::Android.Provider.Settings.CanDrawOverlays(this)) { RequestOverlayPermission(); return; }
+        if (!HasNotificationPermission) RequestNotificationPermission();
     }
 
     /// <summary>알림 표시 권한이 있는지(Android 12 이하는 항상 true).</summary>
@@ -205,26 +454,18 @@ public sealed class MainActivity : Activity
 
     /// <summary>
     /// 알림 표시 권한 요청(Android 13+). 거부돼 있으면 시스템 대화상자를 띄우고,
-    /// "다시 묻지 않음"으로 막힌 경우를 대비해 실패 시 앱 알림 설정 화면으로 유도한다.
+    /// "다시 묻지 않음"으로 막힌 경우를 대비해 앱 알림 설정 화면으로 유도한다.
     /// </summary>
     private void RequestNotificationPermission()
     {
-        if (HasNotificationPermission)
-        {
-            Toast.MakeText(this, "알림 표시 권한이 이미 허용돼 있습니다.", ToastLength.Short)?.Show();
-            return;
-        }
-
-        // 한 번 거부된 뒤에는 시스템 대화상자가 뜨지 않으므로 설정 화면으로 보낸다.
+        if (HasNotificationPermission) return;
         if (ShouldShowRequestPermissionRationale(PostNotificationsPermission))
         {
             StartActivity(new Intent(global::Android.Provider.Settings.ActionAppNotificationSettings)
                 .PutExtra(global::Android.Provider.Settings.ExtraAppPackage, PackageName));
             return;
         }
-
-        RequestPermissions(
-            new[] { PostNotificationsPermission }, RequestPostNotifications);
+        RequestPermissions(new[] { PostNotificationsPermission }, RequestPostNotifications);
     }
 
     public override void OnRequestPermissionsResult(
@@ -233,7 +474,7 @@ public sealed class MainActivity : Activity
         base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != RequestPostNotifications) return;
 
-        UpdateOverlayControls();
+        UpdatePermissionBanner();
         if (!HasNotificationPermission)
         {
             Toast.MakeText(this,
@@ -243,15 +484,9 @@ public sealed class MainActivity : Activity
         }
 
         // 권한을 이제 받았는데 서비스가 이미 떠 있으면, 알림이 뜨도록 서비스를 한 번 깨운다.
-        if (Services.OverlayService.IsRunning)
-        {
-            var intent = new Intent(this, typeof(Services.OverlayService));
-            if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(intent);
-            else StartService(intent);
-        }
+        if (Services.OverlayService.IsRunning) StartOverlayService(null);
     }
 
-    /// <summary>오버레이 그리기 권한 요청(시스템 설정의 "다른 앱 위에 표시" 화면으로 이동).</summary>
     private void RequestOverlayPermission()
     {
         if (global::Android.Provider.Settings.CanDrawOverlays(this)) return;
@@ -260,7 +495,8 @@ public sealed class MainActivity : Activity
             global::Android.Net.Uri.Parse("package:" + PackageName)));
     }
 
-    /// <summary>오버레이 서비스 시작/중지 토글. 권한 없으면 권한 화면으로 유도.</summary>
+    // ---- 오버레이 / 종료 ----
+
     private void ToggleOverlay()
     {
         if (Services.OverlayService.IsRunning)
@@ -271,90 +507,106 @@ public sealed class MainActivity : Activity
         {
             if (!global::Android.Provider.Settings.CanDrawOverlays(this))
             {
-                Toast.MakeText(this, "먼저 '오버레이 권한 허용'을 눌러 주세요.", ToastLength.Long)?.Show();
+                Toast.MakeText(this, "먼저 '다른 앱 위에 표시' 권한을 허용해 주세요.", ToastLength.Long)?.Show();
                 RequestOverlayPermission();
                 return;
             }
             // 알림 권한이 없으면 서비스는 돌지만 곡명·상태 알림이 표시되지 않는다 → 먼저 요청.
             if (!HasNotificationPermission) RequestNotificationPermission();
-
-            var intent = new Intent(this, typeof(Services.OverlayService));
-            if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(intent);
-            else StartService(intent);
+            StartOverlayService(null);
         }
-        UpdateOverlayControls();
+        UpdateControlButtons();
     }
 
-    /// <summary>오버레이 권한 상태 문구 + 토글 버튼 라벨을 현재 상태로 갱신.</summary>
-    private void UpdateOverlayControls()
+    /// <summary>오버레이 위치 이동 모드 토글(알림바의 "위치 이동"과 같은 동작).</summary>
+    private void ToggleOverlayMoveMode()
     {
-        if (_overlayPermissionText is not null)
+        if (!Services.OverlayService.IsRunning)
         {
-            _overlayPermissionText.Text = global::Android.Provider.Settings.CanDrawOverlays(this)
-                ? "다른 앱 위 표시: 허용됨 ✓"
-                : "다른 앱 위 표시: 미허용 — '오버레이 권한 허용'을 눌러 설정에서 켜 주세요.";
+            Toast.MakeText(this, "먼저 가사 오버레이를 켜 주세요.", ToastLength.Short)?.Show();
+            return;
         }
-        if (_notificationPermissionText is not null)
-        {
-            _notificationPermissionText.Text = HasNotificationPermission
-                ? "알림 표시: 허용됨 ✓ (곡명·번역 상태 알림)"
-                : "알림 표시: 미허용 — 곡명·상태 알림이 뜨지 않습니다. 아래 버튼으로 허용해 주세요.";
-        }
-        if (_overlayToggleButton is not null)
-            _overlayToggleButton.Text = Services.OverlayService.IsRunning
-                ? "가사 오버레이 끄기" : "가사 오버레이 켜기";
+        StartOverlayService(Services.OverlayService.ActionToggleMove);
     }
 
-    private void RenderStatus()
+    private void StartOverlayService(string? action)
     {
-        UpdateOverlayControls();
+        var intent = new Intent(this, typeof(Services.OverlayService));
+        if (action is not null) intent.SetAction(action);
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.O) StartForegroundService(intent);
+        else StartService(intent);
+    }
 
-        var source = MusebaseApp.Instance?.Source;
-        if (source is null || _permissionText is null || _statusText is null) return;
-
-        var granted = source.HasNotificationAccess;
-        _permissionText.Text = granted
-            ? "알림 접근: 허용됨 ✓"
-            : "알림 접근: 미허용 — 아래 버튼으로 설정에서 Musebase를 켜 주세요.";
-
-        if (!granted)
+    /// <summary>
+    /// 현재 곡을 "틀린 가사"로 표시한다(Windows 트레이의 같은 기능) — 이 곡은 이후 가사를 찾지 않고,
+    /// 캐시에 저장된 잘못된 가사도 지운다. 되돌리려면 가사 검색에서 직접 골라 적용하면 된다.
+    /// </summary>
+    private void ConfirmMarkWrong()
+    {
+        if (MusebaseApp.Instance?.Source.CurrentTrack is null)
         {
-            _statusText.Text = "감지 불가 (알림 접근 권한 필요)";
+            Toast.MakeText(this, "재생 중인 곡이 없습니다.", ToastLength.Short)?.Show();
             return;
         }
 
-        var track = source.CurrentTrack;
-        if (track is null)
-        {
-            _statusText.Text = "감지된 미디어 세션 없음\n(음악 앱에서 재생을 시작해 보세요)";
-            return;
-        }
-
-        var position = source.GetEstimatedPosition();
-        _statusText.Text =
-            $"곡명: {track.Title}\n" +
-            $"아티스트: {track.Artist}\n" +
-            $"앨범: {track.Album}\n" +
-            $"위치: {Format(position)} / {Format(track.Duration)}\n" +
-            $"상태: {(source.IsPlaying ? "재생 중" : "일시정지")}\n" +
-            $"소스 앱: {track.SourceAppId}";
+        new AlertDialog.Builder(this)
+            .SetTitle("틀린 가사로 표시")!
+            .SetMessage("이 곡의 가사를 지우고 앞으로 표시하지 않습니다.\n다시 보려면 '가사 검색'에서 직접 골라 적용하세요.")!
+            .SetPositiveButton("표시", (_, _) =>
+            {
+                MusebaseApp.Instance?.Coordinator.MarkWrongLyrics();
+                Toast.MakeText(this, "틀린 가사로 표시했습니다.", ToastLength.Short)?.Show();
+            })!
+            .SetNegativeButton("취소", (IDialogInterfaceOnClickListener?)null)!
+            .Show();
     }
 
-    private static string Format(TimeSpan? t) =>
-        t is { } v ? $"{(int)v.TotalMinutes}:{v.Seconds:00}" : "-:--";
+    /// <summary>
+    /// 앱 완전 종료(확인 후) — 오버레이 중지 + 재생 감지 중지 + 알림 리스너 바인드 해제.
+    /// 권한 설정은 유지되므로 앱을 다시 열면 자동으로 복구된다.
+    /// </summary>
+    private void ConfirmQuit()
+    {
+        new AlertDialog.Builder(this)
+            .SetTitle("Musebase 종료")!
+            .SetMessage("오버레이와 재생 감지를 모두 멈추고 앱을 종료합니다.\n앱을 다시 열면 그대로 복구됩니다(권한 재설정 불필요).")!
+            .SetPositiveButton("종료", (_, _) =>
+            {
+                MusebaseApp.Instance?.QuitCompletely();
+                FinishAndRemoveTask();
+            })!
+            .SetNegativeButton("취소", (IDialogInterfaceOnClickListener?)null)!
+            .Show();
+    }
+
+    // ---- 유틸 ----
+
+    private int Dp(float dp) => (int)(dp * Resources!.DisplayMetrics!.Density + 0.5f);
+
+    private ImageButton IconButton(int iconRes, string description, Action onClick, float sizeDp = 44)
+    {
+        var button = new ImageButton(this) { ContentDescription = description };
+        button.SetImageResource(iconRes);
+        button.SetBackgroundColor(Color.Transparent);
+        button.SetColorFilter(ActiveColor);
+        button.Click += (_, _) => onClick();
+        var size = Dp(sizeDp);
+        button.LayoutParameters = new LinearLayout.LayoutParams(size, size) { LeftMargin = Dp(4) };
+        return button;
+    }
 
     protected override void OnDestroy()
     {
         _handler.RemoveCallbacksAndMessages(null);
         if (MusebaseApp.Instance is { } app)
         {
-            if (_onStateChanged is not null) app.Coordinator.StateChanged -= _onStateChanged;
             if (_onStatusChanged is not null) app.Coordinator.StatusChanged -= _onStatusChanged;
             if (_onTranslationStatusChanged is not null) app.Coordinator.TranslationStatusChanged -= _onTranslationStatusChanged;
+            if (_onTrackChanged is not null) app.Source.TrackChanged -= _onTrackChanged;
         }
-        _onStateChanged = null;
         _onStatusChanged = null;
         _onTranslationStatusChanged = null;
+        _onTrackChanged = null;
         base.OnDestroy();
     }
 }

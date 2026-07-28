@@ -1,4 +1,7 @@
 {
+  "settings.tab.sources": "Sources",
+  "settings.preferredSources.header": "Preferred music apps (playback source)",
+  "settings.preferredSources.hint": "Pick one or more apps to use ONLY those as the lyrics source — podcasts and video apps will be ignored. Leave all unchecked for automatic detection (browsers, video and podcast apps are excluded automatically). Apps that are not running cannot be listed until they play once.",
   "common.save": "Save",
   "common.cancel": "Cancel",
 
@@ -156,6 +159,7 @@
   "translation.status.quota": "quota exceeded",
   "translation.status.failed": "failed",
   "translation.status.disabled": "API translation off",
+  "translation.status.disabledCache": "cached (API off)",
 
   "search.title": "Search lyrics",
   "search.button": "Search",
