@@ -16,6 +16,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Musebase.Core\Musebase.Core.csproj" />
     <ProjectReference Include="..\..\src\Musebase.Engine\Musebase.Engine.csproj" />
+    <!-- 가사 서버의 병합 정책(순수 함수)을 검증하기 위해 참조한다. -->
+    <ProjectReference Include="..\..\src\Musebase.Server\Musebase.Server.csproj" />
   </ItemGroup>
 
 </Project>

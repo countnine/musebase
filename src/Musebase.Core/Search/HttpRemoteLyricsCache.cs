@@ -1,0 +1,188 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Musebase.Core.Search;
+
+/// <summary>
+/// <see cref="IRemoteLyricsCache"/>의 HTTP 구현 — 개인 가사 서버(`contracts/lyrics-api.md` v1).
+///
+/// 설계 원칙 세 가지:
+/// 1. **조용한 강등** — 모든 예외를 삼키고 조회는 null, 저장은 무시. 서버가 죽어도 앱은 그대로 동작한다.
+/// 2. **짧은 타임아웃** — 조회는 기본 2.5초. 실패해도 그 뒤에 제공자 검색이 이어지므로
+///    여기서 오래 끌면 "서버를 켰더니 느려졌다"가 된다.
+/// 3. **서킷 브레이커** — 연속 실패가 쌓이면 일정 시간 아예 시도하지 않는다.
+///    테일넷 밖(Tailscale 꺼짐)에서 곡이 바뀔 때마다 타임아웃을 기다리는 낭비를 막는다.
+/// </summary>
+public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
+{
+    /// <summary>연속 실패가 이 횟수에 이르면 회로를 연다.</summary>
+    private const int FailureThreshold = 2;
+    private static readonly TimeSpan OpenDuration = TimeSpan.FromSeconds(60);
+    /// <summary>업로드는 백그라운드라 조회보다 여유를 준다.</summary>
+    private static readonly TimeSpan UploadTimeout = TimeSpan.FromSeconds(5);
+
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    // 소켓 고갈을 피하기 위해 인스턴스마다 하나씩 유지한다(설정 변경 시 인스턴스가 새로 만들어진다).
+    private readonly HttpClient _http;
+    private readonly Uri _baseUri;
+    private readonly TimeSpan _timeout;
+    private readonly Action<string>? _log;
+
+    private int _consecutiveFailures;
+    private DateTimeOffset _openUntil = DateTimeOffset.MinValue;
+
+    public HttpRemoteLyricsCache(string endpoint, string? token, int timeoutMs = 2500, Action<string>? log = null)
+        : this(endpoint, token, timeoutMs, log, handler: null) { }
+
+    /// <summary>테스트에서 전송 계층을 갈아끼우기 위한 생성자(스텁 핸들러 주입).</summary>
+    internal HttpRemoteLyricsCache(
+        string endpoint, string? token, int timeoutMs, Action<string>? log, HttpMessageHandler? handler)
+    {
+        var normalized = endpoint.TrimEnd('/');
+        _baseUri = new Uri(normalized + "/", UriKind.Absolute);
+        _timeout = TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, 500, 30_000));
+        _log = log;
+
+        _http = new HttpClient(handler ?? new SocketsHttpHandler
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(1.5),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        })
+        {
+            // 실제 만료는 요청마다 링크된 CTS로 제어한다(조회/업로드 시간이 다르다).
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        if (!string.IsNullOrWhiteSpace(token))
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token!.Trim());
+    }
+
+    public async Task<Lyrics?> GetAsync(string title, string artist, CancellationToken ct = default)
+    {
+        if (IsCircuitOpen()) return null;
+
+        try
+        {
+            var url = new Uri(_baseUri, $"v1/lyrics?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist)}");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(_timeout);
+
+            using var response = await _http.GetAsync(url, cts.Token).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound) { OnSuccess(); return null; } // 미스도 정상 응답
+            if (!response.IsSuccessStatusCode)
+            {
+                OnFailure($"HTTP {(int)response.StatusCode}");
+                return null;
+            }
+
+            var entry = await response.Content.ReadFromJsonAsync<RemoteLyricsEntry>(Json, cts.Token).ConfigureAwait(false);
+            OnSuccess();
+            if (entry?.Lrc is not { Length: > 0 } lrc) return null;
+
+            var lyrics = Lyrics.Parse(lrc);
+            if (lyrics is null) return null;
+            lyrics.Metadata.ServiceName = entry.Service ?? "Server";
+            _log?.Invoke($"[server] 히트: {title} — {entry.Service} (match={entry.Match}, langs={string.Join(",", entry.Langs ?? [])})");
+            return lyrics;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null; // 트랙 교체 등 — 실패로 세지 않는다
+        }
+        catch (Exception e)
+        {
+            OnFailure(e.Message);
+            return null;
+        }
+    }
+
+    public async Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)
+    {
+        if (IsCircuitOpen()) return;
+
+        try
+        {
+            var service = lyrics.Metadata.ServiceName;
+            var payload = new RemoteLyricsEntry
+            {
+                Title = title,
+                Artist = artist,
+                Lrc = lyrics.ToString(),
+                Service = service,
+                // 사용자 편집본은 서버에서 자동 검색 결과에 덮이지 않도록 보호된다.
+                Origin = service == EditedServiceName ? "user" : "provider",
+            };
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(UploadTimeout);
+            using var response = await _http.PutAsJsonAsync(new Uri(_baseUri, "v1/lyrics"), payload, Json, cts.Token)
+                .ConfigureAwait(false);
+
+            if (response.IsSuccessStatusCode) OnSuccess();
+            else OnFailure($"PUT HTTP {(int)response.StatusCode}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 무시
+        }
+        catch (Exception e)
+        {
+            OnFailure(e.Message);
+        }
+    }
+
+    /// <summary>사용자 편집본 표식 — <c>LyricsCoordinator.SaveEditedLyrics</c>가 넣는 값과 같아야 한다.</summary>
+    public const string EditedServiceName = "사용자 편집";
+
+    // ---- 서킷 브레이커 ----
+
+    private bool IsCircuitOpen()
+    {
+        if (DateTimeOffset.UtcNow >= _openUntil) return false;
+        return true;
+    }
+
+    private void OnSuccess()
+    {
+        _consecutiveFailures = 0;
+        _openUntil = DateTimeOffset.MinValue;
+    }
+
+    private void OnFailure(string reason)
+    {
+        _consecutiveFailures++;
+        if (_consecutiveFailures >= FailureThreshold)
+        {
+            _openUntil = DateTimeOffset.UtcNow + OpenDuration;
+            _log?.Invoke($"[server] 연속 실패 {_consecutiveFailures}회 — {(int)OpenDuration.TotalSeconds}초간 조회를 건너뜁니다 ({reason})");
+        }
+        else
+        {
+            _log?.Invoke($"[server] 실패: {reason}");
+        }
+    }
+
+    /// <summary>서버 응답/요청 본문(계약 v1, camelCase).</summary>
+    private sealed record RemoteLyricsEntry
+    {
+        public string? Key { get; init; }
+        public string Title { get; init; } = "";
+        public string Artist { get; init; } = "";
+        public string Lrc { get; init; } = "";
+        public string? Service { get; init; }
+        public string Origin { get; init; } = "provider";
+        public string[]? Langs { get; init; }
+        public int? LineCount { get; init; }
+        public bool? HasInlineTimeTags { get; init; }
+        public int? Revision { get; init; }
+        public string? UpdatedAt { get; init; }
+        public string? Match { get; init; }
+    }
+}

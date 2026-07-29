@@ -366,6 +366,38 @@ public sealed class SettingsWindow : Window
                 sources.Children.Add(cb);
             }
 
+            // ---- 개인 가사 서버(선택) — 로컬 캐시 다음, 제공자 검색 이전에 조회한다 ----
+            sources.Children.Add(Header("settings.lyricsServer.header"));
+            sources.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.lyricsServer.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+            var serverEndpointBox = new TextBox
+            {
+                Text = settings.LyricsServerEndpoint ?? "",
+                Width = 340,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 0, 6),
+            };
+            sources.Children.Add(serverEndpointBox);
+            sources.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.lyricsServer.token"),
+                Margin = new Thickness(0, 0, 0, 2),
+                TextWrapping = TextWrapping.Wrap,
+            });
+            var serverTokenBox = new PasswordBox
+            {
+                Password = settings.LyricsServerToken ?? "",
+                Width = 340,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 0, 8),
+            };
+            sources.Children.Add(serverTokenBox);
+
             // 가사 소스 선택 (레지스트리). 공식/비공식 표시 — 비공식은 공개 배포 리스크 안내.
             sources.Children.Add(Header("settings.sources.header"));
             sources.Children.Add(new TextBlock
@@ -647,6 +679,8 @@ public sealed class SettingsWindow : Window
                 settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;
                 settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
                 settings.PreferredSources = preferredChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
+                settings.LyricsServerEndpoint = string.IsNullOrWhiteSpace(serverEndpointBox.Text) ? null : serverEndpointBox.Text.Trim();
+                settings.LyricsServerToken = string.IsNullOrWhiteSpace(serverTokenBox.Password) ? null : serverTokenBox.Password.Trim();
                 settings.MiniWindowCloseToTray = closeToTrayCheck.IsChecked == true;
                 // 브라우저 디스플레이 포트/LAN (실행 중 변경은 다음 시작부터 적용 — 토글 재시작)
                 if (int.TryParse(browserPortBox.Text.Trim(), out var browserPort) && browserPort is >= 0 and <= 65535)

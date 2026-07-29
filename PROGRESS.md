@@ -3,6 +3,19 @@
 > **상태: windows-v0.16.0 (2026-07-28)** — 빈 구간 오버레이 숨김 + 선호 음악 앱(재생 소스) + 설정 [소스] 탭 분리 + 번역 상태 세분화·i18n 보강. 이전 0.15.0("API 번역 꺼짐" 표기)·0.14.0(Google 번역 엔진·API 번역 토글) 포함.
 > 재개 방법: "이어서"라고 입력하면 아래 백로그부터 진행.
 
+## 미배포 (다음 릴리스 후보)
+- **가사 서버 관리자 페이지(v1.1)** — 브라우저로 여는 대시보드 + 가사 검색·열람·편집·삭제. 앱에는 영향 없음(서버 전용).
+  - **조회 기록** `lookups` 테이블 신설(곡·결과 exact/cleaned/miss·기기·시각, 90일 자동 정리, `MUSEBASE_LOG_LOOKUPS=0`으로 끔). `PRAGMA user_version` 마이그레이션 도입.
+  - **대시보드**: 마지막 조회/오늘/7일 히트율/보관 곡 수 타일, 최근 조회 50건, 미스 상위(채울 후보), 기기별·일별, 최근 업로드, 번역 없는 곡, 표기 차이로 갈린 곡 후보, 느슨한 매치 목록, 진단(헤더 원값·서버 상태).
+  - **검색·열람**: 제목·아티스트 LIKE 검색 → 상세에서 원문·번역 3열 표(타임태그 토글·언어 선택·raw 다운로드) → **편집**(`origin=user`로 저장돼 자동 검색이 못 덮음)·**삭제**.
+  - 인증은 서명 쿠키(`?token=`으로 부트스트랩 후 주소창 정리), 편집·삭제는 CSRF 토큰. JS 0줄이라 CSP를 `default-src 'none'`으로 잠금. 기기 이름은 테일넷 IP 매핑(`MUSEBASE_DEVICES`)으로 — 앱·코어 변경 없음.
+- **개인 가사 서버 v1** — 앱에 서버 주소를 넣으면 **로컬 캐시 → 서버 → 제공자 검색** 3단으로 조회하고, 새로 찾은 가사(번역 포함)를 서버에 올려 다른 기기가 재검색·재번역하지 않는다. 가사 캐시가 이미 번역이 박힌 확장 LRC라 **곡 단위 조회/저장만으로 번역 공유까지 달성**된다.
+  - 서버: `src/Musebase.Server`(ASP.NET Core, Musebase.Core 재사용 — 키 정규화를 클라이언트와 **같은 코드**로 계산). SQLite에 LRC를 **무손실 보관**, 병합 정책(사용자 편집본 보호 / 카라오케·번역 퇴화 거부 / 그 외 나중 것 우선), Bearer 토큰, `--import`로 기존 `translations.db` 시드.
+  - 키 매칭: 정확 키 → 느슨한 키(피처링·리마스터 표기 제거 + **아티스트 뒤 앨범 꼬리 제거**). 실제 캐시 확인 결과 Windows SMTC는 아티스트를 "MGMT — Oracular Spectacular"로 보고하는데 Android는 "MGMT"만 보고해, 이 처리가 없으면 기기 간 히트가 갈린다.
+  - 클라이언트: `IRemoteLyricsCache`/`HttpRemoteLyricsCache`(코어) + `LyricsCoordinator.RemoteCache`. 조회 2.5초 타임아웃 + 연속 2회 실패 시 60초 서킷 브레이커 + 모든 실패를 null로 강등 → 서버가 없거나 테일넷 밖이어도 동작이 이전과 같다. 서버 히트분은 로컬 캐시로 승격.
+  - 배포: Oracle(ARM64) + systemd + `tailscale serve` HTTPS(공개 포트 0, Android 평문 차단 회피). 절차는 `src/Musebase.Server/deploy/README.md`.
+  - 문서: `contracts/lyrics-api.md`(v1), `docs/adr/0005-personal-lyrics-server.md`. 설정은 Windows [소스] 탭 / Android [재생 소스] 탭, 저장 즉시 반영.
+
 ## v0.16.0 추가분 (Android 0.3.0 동반)
 - **Windows: 설정 [소스] 탭 분리** — [일반]에 있던 "선호 음악 앱(재생 소스)"과 "가사 소스"를 새 [소스] 탭으로 옮겼다(일반에는 언어·미니창·브라우저 디스플레이·텔레메트리만 남는다).
 - **Windows: 선호 음악 앱 + 비음악 앱 자동 제외** — 설정 [일반]에 "선호 음악 앱(재생 소스)" 체크 목록 추가(고르면 그 앱들만 인식, 비우면 자동). 자동 모드의 제외 대상에 브라우저뿐 아니라 **영상·팟캐스트 앱**(YouTube·Netflix·Wavve·TVING·Podcast 계열 등)을 더했다 — YouTube Music은 음악이라 예외. 저장 키 `preferredSources`(SourceAppUserModelId 목록), Android `PreferredSources`와 같은 의미.

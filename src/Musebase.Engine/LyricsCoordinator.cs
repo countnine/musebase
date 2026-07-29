@@ -66,6 +66,13 @@ public sealed class LyricsCoordinator : IDisposable
     /// <summary>곡 단위 가사 캐시 (히트 시 네트워크 검색 생략)</summary>
     public LyricsCacheStore? Cache { get; set; }
 
+    /// <summary>
+    /// 원격 가사 캐시(개인 서버). null이면 사용하지 않는다. 로컬 캐시 미스와 제공자 검색 **사이**에
+    /// 조회하고, 새로 찾은 가사는 여기에도 올린다. 실패·미접속은 조용히 무시되므로 서버가 없어도
+    /// 동작이 달라지지 않는다(가변 속성 — 설정에서 주소를 바꾸면 재시작 없이 반영된다).
+    /// </summary>
+    public IRemoteLyricsCache? RemoteCache { get; set; }
+
     /// <summary>DeepL target_lang (예: KO). 표시 우선순위 tr:{lang} → tr에도 사용.</summary>
     public string TargetLanguage { get; set; } = "KO";
 
@@ -220,6 +227,36 @@ public sealed class LyricsCoordinator : IDisposable
             return;
         }
 
+        // 1-b) 가사 서버(개인 서버)에 물어본다 — 다른 기기가 이미 찾아 둔 가사·번역을 그대로 받는다.
+        //      실패·미접속·미스는 모두 null이라 아래 제공자 검색으로 자연히 흘러간다.
+        if (RemoteCache is { } remoteCache)
+        {
+            var remoteCts = new CancellationTokenSource();
+            _searchCts = remoteCts;
+            var remote = await remoteCache.GetAsync(track.Title, track.Artist, remoteCts.Token);
+            if (remoteCts.Token.IsCancellationRequested) return; // 트랙이 또 바뀜
+            if (remote is not null)
+            {
+                CurrentLyrics = remote;
+                _lastLineIndex = int.MinValue;
+                // 로컬 캐시로 승격 — 다음부터는 서버 없이(오프라인에서도) 즉시 뜬다.
+                try { Cache?.Set(track.Title, track.Artist, remote); }
+                catch (Exception e) { Log?.Invoke($"[server] 로컬 승격 실패: {e.Message}"); }
+
+                RaiseStatus(new LyricsStatus(
+                    LyricsStatusKind.Cache, track.ToString(), remote.Metadata.ServiceName ?? ""));
+                Telemetry.Track(TelemetryEvents.LyricsSearch, new Dictionary<string, object?>
+                {
+                    ["winner"] = SourceIdOf(remote.Metadata.ServiceName),
+                    ["perSource"] = new Dictionary<string, object?>(),
+                    ["cached"] = true,
+                    ["cleanedQueryUsed"] = false,
+                });
+                await TranslateAsync(remote, remoteCts.Token); // 대상 언어가 비어 있으면 보충 번역
+                return;
+            }
+        }
+
         RaiseStatus(new LyricsStatus(LyricsStatusKind.Searching, track.ToString()));
         var cts = new CancellationTokenSource();
         _searchCts = cts;
@@ -268,6 +305,8 @@ public sealed class LyricsCoordinator : IDisposable
                 {
                     Cache?.Set(track.Title, track.Artist, CurrentLyrics);
                     Log?.Invoke($"[cache] 저장: {track}");
+                    // 가사 서버에도 올려 다른 기기가 재검색·재번역하지 않게 한다(실패는 무시).
+                    _ = RemoteCache?.SetAsync(track.Title, track.Artist, CurrentLyrics);
                 }
                 catch (Exception e)
                 {
@@ -338,7 +377,10 @@ public sealed class LyricsCoordinator : IDisposable
             LyricsStatusKind.Manual, CurrentTrack?.ToString() ?? "", lyrics.Metadata.ServiceName ?? ""));
         await TranslateAsync(lyrics, cts.Token);
         if (CurrentTrack is { } track && !cts.Token.IsCancellationRequested)
+        {
             Cache?.Set(track.Title, track.Artist, lyrics);
+            _ = RemoteCache?.SetAsync(track.Title, track.Artist, lyrics); // 수동 선택본도 공유
+        }
     }
 
     /// <summary>
@@ -353,6 +395,8 @@ public sealed class LyricsCoordinator : IDisposable
         {
             Cache?.Set(track.Title, track.Artist, lyrics);
             Log?.Invoke($"[edit] 저장: {track}");
+            // 편집본은 서버에서 origin=user로 보호되어 다른 기기의 자동 검색이 덮어쓰지 못한다.
+            _ = RemoteCache?.SetAsync(track.Title, track.Artist, lyrics);
         }
         catch (Exception e)
         {

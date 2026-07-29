@@ -183,6 +183,21 @@ public sealed class AppSettings
     public string? LibreTranslateApiKeyEncrypted { get; set; }
 
     /// <summary>
+    /// 개인 가사 서버 주소(예: <c>https://oracle.example.ts.net</c>). 비면 사용하지 않는다.
+    /// 로컬 캐시 미스와 제공자 검색 사이에 이 서버를 조회하고, 새로 찾은 가사를 여기에도 올린다
+    /// (계약: <c>contracts/lyrics-api.md</c>). 서버가 없거나 못 붙으면 조용히 기존 동작으로 강등된다.
+    /// </summary>
+    public string? LyricsServerEndpoint { get; set; }
+
+    /// <summary>가사 서버 공유 토큰(평문) — 파일엔 암호화본만 저장한다.</summary>
+    [JsonIgnore]
+    public string? LyricsServerToken { get; set; }
+
+    /// <summary>가사 서버 토큰의 DPAPI 암호문(base64).</summary>
+    [JsonPropertyName("lyricsServerTokenEnc")]
+    public string? LyricsServerTokenEncrypted { get; set; }
+
+    /// <summary>
     /// 엔진 id별 API 키 조회(설정 UI가 선택된 엔진의 키를 따라 보여주는 데 쓴다).
     /// 키를 쓰지 않는 엔진(MyMemory 등)은 null.
     /// </summary>
@@ -281,6 +296,7 @@ public sealed class AppSettings
 
         GoogleApiKey = _secretStore.Unprotect(GoogleApiKeyEncrypted);
         LibreTranslateApiKey = _secretStore.Unprotect(LibreTranslateApiKeyEncrypted);
+        LyricsServerToken = _secretStore.Unprotect(LyricsServerTokenEncrypted);
     }
 
     public void Save()
@@ -291,6 +307,7 @@ public sealed class AppSettings
             DeeplApiKeyEncrypted = _secretStore.Protect(DeeplApiKey);
             GoogleApiKeyEncrypted = _secretStore.Protect(GoogleApiKey);
             LibreTranslateApiKeyEncrypted = _secretStore.Protect(LibreTranslateApiKey);
+            LyricsServerTokenEncrypted = _secretStore.Protect(LyricsServerToken);
             LegacyDeeplApiKey = null;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));

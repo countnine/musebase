@@ -99,7 +99,18 @@ public sealed class MusebaseApp : Application
                 && !string.Equals(engineId, TranslatorRegistry.DefaultFreeEngine, StringComparison.OrdinalIgnoreCase)
                     ? TranslatorRegistry.DefaultFreeEngine : null,
             // 끄면 API 호출 없이 캐시된 번역만 표시(유료 사용량 차단) — Windows 트레이 토글과 같은 스위치.
-            ApiTranslationEnabled: Settings.ApiTranslationEnabled);
+            ApiTranslationEnabled: Settings.ApiTranslationEnabled,
+            // 개인 가사 서버(선택) — 비면 사용하지 않는다.
+            LyricsServerEndpoint: Settings.LyricsServerEndpoint,
+            LyricsServerToken: Settings.LyricsServerToken);
+    }
+
+    /// <summary>가사 서버 주소·토큰을 다시 적용한다(설정 저장 시 — 재시작 불필요).</summary>
+    public void ApplyLyricsServerSettings()
+    {
+        if (Coordinator is null) return;
+        LyricsEngineFactory.ApplyServer(
+            Coordinator, BuildConfig(), m => global::Android.Util.Log.Info("Musebase", m));
     }
 
     /// <summary>
