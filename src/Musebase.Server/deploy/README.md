@@ -49,6 +49,7 @@ self-contained라 서버에 .NET 런타임을 설치하거나 갱신할 필요�
 ## 4. systemd 등록
 
 ```bash
+# 아래 4~7단계는 deploy/install.sh 한 방으로도 됩니다: sudo bash /tmp/musebase-server/deploy/install.sh
 sudo cp /opt/musebase/deploy/musebase-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now musebase-server
