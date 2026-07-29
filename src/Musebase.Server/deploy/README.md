@@ -105,10 +105,15 @@ sudo cp /opt/musebase/deploy/backup.sh /usr/local/bin/musebase-backup
 sudo chmod +x /usr/local/bin/musebase-backup
 ```
 
+백업 스크립트는 `sqlite3 .backup`(WAL 중에도 일관 스냅샷) → `PRAGMA integrity_check` 검증 → gzip →
+보존 기간 정리 순으로 동작한다. 자세한 내용과 **오프사이트 사본·복구 절차·다른 서버로 이전**은
+`MIGRATION.md`를 참고한다.
+
 `/etc/systemd/system/musebase-backup.service`(Type=oneshot, ExecStart=/usr/local/bin/musebase-backup)와
 `musebase-backup.timer`(OnCalendar=*-*-* 04:00:00)를 만들어 `systemctl enable --now musebase-backup.timer`.
 
-WAL 모드에서는 `cp`가 안전하지 않으므로 스크립트는 `sqlite3 .backup`을 쓴다. 주 1회 개발 PC로
+오프사이트 사본은 `/etc/musebase/server.env`에 `MUSEBASE_BACKUP_REMOTE=user@host:/path` 한 줄이면
+매일 백업 뒤 자동으로 넘어간다(테일넷 이름 사용 가능). 주 1회 개발 PC로
 `scp` 회수해 두면 오프사이트 백업이 된다.
 
 ## 8. 관리자 페이지
