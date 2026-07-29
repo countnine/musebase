@@ -1,0 +1,13 @@
+# 도커 빌드 컨텍스트에서 제외 — 빌드 산출물·배포물·IDE 부산물은 이미지에 들어갈 이유가 없다.
+**/bin/
+**/obj/
+publish/
+publish-*/
+artifacts/
+Releases/
+.git/
+.vs/
+.idea/
+external/
+spikes/
+apple/
