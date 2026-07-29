@@ -71,8 +71,10 @@ public sealed class SettingsWindow : Window
     /// </summary>
     private static List<(string Id, string Label)> BuildPreferredSourceItems(AppSettings settings)
     {
+        var available = AvailableSourcesProvider?.Invoke() ?? Array.Empty<string>();
+
         var ids = new List<string>();
-        foreach (var id in AvailableSourcesProvider?.Invoke() ?? Array.Empty<string>())
+        foreach (var id in available)
             if (!ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
         foreach (var id in settings.PreferredSources)
             if (!ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
@@ -86,7 +88,14 @@ public sealed class SettingsWindow : Window
             var known = KnownMusicApps.FirstOrDefault(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
             if (NowPlayingService.IsBrowser(id) && !settings.PreferredSources.Contains(id, StringComparer.OrdinalIgnoreCase))
                 continue;
-            items.Add((id, known.Label is { Length: > 0 } ? $"{known.Label} ({id})" : id));
+
+            // 알려진 앱은 설치·실행 여부와 무관하게 나열되므로, 지금 실제로 감지되는지 표시한다 —
+            // 이게 없으면 "설정엔 있는데 왜 인식이 안 되지"로 헤매게 된다(MusicBee 사례).
+            var name = known.Label is { Length: > 0 } ? $"{known.Label} ({id})" : id;
+            var mark = available.Contains(id, StringComparer.OrdinalIgnoreCase)
+                ? Loc.T("settings.preferredSources.detected")
+                : Loc.T("settings.preferredSources.notDetected");
+            items.Add((id, $"{name}  {mark}"));
         }
         return items;
     }

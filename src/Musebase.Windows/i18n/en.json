@@ -1,4 +1,8 @@
 {
+  "status.sourceNotRunning": "Waiting for {source} — the player you pinned is not running (tray → Playback source → Auto-detect to follow any app)",
+  "tray.source.notRunning": "{source} (not detected now)",
+  "settings.preferredSources.detected": "● playing now",
+  "settings.preferredSources.notDetected": "(not detected now)",
   "settings.lyricsServer.header": "Personal lyrics server (optional)",
   "settings.lyricsServer.hint": "If set, Musebase asks this server before searching lyrics providers, and uploads newly found lyrics (with translations) so your other devices do not search or translate again. Leave empty to disable. Example: https://oracle.example.ts.net",
   "settings.lyricsServer.token": "Server token",
