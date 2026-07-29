@@ -46,9 +46,26 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     o.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
 });
+// 요청줄에는 쿼리스트링이 포함된다 — 관리자 부트스트랩 URL(`/admin?token=…`)의 토큰이
+// journalctl에 그대로 남지 않도록 Hosting 로그를 Warning으로 낮춘다.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", LogLevel.Warning);
 
 var app = builder.Build();
 using var store = new LyricsStore(dbPath);
+var admin = AdminOptions.FromEnvironment(token!);
+app.MapAdmin(store, admin);
+
+// 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
+_ = Task.Run(async () =>
+{
+    var timer = new PeriodicTimer(TimeSpan.FromHours(24));
+    do
+    {
+        try { store.PruneLookups(admin.RetentionDays); }
+        catch (Exception e) { app.Logger.LogWarning("조회 기록 정리 실패: {Message}", e.Message); }
+    }
+    while (await timer.WaitForNextTickAsync());
+});
 
 /// 공유 토큰 검사 — 타이밍 공격을 피하려 고정시간 비교를 쓴다.
 bool Authorized(HttpRequest request)
@@ -69,6 +86,18 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
 
     var found = store.Get(title!, artist ?? "");
+
+    // 관리자 화면용 조회 기록 — 실패해도 조회 자체를 깨뜨리지 않는다.
+    if (admin.LogLookups)
+    {
+        try
+        {
+            store.LogLookup(title!, artist ?? "", found?.Match ?? "miss", found?.Key,
+                AdminEndpoints.DeviceOf(request, admin), request.Headers.UserAgent.ToString());
+        }
+        catch (Exception e) { app.Logger.LogWarning("조회 기록 실패: {Message}", e.Message); }
+    }
+
     return found is null ? Results.NotFound() : Results.Ok(found);
 });
 
@@ -94,7 +123,8 @@ app.MapPut("/v1/lyrics", async (HttpRequest request) =>
     if (incoming is null || string.IsNullOrWhiteSpace(incoming.Title) || string.IsNullOrWhiteSpace(incoming.Lrc))
         return Results.Json(new ApiError("title and lrc required"), statusCode: 400);
 
-    var saved = store.Upsert(incoming, updatedBy: null, out var rejection);
+    // 어느 기기가 올렸는지 남긴다(관리자 화면의 "올린 기기").
+    var saved = store.Upsert(incoming, updatedBy: AdminEndpoints.DeviceOf(request, admin), out var rejection);
     return saved is null
         ? Results.Json(rejection!, statusCode: StatusCodes.Status202Accepted)
         : Results.Ok(saved);

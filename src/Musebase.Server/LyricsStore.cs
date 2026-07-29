@@ -15,12 +15,19 @@ public sealed class LyricsStore : IDisposable
 {
     private readonly SqliteConnection _conn;
     private readonly object _lock = new();
+    private readonly string _dbPath;
+
+    /// <summary>저장·비교에 쓰는 시각 포맷(ISO-8601 UTC). 문자열 비교로 정렬·범위 질의가 되도록 고정 폭.</summary>
+    internal const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
+
+    internal static string UtcNow() => DateTimeOffset.UtcNow.ToString(TimeFormat);
 
     public LyricsStore(string dbPath)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(dbPath));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
+        _dbPath = Path.GetFullPath(dbPath);
         _conn = new SqliteConnection($"Data Source={dbPath}");
         _conn.Open();
         Execute("PRAGMA journal_mode=WAL;");
@@ -42,6 +49,34 @@ public sealed class LyricsStore : IDisposable
             );
             CREATE INDEX IF NOT EXISTS ix_lyrics_loose ON lyrics(loose_key);
             """);
+        Migrate();
+    }
+
+    /// <summary>
+    /// 스키마 버전 마이그레이션. <c>PRAGMA user_version</c>으로 관리한다 —
+    /// <c>CREATE TABLE IF NOT EXISTS</c>와 달리 <c>ALTER TABLE</c>은 재실행하면 실패하므로,
+    /// 컬럼을 더할 일이 생기기 전에 버전 관리를 들여 둔다.
+    /// 0 = lyrics만(v1 배포본), 1 = lookups(조회 기록) 추가.
+    /// </summary>
+    private void Migrate()
+    {
+        if (ScalarInt("PRAGMA user_version;") >= 1) return;
+
+        Execute("""
+            CREATE TABLE IF NOT EXISTS lookups (
+                id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                at     TEXT NOT NULL,     -- ISO-8601 UTC (lyrics.updated_at과 같은 포맷)
+                title  TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                result TEXT NOT NULL,     -- 'exact' | 'cleaned' | 'miss'
+                key    TEXT,              -- 히트 시 맞은 행의 key, 미스면 NULL
+                device TEXT NOT NULL,
+                client TEXT               -- User-Agent 원문(진단용)
+            );
+            CREATE INDEX IF NOT EXISTS ix_lookups_at        ON lookups(at);
+            CREATE INDEX IF NOT EXISTS ix_lookups_result_at ON lookups(result, at);
+            """);
+        Execute("PRAGMA user_version = 1;");
     }
 
     // ---- 키 계산 (클라이언트와 같은 코드를 쓴다) ----
@@ -206,7 +241,7 @@ public sealed class LyricsStore : IDisposable
             }
 
             var revision = (current?.Revision ?? 0) + 1;
-            var updatedAt = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            var updatedAt = UtcNow();
             var langs = string.Join(',', facts.Langs);
 
             using var cmd = _conn.CreateCommand();
@@ -307,6 +342,306 @@ public sealed class LyricsStore : IDisposable
             else imported++;
         }
         return (imported, skipped);
+    }
+
+    // ---- 조회 기록(관리자 화면) ----
+
+    /// <summary>
+    /// 조회 1건 기록. 실패해도 조회 자체를 깨뜨리면 안 되므로 호출부에서 try/catch로 감싼다.
+    /// <paramref name="result"/>는 "exact" | "cleaned" | "miss".
+    /// </summary>
+    public void LogLookup(string title, string artist, string result, string? key, string device, string? client)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO lookups (at, title, artist, result, key, device, client)
+                VALUES ($at, $title, $artist, $result, $key, $device, $client);
+                """;
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.Parameters.AddWithValue("$title", title);
+            cmd.Parameters.AddWithValue("$artist", artist);
+            cmd.Parameters.AddWithValue("$result", result);
+            cmd.Parameters.AddWithValue("$key", (object?)key ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$device", device);
+            cmd.Parameters.AddWithValue("$client", (object?)client ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>보존 기간이 지난 조회 기록을 지운다. 지운 행 수를 돌려준다.</summary>
+    public int PruneLookups(int retentionDays)
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-Math.Max(1, retentionDays)).ToString(TimeFormat);
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM lookups WHERE at < $cutoff;";
+            cmd.Parameters.AddWithValue("$cutoff", cutoff);
+            return cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>기간 내 결과별 건수(히트율 계산용).</summary>
+    public HitRate HitRateSince(string sinceUtc)
+    {
+        int exact = 0, cleaned = 0, miss = 0;
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT result, COUNT(*) FROM lookups WHERE at >= $since GROUP BY result;";
+            cmd.Parameters.AddWithValue("$since", sinceUtc);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var count = reader.GetInt32(1);
+                switch (reader.GetString(0))
+                {
+                    case LyricsEntry.MatchExact: exact = count; break;
+                    case LyricsEntry.MatchCleaned: cleaned = count; break;
+                    default: miss = count; break;
+                }
+            }
+        }
+        return new HitRate(exact, cleaned, miss);
+    }
+
+    /// <summary>최근 조회 기록(최신순).</summary>
+    public IReadOnlyList<LookupRow> RecentLookups(int limit = 50)
+    {
+        var rows = new List<LookupRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT at, title, artist, result, key, device FROM lookups ORDER BY id DESC LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new LookupRow(
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5)));
+        }
+        return rows;
+    }
+
+    /// <summary>기간 내 미스 상위 — 서버에 없는 곡(=채울 후보).</summary>
+    public IReadOnlyList<MissRow> TopMisses(string sinceUtc, int limit = 50)
+    {
+        var rows = new List<MissRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT MAX(title), MAX(artist), COUNT(*) AS cnt, MAX(at) AS last_at, COUNT(DISTINCT device)
+                FROM lookups WHERE result = 'miss' AND at >= $since
+                GROUP BY lower(title), lower(artist)
+                ORDER BY cnt DESC, last_at DESC LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$since", sinceUtc);
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new MissRow(
+                    reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
+                    reader.GetString(3), reader.GetInt32(4)));
+        }
+        return rows;
+    }
+
+    /// <summary>기기별 조회·히트 수와 마지막 접속.</summary>
+    public IReadOnlyList<DeviceRow> DeviceActivity(string sinceUtc)
+    {
+        var rows = new List<DeviceRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT device, COUNT(*), SUM(CASE WHEN result <> 'miss' THEN 1 ELSE 0 END), MAX(at)
+                FROM lookups WHERE at >= $since GROUP BY device ORDER BY MAX(at) DESC;
+                """;
+            cmd.Parameters.AddWithValue("$since", sinceUtc);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new DeviceRow(
+                    reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3)));
+        }
+        return rows;
+    }
+
+    /// <summary>일별 히트/미스 건수(막대 그래프용, 날짜 오름차순).</summary>
+    public IReadOnlyList<DailyRow> DailyHitRate(string sinceUtc)
+    {
+        var rows = new List<DailyRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT substr(at, 1, 10) AS day,
+                       SUM(CASE WHEN result <> 'miss' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN result =  'miss' THEN 1 ELSE 0 END)
+                FROM lookups WHERE at >= $since GROUP BY day ORDER BY day;
+                """;
+            cmd.Parameters.AddWithValue("$since", sinceUtc);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new DailyRow(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2)));
+        }
+        return rows;
+    }
+
+    /// <summary>기간 내 느슨한 키로 맞은 조회 — 표기 차이가 실제로 흡수되는지 확인용.</summary>
+    public IReadOnlyList<LookupRow> CleanedMatches(string sinceUtc, int limit = 50)
+    {
+        var rows = new List<LookupRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT at, title, artist, result, key, device FROM lookups
+                WHERE result = 'cleaned' AND at >= $since ORDER BY id DESC LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$since", sinceUtc);
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new LookupRow(
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5)));
+        }
+        return rows;
+    }
+
+    // ---- 목록·검색(관리자 화면) ----
+
+    private const string SongColumns =
+        "key, loose_key, title, artist, service, origin, langs, line_count, has_inline, revision, updated_at, updated_by";
+
+    /// <summary>
+    /// 제목·아티스트 부분 일치 검색(대소문자 무시). 질의가 비면 최근 갱신순 목록.
+    /// 곡 수가 수백 규모라 LIKE 풀스캔으로 충분하다(`%…%`는 어차피 인덱스를 못 탄다).
+    /// </summary>
+    public IReadOnlyList<SongRow> Search(string? query, int limit = 100, int offset = 0)
+    {
+        var like = AdminQuery.ToLikePattern(query);
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = like is null
+                ? $"SELECT {SongColumns} FROM lyrics ORDER BY updated_at DESC LIMIT $limit OFFSET $offset;"
+                : $"""
+                   SELECT {SongColumns} FROM lyrics
+                   WHERE lower(title) LIKE $like ESCAPE '\' OR lower(artist) LIKE $like ESCAPE '\'
+                   ORDER BY updated_at DESC LIMIT $limit OFFSET $offset;
+                   """;
+            if (like is not null) cmd.Parameters.AddWithValue("$like", like);
+            cmd.Parameters.AddWithValue("$limit", limit);
+            cmd.Parameters.AddWithValue("$offset", offset);
+            return ReadSongs(cmd);
+        }
+    }
+
+    /// <summary>최근에 올라온 곡(대시보드용).</summary>
+    public IReadOnlyList<SongRow> RecentUploads(int limit = 20)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = $"SELECT {SongColumns} FROM lyrics ORDER BY updated_at DESC LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$limit", limit);
+            return ReadSongs(cmd);
+        }
+    }
+
+    /// <summary>번역이 하나도 없는 곡 — 일괄 사전번역 대상 후보.</summary>
+    public IReadOnlyList<SongRow> WithoutTranslation(int limit = 200)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = $"SELECT {SongColumns} FROM lyrics WHERE langs = '' ORDER BY updated_at DESC LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$limit", limit);
+            return ReadSongs(cmd);
+        }
+    }
+
+    /// <summary>
+    /// 느슨한 키가 같은데 정확 키가 다른 행들 — 같은 곡이 표기 차이로 갈려 저장됐을 후보.
+    /// 키 정규화가 실제로 먹는지 눈으로 확인하는 진단 목록이다.
+    /// </summary>
+    public IReadOnlyList<SongRow> DuplicateCandidates(int limit = 100)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT {SongColumns} FROM lyrics
+                WHERE loose_key IN (SELECT loose_key FROM lyrics GROUP BY loose_key HAVING COUNT(*) > 1)
+                ORDER BY loose_key, updated_at DESC LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$limit", limit);
+            return ReadSongs(cmd);
+        }
+    }
+
+    private static List<SongRow> ReadSongs(SqliteCommand cmd)
+    {
+        var rows = new List<SongRow>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var langs = reader.GetString(6);
+            rows.Add(new SongRow(
+                reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5),
+                langs.Length == 0 ? Array.Empty<string>() : langs.Split(','),
+                reader.GetInt32(7), reader.GetInt32(8) != 0, reader.GetInt32(9),
+                reader.GetString(10), reader.IsDBNull(11) ? null : reader.GetString(11)));
+        }
+        return rows;
+    }
+
+    /// <summary>정확 키로 1건(관리자 상세용, LRC 전문 포함). <c>Match</c>는 채우지 않는다.</summary>
+    public LyricsEntry? GetByKey(string key)
+    {
+        lock (_lock) return Read("key = $k", key);
+    }
+
+    /// <summary>곡 1건 삭제(관리자 전용). 지워졌으면 true.</summary>
+    public bool Delete(string key)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM lyrics WHERE key = $k;";
+            cmd.Parameters.AddWithValue("$k", key);
+            return cmd.ExecuteNonQuery() > 0;
+        }
+    }
+
+    /// <summary>DB 파일 크기(WAL 포함).</summary>
+    public long DatabaseSizeBytes()
+    {
+        long total = 0;
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+        {
+            try
+            {
+                var info = new FileInfo(_dbPath + suffix);
+                if (info.Exists) total += info.Length;
+            }
+            catch (Exception) { /* 크기 조회 실패는 무시 */ }
+        }
+        return total;
+    }
+
+    private int ScalarInt(string sql)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        return Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
     }
 
     private void Execute(string sql)
