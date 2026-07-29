@@ -1,4 +1,8 @@
 {
+  "status.sourceNotRunning": "{source} 대기 중 — 고정해 둔 플레이어가 실행 중이 아닙니다 (트레이 → 재생 소스 → 자동 감지로 바꾸면 아무 앱이나 따라갑니다)",
+  "tray.source.notRunning": "{source} (지금은 감지 안 됨)",
+  "settings.preferredSources.detected": "● 지금 재생 중",
+  "settings.preferredSources.notDetected": "(지금은 감지 안 됨)",
   "settings.lyricsServer.header": "개인 가사 서버 (선택)",
   "settings.lyricsServer.hint": "주소를 넣으면 가사 제공자를 검색하기 전에 이 서버에 먼저 물어보고, 새로 찾은 가사(번역 포함)를 서버에 올려 다른 기기가 다시 검색·번역하지 않게 합니다. 비우면 사용하지 않습니다. 예: https://oracle.example.ts.net",
   "settings.lyricsServer.token": "서버 토큰",

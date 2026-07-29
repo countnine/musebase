@@ -243,6 +243,28 @@ internal static class Program
                         sourceMenu.Items.Add(item);
                     }
                 }
+
+                // 설정에서 고른 선호 앱(또는 고정해 둔 앱) 중 지금 SMTC에 없는 것도 흐리게 보여 준다 —
+                // 설정 목록엔 있는데 트레이엔 없어서 "왜 안 뜨지"로 헤매는 일을 없앤다.
+                var missing = settings.PreferredSources
+                    .Concat(string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase) ? [] : new[] { mode })
+                    .Where(id => !string.IsNullOrWhiteSpace(id)
+                                 && !sources.Contains(id, StringComparer.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (var id in missing)
+                {
+                    var captured = id;
+                    var item = new MenuItem
+                    {
+                        Header = MenuText(Loc.T("tray.source.notRunning", ("source", id))),
+                        IsCheckable = true,
+                        IsChecked = string.Equals(mode, id, StringComparison.OrdinalIgnoreCase),
+                        Opacity = 0.55, // 지금은 못 잡는다는 신호 — 고르는 것 자체는 막지 않는다
+                    };
+                    item.Click += (_, _) => ApplySource(captured, settings.IncludeBrowsers);
+                    sourceMenu.Items.Add(item);
+                }
             }
             var offsetLabel = new MenuItem { IsEnabled = false };
             var offsetPlus = new MenuItem { Header = Loc.T("tray.offset.faster") };
@@ -716,10 +738,29 @@ internal static class Program
                 MaxWidth = 360,
             };
 
+            // 특정 플레이어로 고정해 뒀는데 그 앱이 SMTC에 없으면, "재생 중인 곡 없음" 대신
+            // 그 사실을 알려 준다 — 고정해 둔 걸 잊고 "왜 인식이 안 되지"로 헤매기 쉬운 지점이다.
+            string? FixedSourceMissing()
+            {
+                var mode = nowPlaying.SourceMode;
+                if (string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase)) return null;
+                if (nowPlaying.GetAvailableSources().Contains(mode, StringComparer.OrdinalIgnoreCase)) return null;
+                return Loc.T("status.sourceNotRunning", ("source", mode));
+            }
+
             // 가사 상태 + 번역 상태를 합쳐 트레이/미니창에 표시(둘 중 하나만 바뀌어도 재렌더).
             void RenderStatus()
             {
-                var text = (coordinator.CurrentStatus is { } cs ? LocalizeStatus(cs) : "")
+                var status = coordinator.CurrentStatus;
+                if (status is { Kind: LyricsStatusKind.NoTrack } && FixedSourceMissing() is { } notice)
+                {
+                    trackItem.Header = MenuText(notice);
+                    if (tray is { } tt) tt.ToolTipText = Loc.T("tray.tooltip.status", ("status", notice));
+                    miniWindow?.SetStatus(notice);
+                    return;
+                }
+
+                var text = (status is { } cs ? LocalizeStatus(cs) : "")
                     + TranslationSuffix(coordinator.CurrentTranslationStatus);
                 trackItem.Header = MenuText(text);
                 if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
