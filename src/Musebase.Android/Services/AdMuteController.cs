@@ -66,7 +66,7 @@ public sealed class AdMuteController
         // 상한 설정이 바뀌었을 수 있으므로 새로 만든다.
         _decision = NewDecision();
 
-        _source.IsAdvertisementChanged += OnAdSignalChanged;
+        _source.AdvertisementChanged += OnAdSignalChanged;
         // 재생 상태도 구독해야 한다 — 판정이 IsAdvertisement && IsPlaying이므로 재생만 바뀌어도
         // 결과가 달라진다. 실측(광고 1/2 → 2/2 연속 구간)에서 이게 빠져 있어 두 번째 광고를
         // 1.6초 늦게 잡았다: 두 광고 사이에 재생이 잠깐 끊기는데 IsAdvertisement는 계속 true라
@@ -84,7 +84,7 @@ public sealed class AdMuteController
         if (!_subscribed) return;
         _subscribed = false;
 
-        _source.IsAdvertisementChanged -= OnAdSignalChanged;
+        _source.AdvertisementChanged -= OnAdSignalChanged;
         _source.IsPlayingChanged -= OnPlaybackChanged;
         _handler.RemoveCallbacksAndMessages(null);
         // 위에서 예약된 콜백이 취소되므로 플래그도 함께 내려야 다시 켤 때 예약이 막히지 않는다.

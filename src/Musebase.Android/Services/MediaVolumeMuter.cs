@@ -145,6 +145,11 @@ public sealed class MediaVolumeMuter
         if (current <= 0) return;
 
         _userOverrode = true;
+        // 뮤트를 놓았으므로 _muted도 내린다. 이걸 안 내리면 (a) 다음 광고 세그먼트에서
+        // Mute()가 "이미 뮤트 중"으로 보고 빠져나가 재뮤트가 안 되고, (b) 다음 틱의
+        // CheckUserOverride()가 볼륨이 0이 아니라며 또 포기한다.
+        // 일시정지 보류 때문에 세그먼트 사이에 Unmute()가 호출되지 않아 스스로 풀리지 않는다.
+        _muted = false;
         _settings.AdMuteSavedVolume = -1;
         global::Android.Util.Log.Info("Musebase",
             $"ad-mute: 볼륨이 {current}로 바뀌어 이번 광고 구간은 포기 (음악이 돌아올 때까지 유지)");

@@ -130,8 +130,14 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     public event Action<TrackInfo?>? TrackChanged;
     public event Action<bool>? IsPlayingChanged;
 
-    /// <summary>광고 구간 진입/이탈. 값이 바뀔 때만 발화한다.</summary>
-    public event Action<bool>? IsAdvertisementChanged;
+    /// <summary>
+    /// 광고 여부 <b>또는 광고 식별자</b>가 바뀌면 발화한다(인자는 현재 광고 여부).
+    ///
+    /// 식별자까지 보는 이유: 광고가 2개 연속일 때 <see cref="IsAdvertisement"/>는 계속 true라
+    /// 여부만 보면 세그먼트 전환(1/2 → 2/2)을 놓친다. 그러면 구독자가 다음 폴링까지
+    /// 최대 1초를 기다리게 된다.
+    /// </summary>
+    public event Action<bool>? AdvertisementChanged;
 
     public AndroidNowPlayingSource(Context context)
     {
@@ -356,13 +362,18 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
             catch { /* 세션 소멸 레이스 — 광고 아님으로 처리 */ }
         }
 
-        // 광고가 계속되는 동안에도 식별자는 바뀔 수 있다(1/2 → 2/2). 값 자체는 항상 최신으로 둔다.
-        if (isAd) AdvertisementId = adId;
+        var previousIsAd = IsAdvertisement;
+        var previousId = AdvertisementId;
 
-        if (isAd == IsAdvertisement) return;
         IsAdvertisement = isAd;
-        if (!isAd) AdvertisementId = null;
-        IsAdvertisementChanged?.Invoke(isAd);
+        AdvertisementId = isAd ? adId : null;
+
+        // 광고가 계속되는 동안에도 식별자는 바뀐다(1/2 → 2/2). 그 전환도 알려야 한다.
+        if (isAd == previousIsAd &&
+            string.Equals(AdvertisementId, previousId, StringComparison.Ordinal))
+            return;
+
+        AdvertisementChanged?.Invoke(isAd);
     }
 
     /// <summary>
