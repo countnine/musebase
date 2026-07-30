@@ -101,6 +101,12 @@ public sealed class SettingsActivity : Activity
     private LinearLayout? _sourceSection;
     private LinearLayout? _translationSection;
     private LinearLayout? _overlaySection;
+    private LinearLayout? _adMuteSection;
+
+    // 광고 뮤트 입력.
+    private CheckBox? _adMuteCheck;
+    private CheckBox? _adMuteNotifyCheck;
+    private SeekBar? _adMuteMaxBar;
     private readonly List<Button> _tabButtons = new();
 
     // 오버레이 스타일 입력.
@@ -134,6 +140,7 @@ public sealed class SettingsActivity : Activity
         _sourceSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         _translationSection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
         _overlaySection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
+        _adMuteSection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
         root.AddView(BuildTabBar());
 
         // ---- 재생 소스(어느 앱의 재생을 따라갈지) ----
@@ -384,11 +391,53 @@ public sealed class SettingsActivity : Activity
         _translationColorEdit = ColorRow(_overlaySection, "번역 색", settings?.OverlayTranslationColor ?? "#E8E8E8");
         _backgroundColorEdit = ColorRow(_overlaySection, "배경 색", settings?.OverlayBackgroundColor ?? "#000000");
 
+        // ---- 광고 뮤트(Spotify) ----
+        _adMuteSection.AddView(Label("Spotify 광고 뮤트", topPad: 40));
+
+        var adMuteNote = new TextView(this)
+        {
+            // 앱별 음소거가 아니라는 점은 반드시 알려야 한다 — 안드로이드에는 다른 앱의 볼륨만
+            // 조절하는 API가 없어서, 광고 구간 동안 기기 미디어 볼륨 자체가 0이 된다.
+            Text = "Spotify에서 광고가 나오는 동안 미디어 볼륨을 0으로 내리고, 곡이 돌아오면 되돌립니다. "
+                 + "안드로이드에는 특정 앱만 음소거하는 기능이 없어 기기 전체 미디어 볼륨이 내려갑니다 "
+                 + "(그동안 다른 앱 소리도 함께 사라집니다). "
+                 + "광고 중 볼륨 키를 누르면 그 구간은 건드리지 않습니다.",
+        };
+        adMuteNote.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        _adMuteSection.AddView(adMuteNote);
+
+        _adMuteCheck = new CheckBox(this)
+        {
+            Text = "Spotify 광고 자동 뮤트",
+            Checked = settings?.AdMuteEnabled ?? false,
+        };
+        _adMuteSection.AddView(_adMuteCheck);
+
+        _adMuteNotifyCheck = new CheckBox(this)
+        {
+            Text = "뮤트할 때 알림 표시",
+            Checked = settings?.AdMuteNotify ?? false,
+        };
+        _adMuteSection.AddView(_adMuteNotifyCheck);
+
+        _adMuteMaxBar = SliderRow(_adMuteSection, "최대 뮤트 시간", settings?.AdMuteMaxSeconds ?? 180,
+            20, 600, v => $"{v}초");
+
+        var adMuteSafetyNote = new TextView(this)
+        {
+            Text = "이 시간을 넘겨 뮤트가 지속되면 감지가 실패한 것으로 보고 강제로 볼륨을 되돌립니다. "
+                 + "실측된 광고 구간이 55~58초였으니 너무 짧게 잡지 마세요 — 짧으면 정상적인 긴 광고 "
+                 + "도중에 볼륨이 되살아납니다.",
+        };
+        adMuteSafetyNote.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        _adMuteSection.AddView(adMuteSafetyNote);
+
         // ---- 섹션 + 저장 ----
         var sections = new LinearLayout(this) { Orientation = Orientation.Vertical };
         sections.AddView(_sourceSection);
         sections.AddView(_translationSection);
         sections.AddView(_overlaySection);
+        sections.AddView(_adMuteSection);
 
         var scroll = new ScrollView(this) { FillViewport = true };
         scroll.AddView(sections, new ViewGroup.LayoutParams(
@@ -452,9 +501,14 @@ public sealed class SettingsActivity : Activity
         settings.LyricsServerEndpoint = _serverEndpointEdit?.Text?.Trim();
         settings.LyricsServerToken = _serverTokenEdit?.Text?.Trim();
 
+        settings.AdMuteEnabled = _adMuteCheck?.Checked == true;
+        settings.AdMuteNotify = _adMuteNotifyCheck?.Checked == true;
+        settings.AdMuteMaxSeconds = SliderValue(_adMuteMaxBar, settings.AdMuteMaxSeconds);
+
         MusebaseApp.Instance?.ApplyPlaybackSourceSettings();
         MusebaseApp.Instance?.ApplyTranslationSettings(retranslateNow: apiTurnedOn);
         MusebaseApp.Instance?.ApplyLyricsServerSettings(); // 주소·토큰 변경은 재시작 없이 반영
+        MusebaseApp.Instance?.ApplyAdMuteSettings();       // 켜고 끄기·상한 변경도 재시작 없이 반영
 
         // 표시 방식(버블/밴드)은 오버레이 서비스가 다시 읽어야 반영된다.
         if (Services.OverlayService.IsRunning)
@@ -515,15 +569,18 @@ public sealed class SettingsActivity : Activity
         AddTab("재생 소스", 0);
         AddTab("번역", 1);
         AddTab("오버레이", 2);
+        AddTab("광고 뮤트", 3);
         return bar;
     }
 
     private void SelectTab(int index)
     {
-        if (_sourceSection is null || _translationSection is null || _overlaySection is null) return;
+        if (_sourceSection is null || _translationSection is null
+            || _overlaySection is null || _adMuteSection is null) return;
         _sourceSection.Visibility = index == 0 ? ViewStates.Visible : ViewStates.Gone;
         _translationSection.Visibility = index == 1 ? ViewStates.Visible : ViewStates.Gone;
         _overlaySection.Visibility = index == 2 ? ViewStates.Visible : ViewStates.Gone;
+        _adMuteSection.Visibility = index == 3 ? ViewStates.Visible : ViewStates.Gone;
         for (var i = 0; i < _tabButtons.Count; i++)
             _tabButtons[i].Alpha = i == index ? 1f : 0.55f; // 선택된 탭을 진하게
     }

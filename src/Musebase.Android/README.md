@@ -11,8 +11,11 @@ android 워크로드가 CI/모든 개발 머신에 없어도 메인 빌드가 �
 | 파일 | 역할 |
 |---|---|
 | `Services/MediaListenerService.cs` | `NotificationListenerService` — 알림 접근 권한의 앵커. 알림을 파싱하지 않고, `MediaSessionManager.GetActiveSessions(component)` 호출 자격만 제공. **앱 완전 종료용 `Unbind()`/`Rebind()`**(API 24+) — 알림 접근이 켜져 있으면 시스템이 이 서비스를 계속 바인드해 프로세스가 살아 있으므로, 종료 시 스스로 언바인드하고 앱을 다시 열 때 재바인드한다(권한 설정은 유지) |
-| `Services/AndroidNowPlayingSource.cs` | `INowPlayingSource`(Musebase.Engine 계약)의 Android 구현 — 세션 선택(재생 중 우선), 콜백+500ms 폴링, 위치 보간(+1초 미만 역행 흡수). **재생 소스 선택**: `SetSource(mode, includeVideoApps, preferredSources)`로 자동/특정 앱 패키지 고정, 자동 모드에서는 영상·브라우저 앱(YouTube·크롬 등) 기본 제외(YouTube Music은 음악이라 포함). **선호 음악 앱**(`preferredSources`)을 하나라도 고르면 자동 모드에서 **그 앱들만** 후보가 된다(팟캐스트·영상 앱 차단). 비우면 종전 규칙. 감지된 세션 목록은 `ActiveSessionPackages`로 노출(설정 화면용) |
+| `Services/AndroidNowPlayingSource.cs` | **광고 여부**(`IsAdvertisement`/`IsAdvertisementChanged`)와 세션 패키지(`CurrentSourcePackage`)를 Android 전용 속성으로 노출 — `Engine.TrackInfo`를 건드리지 않기 위함(골든룰). 광고 판정은 `TrackInfo` 생성 여부와 **독립**으로 계산한다(광고 구간에 제목이 비면 `RefreshTrack`이 트랙을 안 만드는데 그때도 광고임은 알아야 한다). `INowPlayingSource`(Musebase.Engine 계약)의 Android 구현 — 세션 선택(재생 중 우선), 콜백+500ms 폴링, 위치 보간(+1초 미만 역행 흡수). **재생 소스 선택**: `SetSource(mode, includeVideoApps, preferredSources)`로 자동/특정 앱 패키지 고정, 자동 모드에서는 영상·브라우저 앱(YouTube·크롬 등) 기본 제외(YouTube Music은 음악이라 포함). **선호 음악 앱**(`preferredSources`)을 하나라도 고르면 자동 모드에서 **그 앱들만** 후보가 된다(팟캐스트·영상 앱 차단). 비우면 종전 규칙. 감지된 세션 목록은 `ActiveSessionPackages`로 노출(설정 화면용) |
 | `Services/AndroidEngineDispatcher.cs` | `IEngineDispatcher`의 Android 구현 — 메인 Looper `Handler` 기반 Post/주기 타이머(WpfEngineDispatcher와 대칭) |
+| `Services/AdDecision.cs` | **광고 판정(Android 무의존)** — `AdSignals`가 신호 셋을 신뢰도 순으로 겹친다: ① 표준 플래그 `android.media.metadata.ADVERTISEMENT` ② `spotify:ad` 미디어 ID ③ `artist=Spotify`+빈 앨범(Windows 실측 폴백, 앨범 조건이 오탐 방지). `AdDecision`은 **진입 디바운스**(150ms — 곡 전환 시 메타데이터가 잠깐 비는 것을 광고로 오인하지 않게, **이탈은 즉시**)와 **안전 상한**(기본 180초 — 넘기면 강제 복구 후 재진입 차단)을 담는다. Android 타입에 의존하지 않으므로 나중에 코어 변경 요청으로 Engine에 옮겨 테스트를 붙일 수 있다 |
+| `Services/MediaVolumeMuter.cs` | **미디어 볼륨 제어** — `AudioManager.SetStreamVolume(Stream.Music, …)`. 안드로이드에는 앱별 음소거 API가 없어 **기기 전체 미디어 볼륨**이 내려간다. 진입 시 이미 0이면 손대지 않고, 뮤트 중 볼륨이 0이 아니게 되면(사용자 볼륨 키) 그 구간을 포기한다. **원래 볼륨을 볼륨을 내리기 전에 `SharedPreferences`에 기록**해 프로세스가 광고 도중 죽어도 다음 실행이 `RestoreOrphanedVolume()`으로 복구한다 |
+| `Services/AdMuteController.cs` | 감지와 볼륨 제어를 잇는다 — Spotify(`com.spotify.music`) 세션에서만 동작. 1초 틱으로 사용자 개입 확인 + 안전 상한 시간 발동(신호가 계속 "광고"면 이벤트가 안 오므로 틱이 필요). **포그라운드 서비스를 만들지 않는다** — 알림 접근이 켜져 있으면 시스템이 `MediaListenerService`를 계속 바인드해 프로세스가 살아 있다 |
 | `MusebaseApp.cs` | 커스텀 `Application` — `LyricsEngineFactory.Create`로 엔진 1회 조립(화면 회전에도 유지). 소스=레지스트리 전체(개인용), 번역=MyMemory(무키·무료 기본), 대상 언어=기기 로케일, 캐시=`FilesDir/translations.db`, 텔레메트리=Noop |
 | `Services/OverlayService.cs` | 포그라운드 서비스 — `WindowManager`의 `TYPE_APPLICATION_OVERLAY` 뷰(하단 중앙, 반투명 둥근 카드)로 다른 앱 위에 가사 표시. 코디네이터 `CurrentLineChanged`/`LineProgressChanged` + 소스 `IsPlayingChanged`만 **구독**(엔진 재조립 안 함). 재생 중+라인 있을 때만 표시, 터치 완전 통과. Android 8+ 알림 채널. **알림바에 곡명 + 가사·번역 상태**를 표시하고(상태 변경 시 갱신, `SetOnlyAlertOnce`) **"번역 끄기/켜기"·"위치 이동"·"정지" 액션** 제공 — 번역 토글은 설정 화면에 들어가지 않고 바로 유료 사용량을 끊기 위한 단축키. **표시 방식**: 기본 위치를 시스템 바 인셋 위로 띄우고, 이동 모드 드래그(위치는 비율 저장·회전 대응)와 **버블(플로팅) 모드**(탭으로 펼치기/접기, 가장자리 자석, 상태별 테두리 색, peek)를 지원 — 아래 "오버레이 표시 방식" 절 |
 | `Views/KaraokeTextView.cs` | 커스텀 뷰 — 베이스(흰색) 위에 채움색(노랑 `#FFEB3B`)을 진행 글자까지 클립해 덧그리는 **글자 단위 카라오케**. 태그(`InlineTimeTags.CharIndexAt`) 있으면 글자 위치, 없으면 라인 비율 폴백. 100ms 갱신 사이를 앵커+실시간으로 60fps 보간(`postInvalidateOnAnimation`). `StaticLayout`으로 멀티라인/가운데정렬 대응 |
@@ -175,6 +178,146 @@ APK 산출 경로(디버그 서명 포함): `src/Musebase.Android/bin/Debug/net8
 5. 일시정지하면 오버레이가 자연스럽게 사라지고(재생 재개 시 다시 표시), 곡을 넘기면 즉시
    새 줄로 바뀐다. 오버레이 카드 영역을 만져도 **터치가 아래 앱으로 통과**하는지 확인.
 6. 알림의 "정지" 또는 앱의 **"가사 오버레이 끄기"**로 오버레이/서비스가 종료되는지 확인.
+
+## 폰에서 테스트 — Spotify 광고 뮤트
+
+설정 [광고 뮤트] 탭에서 켠다(기본 꺼짐). **앱별 음소거가 아니라 기기 전체 미디어 볼륨이
+내려간다** — 안드로이드에는 다른 앱 볼륨만 조절하는 공개 API가 없다.
+
+### 로그로 확인하기 — 삼성 기기는 설정이 하나 더 필요하다
+
+`dumpsys media_session`은 metadata를 **description(제목/아티스트/앨범) 3개로만** 덤프한다.
+`ADVERTISEMENT` 플래그도 `mediaId`도 거기엔 안 나온다. 그래서 앱이 찍는 `ad-signals` 로그가
+사실상 유일한 프로브다.
+
+**One UI(갤럭시)는 서드파티 앱 로그를 기본으로 막는다** — 아래 없이는 `Musebase` 태그가
+logcat에 한 줄도 안 나온다(실측: SM-S947N / Android 16). 프레임워크 로그만 보이니
+앱이 죽은 것처럼 오해하기 쉽다.
+
+```powershell
+adb shell setprop log.tag.Musebase VERBOSE   # 재부팅하면 초기화된다
+adb logcat -s Musebase:V
+```
+
+실측 로그(SM-S947N / Android 16 / Spotify 9.1.68.1888 / 무료 계정, 광고 2연속 구간):
+
+```
+22:14:44.232 ad-signals: flag=1 mediaId='spotify:ad:147a046a…' artist='광고 • 1/2' album='' → ad=True
+22:14:46.039 ad-mute: 광고 감지 → 미디어 볼륨 0
+22:15:11.108 ad-mute: 광고 종료 → 볼륨 복구
+22:15:11.542 ad-signals: flag=1 mediaId='spotify:ad:60f7d44e…' artist='광고 • 2/2' album='' → ad=True
+22:15:13.117 ad-mute: 광고 감지 → 미디어 볼륨 0
+22:15:38.187 ad-mute: 광고 종료 → 볼륨 복구
+22:15:38.618 ad-signals: flag=0 mediaId='spotify:track:…' artist='Duran Duran' → ad=False
+```
+
+여기서 확인된 것:
+
+- **`flag=1`이 실제로 온다** — 신호 ①(표준 광고 플래그)이 동작한다. `mediaId`도
+  `spotify:ad:`로 시작해 신호 ②까지 함께 잡힌다.
+- **아티스트는 `'광고 • 1/2'`** — Windows에서 가져온 폴백 ③(`artist=Spotify`)은 **매칭되지 않는다.**
+  현지화 + 순번이 붙어 고정 문자열로 잡을 수 없다. ①②가 확실하므로 문제되지 않지만,
+  폴백만 믿는 설계였다면 못 잡았을 것이다.
+- 광고 구간은 25초짜리 2개 = 약 54초. Windows 실측(55~58초)과 일치하므로 안전 상한 180초가 적절하다.
+
+### 신호 → 뮤트 지연 (실기기가 잡아낸 결함 2개)
+
+로그의 `ad-signals` 시각과 `ad-mute` 시각 차이가 **광고 소리가 그대로 나는 시간**이다.
+코드 리뷰로는 안 보이고 타이밍 로그로만 드러나는 것들이라 여기 남긴다.
+
+| | 광고 1/2 | 광고 2/2 |
+|---|---|---|
+| 최초 | 1.81초 | 1.58초 |
+| `IsPlayingChanged` 구독 후 | 0.60초 | 1.20초 |
+| 디바운스 재평가 예약 후 | **0.39초** | **0.24초** |
+
+디바운스 설계값(150ms)에 근접했다. 남은 건 Spotify의 메타데이터 전파 지연이다.
+
+1. **`IsPlayingChanged`를 구독하지 않았다** — 판정이 `IsAdvertisement && IsPlaying`인데 재생
+   상태 변화에 반응하지 않아, 연속 광고 사이에 재생이 잠깐 끊길 때 1초 틱까지 밀렸다.
+2. **디바운스가 이벤트 구동과 맞물려 실질 1초가 됐다** — 첫 광고 판정에서 후보 시각만 찍고
+   빠지는데 그 뒤 재평가를 아무도 예약하지 않았다. 150ms로 설계한 값이 다음 틱(1초)까지
+   늘어난다. `ScheduleDebounceRecheck()`로 디바운스 만료 시점에 스스로 다시 보게 했다.
+   (Windows판은 같은 구조지만 500ms 폴링이 항상 돌아 최대 지연이 500ms로 묻혀 있었다.)
+
+### 사용자 볼륨 개입은 광고 구간 전체에 유지된다
+
+뮤트 중 볼륨을 올리면 그 광고를 포기하는데, 처음엔 **세그먼트 단위로만** 풀렸다. 실측:
+
+```
+22:45:37.980 광고 1/2 감지 → 볼륨 0
+22:45:46.831 볼륨이 4로 바뀌어 포기
+22:46:03.700 광고 1/2 종료 → 사용자 볼륨 4 유지   ✓
+22:46:05.226 광고 2/2 감지 → 미디어 볼륨 0        ✗ 18초 만에 다시 내리누름
+```
+
+"사용자와 볼륨을 다투지 않는다"는 원칙을 정확히 어기고 있었다. `_userOverrode`를 광고 구간
+전체에 유지하고 **실제 음악이 돌아왔을 때만**(`IsPlaying && !IsAdvertisement`)
+`ResetUserOverride()`로 지운다. `raw == false`로 지우면 광고 1/2·2/2 사이 1.3초 공백에서
+풀려 같은 버그로 돌아간다.
+
+> 테스트가 통과했다고 끝난 게 아니었다 — "볼륨을 올리면 포기하는가"는 통과했고,
+> **그 다음에 무슨 일이 일어나는지** 봤을 때 드러난 결함이다.
+
+### 로그는 실제로 한 일만 말해야 한다
+
+위 수정 직후, 볼륨 샘플은 내내 `5`인데 로그는 `광고 감지 → 미디어 볼륨 0`을 찍고 있었다.
+`Mute()`가 사용자 개입 구간이라 조용히 빠져나오는데 호출자가 결과와 무관하게 로그를 남긴 탓이다.
+이 플랫폼에서는 **로그가 유일한 프로브**이므로(위 참고) 사실과 다르면 곧장 헛된 디버깅으로 이어진다.
+`Mute()`/`Unmute()`가 실제로 볼륨을 바꿨는지 `bool`로 돌려주고, 호출자가 그에 맞춰 찍는다.
+
+### prefs를 adb로 직접 고치지 말 것
+
+`sed`로 `shared_prefs/musebase.xml`에 키를 넣다가 PowerShell이 표현식의 `|`를 파이프로 해석해
+**따옴표 없는 속성**(`<int name=AdMuteMaxSeconds value=20 />`)이 들어갔고, XML 파싱이 실패해
+앱이 **전 설정을 기본값으로 띄웠다**(`선호앱=(자동)`, `engine=google`→`mymemory`). 그 상태로
+저장이 한 번만 일어났으면 가사 서버 토큰·API 키가 영구 소실된다.
+
+설정 변경은 **설정 화면에서** 하고, 굳이 adb로 해야 하면 먼저 `cp`로 백업하고 넣은 뒤
+`grep -c 'name=[^"]'`가 0인지 확인할 것.
+
+### 연속 광고 사이는 뮤트를 유지한다 (일시정지 보류)
+
+광고가 2개 연속일 때 그 사이 재생이 잠깐 끊긴다. 이를 "광고 아님"으로 보면 볼륨이 1.3초
+돌아왔다가 다시 내려가 **광고 소리가 새어 나온다**(실측 `22:36:12.573` 복구 → `22:36:13.928` 재뮤트).
+
+`1/2`·`2/2` 카운터를 파싱하는 방법도 있지만 쓰지 않았다. 로그를 보면 두 광고 사이에
+`ad=False`가 찍힌 적이 없다 — 원인은 광고 종료가 아니라 **재생 공백**이다. 그래서 신호를
+3상태로 두고(`AdSignal`) 재생이 멈춘 동안은 판정을 유지한다. 카운터 문구가 지역마다 다르고
+Spotify가 표기를 바꿀 수도 있는 것과 달리, 이 방식은 언어·표기와 무관하다.
+
+무한정 붙잡지는 않는다 — `AdDecision.PauseHold`(5초)를 넘기면 광고가 아니라고 보고 볼륨을
+되돌린다. 사용자가 광고 중 일시정지하고 자리를 떠도 볼륨이 0으로 남지 않는다.
+
+실측(수정 후): 광고 구간 50초 내내 `vol=0`, `볼륨 복구` 로그는 곡이 돌아올 때 **1회만**.
+(수정 전에는 같은 구간에서 2회 — 광고 사이에 한 번 더.)
+
+### 사용자가 볼륨을 올려도 다음 광고는 다시 뮤트한다
+
+뮤트 중 볼륨을 올리면 그 광고는 포기하지만, **광고 `mediaId`가 바뀌면**(1/2 → 2/2)
+개입 기억을 지우고 다시 내린다. 볼륨을 올린 것은 "그 광고를 듣겠다"는 뜻이지
+"남은 광고를 전부 듣겠다"는 뜻이 아니기 때문이다.
+
+재생 공백 동안 판정을 유지하므로 광고 세그먼트 전환에는 상태 변화가 없다 — 그래서
+`AdvertisementId`가 필요하다(상태 전이로는 새 광고를 알 수 없다).
+
+볼륨 관찰은 로그와 무관하게 되므로 교차 검증에 쓴다:
+
+```powershell
+adb shell cmd media_session volume --stream 3 --get
+```
+
+검증 항목:
+
+1. **뮤트/복구** — 무료 계정 재생 → 광고 진입 시 미디어 볼륨 0, 곡 복귀 시 원래 값. `dumpsys audio`로 확인
+2. **사용자 우선권** — 광고 중 볼륨 키를 올리면 그 구간은 더 건드리지 않는지(로그에 "포기")
+3. **이미 0이었을 때** — 광고 전에 직접 음소거해 뒀으면 광고 후에도 0으로 남는지
+4. **볼륨을 남기지 않기** — (a) 앱 완전 종료(퀵 메뉴/앱 화면) → 복구
+   (b) 광고 도중 `adb shell am force-stop com.countnine.musebase` → **앱을 다시 열면 복구**되는지.
+   이게 가장 중요하다 — 기기 전체 볼륨이라 남으면 피해가 크다
+5. **안전 상한** — [광고 뮤트] 탭에서 최대 뮤트 시간을 20초로 낮춰 광고 도중 강제 복구가 도는지
+6. **회귀** — 기능을 끈 상태에서 가사·오버레이·번역이 종전과 같은지(옵인의 핵심)
+7. **다른 앱** — YouTube Music 재생 중에는 아무 일도 없는지(Spotify 전용)
 
 > `adb install -r bin/Debug/net8.0-android/com.countnine.musebase-Signed.apk`로 재설치.
 > 오버레이 권한은 설치형이 아니라 사용자가 직접 켜는 특수 권한이라, 앱 재설치 후에도

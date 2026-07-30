@@ -36,6 +36,9 @@ public sealed class MusebaseApp : Application
     /// <summary>앱 설정(번역 엔진/DeepL 키/대상 언어). SettingsActivity가 읽고 쓴다.</summary>
     public AndroidSettings Settings { get; private set; } = null!;
 
+    /// <summary>Spotify 광고 구간 미디어 볼륨 뮤트(옵인). 꺼져 있어도 객체는 존재한다.</summary>
+    public AdMuteController AdMute { get; private set; } = null!;
+
     // 번역 엔진 재구성에 필요한 불변 컨텍스트 — OnCreate에서 1회 보관.
     private ITranslationCache _translationCache = null!;
     private string _dbPath = null!;
@@ -75,6 +78,12 @@ public sealed class MusebaseApp : Application
 
         Source.Start();      // 권한 없어도 폴링 대기 — 권한이 켜지면 즉시 감지
         Coordinator.Start(); // 속성 배선 완료 후 시작(현재 트랙 재생 중이면 즉시 검색)
+
+        AdMute = new AdMuteController(this, Source, Settings);
+        // 설정이 꺼져 있어도 먼저 복구한다 — 이전 세션이 켠 채로 광고 도중 죽었으면
+        // 기기 미디어 볼륨이 0으로 남아 있다(안드로이드는 앱별이 아니라 전체 볼륨이라 피해가 크다).
+        AdMute.RestoreOrphanedVolume();
+        AdMute.Apply();
     }
 
     /// <summary>현재 <see cref="AndroidSettings"/> 값으로 엔진 구성값을 만든다(조립·재구성 공용).</summary>
@@ -131,9 +140,12 @@ public sealed class MusebaseApp : Application
         try { StopService(new global::Android.Content.Intent(this, typeof(Services.OverlayService))); }
         catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"quit(stop overlay): {e.Message}"); }
 
+        // 볼륨을 내려 둔 채로 나가면 안 된다 — 감지를 끊기 전에 먼저 되돌린다.
+        AdMute?.Shutdown();
+
         Source?.Stop();
         Services.MediaListenerService.Unbind();
-        global::Android.Util.Log.Info("Musebase", "quit: 오버레이 중지 + 감지 중지 + 리스너 언바인드");
+        global::Android.Util.Log.Info("Musebase", "quit: 광고 뮤트 해제 + 오버레이 중지 + 감지 중지 + 리스너 언바인드");
     }
 
     /// <summary>앱을 다시 열었을 때 종료로 끊어 둔 리스너 바인드를 복구하고 감지를 재개한다.</summary>
@@ -141,11 +153,16 @@ public sealed class MusebaseApp : Application
     {
         Services.MediaListenerService.Rebind(this);
         Source?.Start();
+        AdMute?.RestoreOrphanedVolume();
+        AdMute?.Apply();
     }
 
     /// <summary>재생 소스 설정을 다시 적용한다(설정 화면 저장 시 — 재시작 불필요).</summary>
     public void ApplyPlaybackSourceSettings() =>
         Source?.SetSource(Settings.PlaybackSource, Settings.IncludeVideoApps, Settings.PreferredSources);
+
+    /// <summary>광고 뮤트 설정을 다시 적용한다(설정 화면 저장 시 — 재시작 불필요).</summary>
+    public void ApplyAdMuteSettings() => AdMute?.Apply();
 
     /// <param name="retranslateNow">
     /// true면 현재 곡을 즉시 다시 번역한다(API 번역을 껐다가 다시 켠 직후 등 —

@@ -9,6 +9,24 @@
 - **재생 소스 진단 UX(Windows)** — 왜 플레이어가 안 잡히는지 화면에서 알 수 있게. ① 특정 앱으로 고정해 뒀는데 그 앱이 SMTC에 없으면 "재생 중인 곡 없음" 대신 "{앱} 대기 중 — 고정해 둔 플레이어가 실행 중이 아닙니다"로 표시 ② 설정 [소스]의 선호 음악 앱에 감지 상태 표시(● 지금 재생 중 / 지금은 감지 안 됨) ③ 트레이 재생 소스 목록에 선호·고정 앱 중 미감지 항목도 흐리게 표시.
   - 계기: Store 버전 MusicBee가 SMTC를 발행하지 않아 인식되지 않았고(원인은 앱 밖), 동시에 소스가 Spotify로 고정돼 있었다. 진단 방법은 `docs/lyrics-server-guide.md`의 "잘 안 될 때" 절.
 
+## 미배포 (다음 앱 릴리스 후보 — Android 0.5.0)
+- **Spotify 광고 자동 뮤트(Android, 옵인)** — 설정 [광고 뮤트] 탭에서 켜면 Spotify 광고 구간에만 미디어 볼륨을 0으로 내리고 곡이 돌아오면 되돌린다. 기본 꺼짐.
+  - 감지는 Windows보다 깔끔하다 — 안드로이드에는 **표준 광고 플래그**(`android.media.metadata.ADVERTISEMENT`)가 있어 Spotify가 설정한다. `spotify:ad` 미디어 ID, 그리고 Windows에서 실측 검증된 `artist=Spotify`+빈 앨범을 폴백으로 겹친다(`Services/AdDecision.cs`의 `AdSignals`). 현지화 문자열 추측이 필요 없다.
+    - 주의: **.NET for Android 바인딩에 `MetadataKeyAdvertisement` 상수가 없어** 플랫폼 키 문자열을 직접 쓴다(`Microsoft.Android.Ref.34`의 `Android.Media.MediaMetadata`에 `MetadataKeyMediaId`는 있는데 이건 없음 — 직접 확인).
+  - **앱별 음소거가 아니다** — 안드로이드에는 다른 앱 볼륨만 조절하는 공개 API가 없어 기기 전체 미디어 볼륨이 내려간다(`AudioManager.SetStreamVolume(Stream.Music, 0)`). 설정 화면에 이 점을 명시했다. 같은 이유로 **MP3 채우기(Windows 기능)는 제외** — 같은 스트림이라 함께 죽는다.
+  - 안전장치: 진입 디바운스 150ms(곡 전환 시 빈 메타데이터 오인 방지, 이탈은 즉시) / 최대 뮤트 180초(실측 광고 55~58초) / **볼륨을 남기지 않기** — 원래 볼륨을 `SharedPreferences`에 즉시 기록해 프로세스가 광고 도중 죽어도 다음 실행이 복구한다 / 뮤트 중 사용자가 볼륨 키를 누르면 그 광고는 포기(단 다음 광고 세그먼트에서는 다시 뮤트).
+  - **연속 광고 사이에도 뮤트를 유지한다** — Spotify 광고는 보통 2개 연속인데 그 사이 재생이 잠깐 끊긴다. 이를 광고 종료로 보면 볼륨이 1.3초 돌아왔다 내려가 광고 소리가 샌다. 신호를 3상태(`AdSignal.Ad/NotAd/Unknown`)로 두고 재생이 멈춘 동안은 판정을 유지하되 5초(`AdDecision.PauseHold`)로 제한한다 — 광고 중 일시정지하고 자리를 떠도 볼륨이 0으로 남지 않는다. `1/2`·`2/2` 카운터 파싱은 쓰지 않았다(지역·표기 의존). 실측: 광고 구간 50초 내내 `vol=0`, `볼륨 복구` 로그 1회.
+  - 포그라운드 서비스를 새로 만들지 않는다 — 알림 접근이 켜져 있으면 시스템이 `MediaListenerService`를 계속 바인드하므로 `MusebaseApp`이 컨트롤러를 들고 있으면 된다. 알림바 항목이 늘지 않는다.
+  - 코어/엔진 무변경(골든룰) — 광고 플래그는 `Engine.TrackInfo`가 아니라 `AndroidNowPlayingSource`의 Android 전용 속성으로 노출. 배경은 `docs/adr/0006-android-ad-mute.md`.
+  - **실기기 검증(SM-S947N / Android 16 / Spotify 9.1.68.1888 / 무료 계정)** — 광고 2연속 구간에서 `flag=1` + `mediaId='spotify:ad:…'` 확인, 뮤트·복구 정상. 강제 종료 후 재실행 시 볼륨 자동 복구 확인. **아티스트가 `'광고 • 1/2'`라 Windows에서 가져온 폴백 ③(`artist=Spotify`)은 매칭되지 않는다** — 신호 ①②가 잡으므로 문제없지만 폴백만 믿는 설계였으면 조용히 실패했을 것.
+  - **실기기가 결함 4개를 잡았다**(코드 리뷰로는 안 보이는 것들 — 자세한 로그·표는 Android README):
+    ① `IsPlayingChanged` 미구독 — 판정이 `IsAdvertisement && IsPlaying`인데 재생 변화에 반응하지 않아 연속 광고 사이 1초 지연
+    ② 디바운스 만료 시점 재평가 미예약 — 150ms 설계값이 실질 1초. ①②로 신호→뮤트 지연이 **1.8초 → 0.24~0.39초**
+    ③ `MediaVolumeMuter.Reapply()`가 이름과 반대로 "재적용"이 아니라 "포기"를 하고 있었다 → `CheckUserOverride()`로 개명
+    ④ **볼륨 개입 포기가 광고 세그먼트 단위였다** — 사용자가 볼륨을 올려도 18초 뒤 광고 2/2에서 다시 내리눌렀다. 이제 실제 음악이 돌아올 때까지 유지한다(`raw==false`로 풀면 광고 사이 1.3초 공백에서 풀려 버린다)
+    ⑤ **로그가 하지 않은 일을 했다고 찍었다** — 사용자 개입 구간이라 볼륨을 안 내렸는데도 "미디어 볼륨 0"을 남겼다. 삼성에서는 로그가 유일한 프로브라 치명적이다. `Mute()`/`Unmute()`가 실제 변경 여부를 `bool`로 돌려주고 호출자가 그에 맞춰 찍는다
+  - **삼성 One UI는 서드파티 앱 로그를 막는다** — `adb shell setprop log.tag.Musebase VERBOSE` 없이는 `Musebase` 태그가 logcat에 한 줄도 안 나와 앱이 죽은 것처럼 보인다. `dumpsys media_session`은 metadata를 제목/아티스트/앨범 3개로만 덤프해서 광고 플래그가 안 보이므로, 앱이 찍는 `ad-signals` 로그가 사실상 유일한 프로브다.
+
 ## 미배포 (서버 쪽 작업 — 앱 릴리스와 무관하게 이미 운영 중)
 - **가사 서버 백업 강화 + 컨테이너화** — 앱에는 영향 없음(서버 운영용).
   - 백업: `sqlite3 .backup` → **`PRAGMA integrity_check` 검증**(깨지면 폐기) → gzip(2MB→660KB) → 보존 정리. `MUSEBASE_BACKUP_REMOTE`를 넣으면 매일 오프사이트 사본까지. 복구 절차 문서화.

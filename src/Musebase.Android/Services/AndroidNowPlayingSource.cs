@@ -39,6 +39,8 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     private ControllerCallback? _callback;
     private bool _started;
     private bool _sessionListenerRegistered;
+    // 광고 원시 신호 로그를 곡당 한 줄로 줄이기 위한 직전 값.
+    private string? _lastAdSignature;
 
     // 재생 소스 선택(Windows NowPlayingService와 같은 규칙): "auto" = 자동 감지,
     // 그 외 = 특정 앱 패키지로 고정.
@@ -107,8 +109,29 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
     public TrackInfo? CurrentTrack { get; private set; }
     public bool IsPlaying { get; private set; }
 
+    /// <summary>
+    /// 현재 세션이 광고를 재생 중인지(<see cref="AdSignals"/> 판정). 광고 뮤트 기능이 쓴다.
+    ///
+    /// <b><see cref="CurrentTrack"/>과 독립적으로 계산한다</b> — 광고 구간에는 제목이 비어
+    /// <see cref="RefreshTrack"/>이 트랙을 만들지 않는 경우가 있는데, 그때도 광고임은 알아야 한다.
+    /// </summary>
+    public bool IsAdvertisement { get; private set; }
+
+    /// <summary>
+    /// 현재 광고를 구분하는 값(<c>mediaId</c>, 예: <c>spotify:ad:d892a38…</c>). 광고가 아니면 null.
+    /// 광고가 2개 연속일 때 "다음 광고로 넘어갔다"를 알아내는 유일한 단서다 —
+    /// 그 사이 재생 공백에서는 판정을 보류하므로 상태 전이만으로는 구분되지 않는다.
+    /// </summary>
+    public string? AdvertisementId { get; private set; }
+
+    /// <summary>부착된 세션의 앱 패키지(광고 판정을 Spotify로 한정할 때 쓴다). 없으면 null.</summary>
+    public string? CurrentSourcePackage { get; private set; }
+
     public event Action<TrackInfo?>? TrackChanged;
     public event Action<bool>? IsPlayingChanged;
+
+    /// <summary>광고 구간 진입/이탈. 값이 바뀔 때만 발화한다.</summary>
+    public event Action<bool>? IsAdvertisementChanged;
 
     public AndroidNowPlayingSource(Context context)
     {
@@ -195,6 +218,7 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
         }
 
         RefreshTrack();
+        RefreshAdvertisement();
         RefreshPlayback();
     }
 
@@ -247,6 +271,7 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
         }
 
         _controller = controller;
+        CurrentSourcePackage = controller?.PackageName;
         if (_controller is not null)
         {
             _callback ??= new ControllerCallback(this);
@@ -256,6 +281,7 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
         global::Android.Util.Log.Info("Musebase",
             $"media session attached: {controller?.PackageName ?? "(none)"}");
         RefreshTrack();
+        RefreshAdvertisement();
         RefreshPlayback();
     }
 
@@ -298,6 +324,67 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
             CurrentTrack = track;
             TrackChanged?.Invoke(track);
         }
+    }
+
+    /// <summary>
+    /// 광고 여부를 세션 메타데이터에서 직접 읽는다(<see cref="RefreshTrack"/>과 독립 — 위 속성 주석 참고).
+    /// 판정 규칙 자체는 Android 무의존인 <see cref="AdSignals"/>가 갖는다.
+    /// </summary>
+    private void RefreshAdvertisement()
+    {
+        var isAd = false;
+        string? adId = null;
+        var controller = _controller;
+
+        if (controller is not null)
+        {
+            try
+            {
+                var md = controller.Metadata;
+                if (md is not null)
+                {
+                    var flag = md.GetLong(AdSignals.AdvertisementMetadataKey);
+                    var mediaId = md.GetString(MediaMetadata.MetadataKeyMediaId);
+                    var artist = md.GetString(MediaMetadata.MetadataKeyArtist);
+                    var album = md.GetString(MediaMetadata.MetadataKeyAlbum);
+
+                    isAd = AdSignals.LooksLikeAd(flag, mediaId, artist, album);
+                    if (isAd) adId = mediaId;
+                    LogRawSignals(controller.PackageName, flag, mediaId, artist, album, isAd);
+                }
+            }
+            catch { /* 세션 소멸 레이스 — 광고 아님으로 처리 */ }
+        }
+
+        // 광고가 계속되는 동안에도 식별자는 바뀔 수 있다(1/2 → 2/2). 값 자체는 항상 최신으로 둔다.
+        if (isAd) AdvertisementId = adId;
+
+        if (isAd == IsAdvertisement) return;
+        IsAdvertisement = isAd;
+        if (!isAd) AdvertisementId = null;
+        IsAdvertisementChanged?.Invoke(isAd);
+    }
+
+    /// <summary>
+    /// 광고 판정에 쓰인 원시 값을 곡이 바뀔 때마다 한 줄 남긴다(Spotify 세션만).
+    ///
+    /// 이게 이 기능의 프로브다 — <c>dumpsys media_session</c>은 metadata를 제목/아티스트/앨범
+    /// 3개로만 덤프해서 <c>ADVERTISEMENT</c> 플래그가 보이지 않는다. 광고가 안 잡힐 때
+    /// <c>adb logcat -s Musebase</c>로 Spotify가 실제로 무엇을 내보내는지 확인하는 유일한 경로다.
+    /// 값이 바뀔 때만 찍으므로 곡당 한 줄이다.
+    /// </summary>
+    private void LogRawSignals(
+        string? package, long flag, string? mediaId, string? artist, string? album, bool isAd)
+    {
+        if (!string.Equals(package, AdMuteController.SpotifyPackage, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var signature = $"{flag}|{mediaId}|{artist}|{album}";
+        if (signature == _lastAdSignature) return;
+        _lastAdSignature = signature;
+
+        global::Android.Util.Log.Info("Musebase",
+            $"ad-signals: flag={flag} mediaId='{mediaId}' artist='{artist}' album='{album}' → ad={isAd}");
     }
 
     private void RefreshPlayback()
@@ -405,7 +492,11 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
         private readonly AndroidNowPlayingSource _owner;
         public ControllerCallback(AndroidNowPlayingSource owner) => _owner = owner;
 
-        public override void OnMetadataChanged(MediaMetadata? metadata) => _owner.RefreshTrack();
+        public override void OnMetadataChanged(MediaMetadata? metadata)
+        {
+            _owner.RefreshTrack();
+            _owner.RefreshAdvertisement();
+        }
         public override void OnPlaybackStateChanged(PlaybackState? state) => _owner.RefreshPlayback();
         public override void OnSessionDestroyed() => _owner.AttachController(null);
     }
