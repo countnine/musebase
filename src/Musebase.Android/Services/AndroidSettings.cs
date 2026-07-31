@@ -29,6 +29,10 @@ public sealed class AndroidSettings
     private const string KeyPreferredSources = "PreferredSources";
     private const string KeyLyricsServerEndpoint = "LyricsServerEndpoint";
     private const string KeyLyricsServerToken = "LyricsServerToken";
+    private const string KeyAdMuteEnabled = "AdMuteEnabled";
+    private const string KeyAdMuteNotify = "AdMuteNotify";
+    private const string KeyAdMuteMaxSeconds = "AdMuteMaxSeconds";
+    private const string KeyAdMuteSavedVolume = "AdMuteSavedVolume";
     private const string KeyOverlayBubbleMode = "OverlayBubbleMode";
     private const string KeyOverlayPeekOnNewLine = "OverlayPeekOnNewLine";
     private const string KeyOverlayRatioX = "OverlayRatioX";
@@ -129,6 +133,43 @@ public sealed class AndroidSettings
     {
         get => _prefs.GetBoolean(KeyShowOnlyTargetTranslation, true);
         set => PutBool(KeyShowOnlyTargetTranslation, value);
+    }
+
+    // ---- 광고 뮤트 ----
+
+    /// <summary>Spotify 광고 구간에 미디어 볼륨을 내릴지. 기본 꺼짐(옵인).</summary>
+    public bool AdMuteEnabled
+    {
+        get => _prefs.GetBoolean(KeyAdMuteEnabled, false);
+        set => PutBool(KeyAdMuteEnabled, value);
+    }
+
+    /// <summary>광고를 뮤트할 때 알림을 띄울지. 기본 꺼짐(광고마다 알림은 성가시다).</summary>
+    public bool AdMuteNotify
+    {
+        get => _prefs.GetBoolean(KeyAdMuteNotify, false);
+        set => PutBool(KeyAdMuteNotify, value);
+    }
+
+    /// <summary>
+    /// 뮤트 지속 상한(초). 넘기면 감지가 실패한 것으로 보고 강제 복구한다.
+    /// 실측 광고가 55·58초였으므로 넉넉히 잡는다 — 짧으면 정상적인 긴 광고 구간에서 잘못 터진다.
+    /// </summary>
+    public int AdMuteMaxSeconds
+    {
+        get => _prefs.GetInt(KeyAdMuteMaxSeconds, 180);
+        set => PutInt(KeyAdMuteMaxSeconds, Math.Clamp(value, 20, 600));
+    }
+
+    /// <summary>
+    /// 뮤트 직전의 미디어 볼륨(내부값, 뮤트 중이 아니면 <c>-1</c>).
+    /// <b>프로세스가 죽어도 다음 실행이 복구할 수 있도록 즉시 기록한다</b> —
+    /// 여기 남은 값이 있으면 이전 세션이 광고 도중 종료된 것이다.
+    /// </summary>
+    public int AdMuteSavedVolume
+    {
+        get => _prefs.GetInt(KeyAdMuteSavedVolume, -1);
+        set => PutInt(KeyAdMuteSavedVolume, value);
     }
 
     private readonly ISharedPreferences _prefs;
