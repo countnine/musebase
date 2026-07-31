@@ -20,8 +20,8 @@ public enum BubbleLyricsState
 ///
 /// - **테두리 링** = 가사 상태. 검색 중이면 흐린 트랙 위로 악센트 호가 돌고(플레이스토어의
 ///   다운로드 진행 링과 같은 감각), 찾았으면 밝은 링, 못 찾았으면 회색 링.
-/// - **링의 굵기·이중선** = 오버레이(가사 밴드)가 지금 화면에 보이는지. 보이면 링이 굵어지고
-///   안쪽에 얇은 보조 링이 하나 더 생기며 완전 불투명이 된다(선택된 라디오 버튼과 같은 관례).
+/// - **링의 줄 수** = 오버레이(가사 밴드)가 지금 화면에 보이는지. 보이면 같은 굵기·밝기의 링이
+///   안쪽에 하나 더 생겨 두 줄이 된다. 굵기나 밝기로 구분하면 선이 도드라져 화면을 방해한다.
 /// - **우상단 점** = 번역 상태 중 알려야 하는 예외(한도·실패=주황, API 꺼짐=회색). 정상이면 점이 없다.
 ///
 /// 안쪽 채움은 상태를 나타내지 **않는다** — 밴드와 같은 재질로 보이도록 오버레이 배경 설정
@@ -33,18 +33,17 @@ public enum BubbleLyricsState
 /// </summary>
 public sealed class BubbleStatusDrawable : Drawable
 {
-    private const float RingWidthDp = 2f;         // 오버레이가 숨겨져 있을 때
-    private const float ActiveRingWidthDp = 3f;   // 오버레이가 보일 때(굵게)
-    private const float InnerRingWidthDp = 1.2f;  // 보일 때만 추가되는 안쪽 보조 링
-    private const float InnerRingGapDp = 2.2f;
+    /// <summary>링 굵기 — 상태와 무관하게 한 값이다. 굵기로 구분하면 선이 도드라져 화면을 방해한다.</summary>
+    private const float RingWidthDp = 2f;
+    private const float InnerRingGapDp = 2.6f;    // 보일 때만 추가되는 안쪽 보조 링과의 간격
     private const float SpinSweepDegrees = 96f;   // 회전하는 호가 덮는 각도
     private const int SpinPeriodMs = 1100;        // 한 바퀴
     private const int SpinFrameMs = 16;
     private const float BadgeRadiusDp = 4.5f;
     private const float BadgeOutlineDp = 1.5f;
-    /// <summary>오버레이가 숨겨져 있을 때 링·음표를 살짝 죽이는 정도.</summary>
-    private const float IdleRingAlpha = 0.65f;
-    private const float IdleGlyphAlpha = 0.75f;
+    /// <summary>링·음표를 살짝 죽여 화면을 덜 방해하는 정도(상태와 무관하게 일정).</summary>
+    private const float RingAlpha = 0.7f;
+    private const float GlyphAlpha = 0.85f;
 
     /// <summary>가사가 없을 때의 링·음표 색(회색).</summary>
     public static readonly Color MutedColor = Color.Argb(0xFF, 0x8A, 0x8A, 0x8A);
@@ -88,7 +87,7 @@ public sealed class BubbleStatusDrawable : Drawable
         _accentColor = accentColor;
         _fillColor = fillColor;
         _active = overlayVisible;
-        GlyphColor = Fade(_ringColor, overlayVisible ? 1f : IdleGlyphAlpha);
+        GlyphColor = Fade(_ringColor, GlyphAlpha);
         _badgeColor = badgeColor;
         SetSpinning(state == BubbleLyricsState.Searching);
         InvalidateSelf();
@@ -101,12 +100,8 @@ public sealed class BubbleStatusDrawable : Drawable
     {
         var bounds = Bounds;
         float cx = bounds.CenterX(), cy = bounds.CenterY();
-        // 오버레이가 보이면 링이 굵어진다. 바깥 지름은 그대로 두어야(굵어진 만큼 안쪽으로만
-        // 자란다) 상태가 바뀔 때 버블이 커졌다 작아졌다 하지 않는다.
-        var maxWidth = ActiveRingWidthDp * _density;
-        var ringWidth = (_active ? ActiveRingWidthDp : RingWidthDp) * _density;
-        var outer = Math.Min(bounds.Width(), bounds.Height()) / 2f - maxWidth / 2f - 0.5f;
-        var radius = outer + (maxWidth - ringWidth) / 2f;
+        var ringWidth = RingWidthDp * _density;
+        var radius = Math.Min(bounds.Width(), bounds.Height()) / 2f - ringWidth / 2f - 0.5f;
         if (radius <= 0) return;
 
         _paint.SetStyle(Paint.Style.Fill);
@@ -116,9 +111,8 @@ public sealed class BubbleStatusDrawable : Drawable
         _paint.SetStyle(Paint.Style.Stroke);
         _paint.StrokeWidth = ringWidth;
         _paint.StrokeCap = Paint.Cap.Butt;
-        var ringAlpha = _active ? 1f : IdleRingAlpha;
         // 검색 중에는 링을 트랙(흐리게)으로 깔고 그 위로 악센트 호가 돈다.
-        _paint.Color = Fade(_ringColor, _spinning ? 0.30f : ringAlpha);
+        _paint.Color = Fade(_ringColor, _spinning ? 0.30f : RingAlpha);
         canvas.DrawCircle(cx, cy, radius, _paint);
 
         if (_spinning)
@@ -131,15 +125,10 @@ public sealed class BubbleStatusDrawable : Drawable
         }
         else if (_active)
         {
-            // 안쪽 보조 링 — 채움을 건드리지 않고 "지금 표시 중"을 알리는 두 번째 신호.
-            var innerWidth = InnerRingWidthDp * _density;
-            var innerRadius = radius - ringWidth / 2f - InnerRingGapDp * _density - innerWidth / 2f;
-            if (innerRadius > 0)
-            {
-                _paint.StrokeWidth = innerWidth;
-                _paint.Color = _ringColor;
-                canvas.DrawCircle(cx, cy, innerRadius, _paint);
-            }
+            // 안쪽 보조 링 — 굵기·밝기는 바깥 링과 똑같이 두고 **줄 수만** 늘린다.
+            // 채움을 건드리지 않으면서 "지금 표시 중"을 알리는 두 번째 신호.
+            var innerRadius = radius - ringWidth - InnerRingGapDp * _density;
+            if (innerRadius > 0) canvas.DrawCircle(cx, cy, innerRadius, _paint);
         }
 
         if (_badgeColor is { } badge)

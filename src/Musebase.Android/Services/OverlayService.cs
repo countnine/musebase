@@ -91,7 +91,8 @@ public sealed class OverlayService : Service
 
     private bool _moveMode;              // 이동 모드(밴드가 터치를 받는 동안만 true)
     private bool _bubbleMode;            // 버블 모드(설정에서 켬)
-    private bool _bandExpanded = true;   // 버블 모드에서 밴드를 펼쳐 두었는지
+    private bool _bandExpanded = true;   // 버블 모드에서 밴드를 펼쳐 두었는지(사용자가 버블 탭으로 정한다)
+    private bool _expandedBeforeMove;    // 이동 모드가 강제로 펼치기 전의 상태(끝나면 되돌린다)
     private bool _bandPositionPending;   // 저장된 위치를 아직 적용하지 못했다(뷰 크기 확정 전)
     private int _screenWidth, _screenHeight;
 
@@ -278,8 +279,13 @@ public sealed class OverlayService : Service
         _bubbleMode = MusebaseApp.Instance?.Settings.OverlayBubbleMode ?? false;
         if (_bubbleMode)
         {
-            _bandExpanded = false; // 버블 모드로 들어오면 접힌 상태에서 시작
-            if (_bubbleView is null) AttachBubble();
+            // 접힌 상태에서 시작하는 건 **버블 모드로 막 들어왔을 때만**이다.
+            // 설정을 저장할 때마다(ActionRefreshDisplay) 접으면 펼쳐 둔 상태가 사라진다.
+            if (_bubbleView is null)
+            {
+                _bandExpanded = false;
+                AttachBubble();
+            }
         }
         else
         {
@@ -917,6 +923,7 @@ public sealed class OverlayService : Service
         if (on)
         {
             _bandLp.Flags = WindowManagerFlags.NotFocusable; // NotTouchable 해제 = 드래그 가능
+            _expandedBeforeMove = _bandExpanded;             // 이동이 끝나면 사용자가 정한 상태로 되돌린다
             _bandExpanded = true;                            // 버블 모드여도 옮기려면 보여야 한다
             CancelPeek();
             // 재생 중이 아니면 빈 카드가 되어 잡을 곳이 없으므로 안내 문구를 넣어 준다.
@@ -926,7 +933,7 @@ public sealed class OverlayService : Service
         {
             _bandLp.Flags = WindowManagerFlags.NotFocusable | WindowManagerFlags.NotTouchable;
             SavePosition(_overlayView, _bandLp, isBubble: false);
-            if (_bubbleMode) _bandExpanded = false;
+            if (_bubbleMode) _bandExpanded = _expandedBeforeMove;
             _coordinator?.RefreshCurrentLine(); // 안내 문구 → 실제 가사로 복귀
         }
 
@@ -990,7 +997,9 @@ public sealed class OverlayService : Service
             _lineView?.SetLine(null, null, 0);
             if (_translationView is not null) _translationView.Visibility = ViewStates.Gone;
             CancelPeek();
-            if (_bubbleMode) _bandExpanded = false;
+            // 펼침/접힘은 **사용자가 버블을 눌러 정한 상태**다 — 곡이 바뀐다고 접지 않는다.
+            // (접으면 곡이 넘어갈 때마다 다시 눌러야 했다.) 가사가 없는 동안에는 어차피
+            // _hasLine=false라 밴드가 보이지 않고, 새 줄이 오면 그대로 다시 뜬다.
             UpdateVisibility();
             UpdateNotification();
         };
