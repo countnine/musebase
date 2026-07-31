@@ -161,24 +161,30 @@ public sealed class LyricsStore : IDisposable
     /// <summary>정확 키 → 미스면 느슨한 키 순으로 조회한다. 없으면 null.</summary>
     public LyricsEntry? Get(string title, string artist)
     {
-        lock (_lock)
+        lock (_lock) return Locate(title, artist);
+    }
+
+    /// <summary>
+    /// <see cref="Get"/>의 본체(락 안에서 호출). 저장(<see cref="Upsert"/>)도 같은 규칙을 써야
+    /// **조회로는 맞는데 저장은 새 행을 만드는** 비대칭이 생기지 않는다.
+    /// </summary>
+    private LyricsEntry? Locate(string title, string artist)
+    {
+        var exact = ExactKey(title, artist);
+        if (Read("key = $k", exact) is { } hit) return hit with { Match = LyricsEntry.MatchExact };
+
+        // 저장본 쪽이 잡음 표기이고 질의가 깨끗한 경우("Love Story (Taylor's Version)" 저장 ↔ "Love Story" 질의):
+        // 저장본의 loose_key가 질의의 정확 키와 같다.
+        if (Read("loose_key = $k", exact) is { } byStoredLoose)
+            return byStoredLoose with { Match = LyricsEntry.MatchCleaned };
+
+        foreach (var loose in LooseKeys(title, artist))
         {
-            var exact = ExactKey(title, artist);
-            if (Read("key = $k", exact) is { } hit) return hit with { Match = LyricsEntry.MatchExact };
-
-            // 저장본 쪽이 잡음 표기이고 질의가 깨끗한 경우("Love Story (Taylor's Version)" 저장 ↔ "Love Story" 질의):
-            // 저장본의 loose_key가 질의의 정확 키와 같다.
-            if (Read("loose_key = $k", exact) is { } byStoredLoose)
-                return byStoredLoose with { Match = LyricsEntry.MatchCleaned };
-
-            foreach (var loose in LooseKeys(title, artist))
-            {
-                // 정제 키로 저장된 행(자기 loose_key) 또는 정제 결과가 정확 키인 행 둘 다 본다.
-                if (Read("loose_key = $k", loose) is { } byLoose) return byLoose with { Match = LyricsEntry.MatchCleaned };
-                if (Read("key = $k", loose) is { } byKey) return byKey with { Match = LyricsEntry.MatchCleaned };
-            }
-            return null;
+            // 정제 키로 저장된 행(자기 loose_key) 또는 정제 결과가 정확 키인 행 둘 다 본다.
+            if (Read("loose_key = $k", loose) is { } byLoose) return byLoose with { Match = LyricsEntry.MatchCleaned };
+            if (Read("key = $k", loose) is { } byKey) return byKey with { Match = LyricsEntry.MatchCleaned };
         }
+        return null;
     }
 
     private LyricsEntry? Read(string where, string key)
@@ -225,6 +231,20 @@ public sealed class LyricsStore : IDisposable
         {
             var key = ExactKey(incoming.Title, incoming.Artist);
             var current = Read("key = $k", key);
+
+            // 정확 키에 없으면 조회와 같은 규칙(느슨한 키)으로 한 번 더 찾는다. 기기마다 메타데이터
+            // 표기가 달라(Windows는 아티스트에 앨범명이 붙는 등) 같은 곡이 두 행으로 갈리는 것을 막는다.
+            // 찾으면 그 행을 갱신하되 key/제목/아티스트/loose_key는 **먼저 저장된 표기를 유지**한다 —
+            // 여기서 바꾸면 원래 기기의 정확 키 조회가 깨진다.
+            LyricsEntry? mergedInto = null;
+            if (current is null
+                && Locate(incoming.Title, incoming.Artist) is { Key: { Length: > 0 } existingKey } found)
+            {
+                mergedInto = found;
+                current = found;
+                key = existingKey;
+            }
+
             (string, LyricsFacts)? existing = current is null
                 ? null
                 : (current.Origin, new LyricsFacts(current.LineCount ?? 0, current.HasInlineTimeTags ?? false,
@@ -245,16 +265,24 @@ public sealed class LyricsStore : IDisposable
             var langs = string.Join(',', facts.Langs);
 
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = """
-                INSERT INTO lyrics (key, loose_key, title, artist, lrc, service, origin, langs,
-                                    line_count, has_inline, revision, updated_at, updated_by)
-                VALUES ($key, $loose, $title, $artist, $lrc, $service, $origin, $langs,
-                        $lines, $inline, $rev, $at, $by)
-                ON CONFLICT(key) DO UPDATE SET
-                    loose_key = $loose, title = $title, artist = $artist, lrc = $lrc, service = $service,
-                    origin = $origin, langs = $langs, line_count = $lines, has_inline = $inline,
-                    revision = $rev, updated_at = $at, updated_by = $by;
-                """;
+            cmd.CommandText = mergedInto is not null
+                ? """
+                  UPDATE lyrics SET
+                      lrc = $lrc, service = $service, origin = $origin, langs = $langs,
+                      line_count = $lines, has_inline = $inline,
+                      revision = $rev, updated_at = $at, updated_by = $by
+                  WHERE key = $key;
+                  """
+                : """
+                  INSERT INTO lyrics (key, loose_key, title, artist, lrc, service, origin, langs,
+                                      line_count, has_inline, revision, updated_at, updated_by)
+                  VALUES ($key, $loose, $title, $artist, $lrc, $service, $origin, $langs,
+                          $lines, $inline, $rev, $at, $by)
+                  ON CONFLICT(key) DO UPDATE SET
+                      loose_key = $loose, title = $title, artist = $artist, lrc = $lrc, service = $service,
+                      origin = $origin, langs = $langs, line_count = $lines, has_inline = $inline,
+                      revision = $rev, updated_at = $at, updated_by = $by;
+                  """;
             cmd.Parameters.AddWithValue("$key", key);
             cmd.Parameters.AddWithValue("$loose", PrimaryLooseKey(incoming.Title, incoming.Artist));
             cmd.Parameters.AddWithValue("$title", incoming.Title);
@@ -273,6 +301,9 @@ public sealed class LyricsStore : IDisposable
             return incoming with
             {
                 Key = key,
+                // 합쳐 넣은 경우 응답은 실제 저장된 표기를 그대로 알린다(요청 표기가 아니라).
+                Title = mergedInto?.Title ?? incoming.Title,
+                Artist = mergedInto?.Artist ?? incoming.Artist,
                 Origin = origin,
                 Langs = facts.Langs,
                 LineCount = facts.LineCount,
