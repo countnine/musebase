@@ -10,6 +10,11 @@
   - 계기: Store 버전 MusicBee가 SMTC를 발행하지 않아 인식되지 않았고(원인은 앱 밖), 동시에 소스가 Spotify로 고정돼 있었다. 진단 방법은 `docs/lyrics-server-guide.md`의 "잘 안 될 때" 절.
 
 ## 미배포 (다음 앱 릴리스 후보 — Android 0.5.0)
+- **번역 공유 구멍 막기(코어 — Windows·Android 공통 + 서버)** — "한 기기가 번역하면 다른 기기는 다시 번역하지 않는다"가 실제로는 **새로 검색한 곡에만** 성립하고 있었다. 두 군데를 고쳤다.
+  - 클라이언트: 업로드 지점이 "제공자 검색 직후"뿐이라, 저장 당시 번역이 없던 곡(API 꺼짐·한도 초과)이나 서버에 없는 대상 언어는 기기마다 각자 번역하고 그 결과가 어디에도 남지 않았다. 이제 **로컬 캐시·서버 히트 뒤 보충 번역이 실제로 채워지면** 로컬 캐시에 다시 저장하고 서버에도 올린다(`LyricsCoordinator.TranslateAsync(persistAfter:)` → `PersistTranslated`). 이미 다 번역돼 있으면(`changed == 0`) 올리지 않아 재생마다 `revision`이 늘지 않는다. 서버 히트분을 번역 **전에** 로컬 캐시로 승격하던 것도 함께 해소.
+  - 서버: 조회는 느슨한 키까지 보는데 `Upsert`는 정확 키만 봐서, 같은 곡이 기기별 표기로 갈려 저장됐다("MGMT" vs "MGMT — Oracular Spectacular"). 이제 저장도 조회와 **같은 규칙**(`Locate`)으로 대상 행을 찾아 갱신하되, `key`·제목·아티스트는 먼저 저장된 표기를 유지한다(바꾸면 원래 기기의 정확 키 조회가 깨진다). 재업로드가 잦아지는 만큼 이 비대칭을 같이 막아야 중복 행이 늘지 않는다.
+  - 계약(`contracts/lyrics-api.md`)에 "클라이언트의 PUT 시점" 절과 저장 쪽 키 매칭 규칙 추가. 테스트 7건(`TranslationSharingTests`, `LyricsStoreMergeTests` — 임시 SQLite 파일로 저장 경로까지).
+  - **서버 재배포 필요**(앱 릴리스와 별개). 앱 쪽은 다음 릴리스에 포함.
 - **Spotify 광고 자동 뮤트(Android, 옵인)** — 설정 [광고 뮤트] 탭에서 켜면 Spotify 광고 구간에만 미디어 볼륨을 0으로 내리고 곡이 돌아오면 되돌린다. 기본 꺼짐.
   - 감지는 Windows보다 깔끔하다 — 안드로이드에는 **표준 광고 플래그**(`android.media.metadata.ADVERTISEMENT`)가 있어 Spotify가 설정한다. `spotify:ad` 미디어 ID, 그리고 Windows에서 실측 검증된 `artist=Spotify`+빈 앨범을 폴백으로 겹친다(`Services/AdDecision.cs`의 `AdSignals`). 현지화 문자열 추측이 필요 없다.
     - 주의: **.NET for Android 바인딩에 `MetadataKeyAdvertisement` 상수가 없어** 플랫폼 키 문자열을 직접 쓴다(`Microsoft.Android.Ref.34`의 `Android.Media.MediaMetadata`에 `MetadataKeyMediaId`는 있는데 이건 없음 — 직접 확인).

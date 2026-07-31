@@ -223,7 +223,9 @@ public sealed class LyricsCoordinator : IDisposable
             });
             var cacheCts = new CancellationTokenSource();
             _searchCts = cacheCts;
-            await TranslateAsync(cached, cacheCts.Token); // 언어 변경 시 보충 번역
+            // 보충 번역이 실제로 채워지면 캐시·서버에 되돌려 준다(persistAfter) — 저장 당시
+            // 번역이 없던 곡이 영원히 번역 없이 남는 것을 막는다.
+            await TranslateAsync(cached, cacheCts.Token, persistAfter: true);
             return;
         }
 
@@ -252,7 +254,9 @@ public sealed class LyricsCoordinator : IDisposable
                     ["cached"] = true,
                     ["cleanedQueryUsed"] = false,
                 });
-                await TranslateAsync(remote, remoteCts.Token); // 대상 언어가 비어 있으면 보충 번역
+                // 서버 저장본에 대상 언어 번역이 없으면 여기서 채우고, 채운 결과를 서버에 되돌린다.
+                // 이게 없으면 기기마다 같은 곡을 각자 번역하게 된다(공유의 핵심 경로).
+                await TranslateAsync(remote, remoteCts.Token, persistAfter: true);
                 return;
             }
         }
@@ -422,12 +426,17 @@ public sealed class LyricsCoordinator : IDisposable
         _searchCts?.Cancel(); // 진행 중 검색/번역과 겹치지 않게
         var cts = new CancellationTokenSource();
         _searchCts = cts;
-        try { await TranslateAsync(lyrics, cts.Token); }
+        try { await TranslateAsync(lyrics, cts.Token, persistAfter: true); }
         catch (OperationCanceledException) { /* 트랙 교체 등 — 무시 */ }
     }
 
-    /// <summary>대상 언어 MT 보장 후 현재 라인 갱신 (캐시 히트면 즉시, 미스면 API 1회)</summary>
-    private async Task TranslateAsync(Lyrics lyrics, CancellationToken ct)
+    /// <summary>
+    /// 대상 언어 MT 보장 후 현재 라인 갱신 (캐시 히트면 즉시, 미스면 API 1회).
+    /// <paramref name="persistAfter"/>가 true이고 번역이 실제로 채워지면 로컬 캐시와 가사 서버에
+    /// 되돌려 저장한다 — 호출자가 곧바로 저장하는 경로(제공자 검색·수동 선택)에서는 false로 두어
+    /// 같은 내용을 두 번 올리지 않는다.
+    /// </summary>
+    private async Task TranslateAsync(Lyrics lyrics, CancellationToken ct, bool persistAfter = false)
     {
         // 대상=중국어면 제공자 번역(중국어)을 그대로 쓰므로 DeepL을 거치지 않는다.
         if (TargetIsChinese) { SetTranslationStatus(TranslationDisplayStatus.None); return; }
@@ -460,6 +469,11 @@ public sealed class LyricsCoordinator : IDisposable
             else
                 SetTranslationStatus(TranslationDisplayStatus.Cache); // 필요 없음(이미 번역됨) 또는 전부 캐시
 
+            // 보충 번역분을 캐시·서버에 반영한다. changed == 0이면 이미 다 번역돼 있었다는 뜻이라
+            // 아무것도 하지 않는다(같은 곡을 다시 틀 때마다 올리지 않는다).
+            if (persistAfter && changed > 0 && !ct.IsCancellationRequested)
+                PersistTranslated(lyrics);
+
             // translation: 번역이 실제로 필요했던 첫 완료 시점에 곡당 1회
             if (!_translationReported && stats.LinesNeeded > 0)
             {
@@ -475,6 +489,28 @@ public sealed class LyricsCoordinator : IDisposable
         catch (OperationCanceledException)
         {
             // 트랙 교체됨
+        }
+    }
+
+    /// <summary>
+    /// 보충 번역이 채워진 가사를 로컬 캐시에 다시 저장하고 가사 서버에도 올린다.
+    /// 여전히 같은 곡을 표시 중일 때만 한다(트랙이 바뀌었으면 남의 곡 키로 저장될 수 있다).
+    /// 서버 병합 정책은 번역 언어가 늘어난 갱신을 항상 채택하므로 안전하게 덮인다.
+    /// </summary>
+    private void PersistTranslated(Lyrics lyrics)
+    {
+        if (!ReferenceEquals(CurrentLyrics, lyrics)) return;
+        if (CurrentTrack is not { } track) return;
+
+        try
+        {
+            Cache?.Set(track.Title, track.Artist, lyrics);
+            _ = RemoteCache?.SetAsync(track.Title, track.Artist, lyrics);
+            Log?.Invoke($"[translate] 보충 번역 반영: {track}");
+        }
+        catch (Exception e)
+        {
+            Log?.Invoke($"[translate] 보충 번역 저장 실패: {e.Message}");
         }
     }
 
