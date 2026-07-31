@@ -70,7 +70,7 @@ public sealed class OverlayService : Service
     private WindowManagerLayoutParams? _bubbleLp;
     private View? _bubbleView;
     private TextView? _bubbleLabel;
-    private GradientDrawable? _bubbleBackground;
+    private BubbleStatusDrawable? _bubbleBackground;
 
     // 버블 길게 누르기로 여는 퀵 메뉴(앱 열기 / API 번역 / 위치 이동)와 그 항목 라벨.
     private LinearLayout? _menuView;
@@ -111,6 +111,7 @@ public sealed class OverlayService : Service
 
     private bool _hasLine;
     private bool _isPlaying;
+    private bool _bandVisible;        // 가사 밴드가 지금 실제로 보이는가(버블 채움 표기의 근거)
     private string? _lastLineContent; // 같은 줄 재발행과 진짜 새 줄을 구분(peek 트리거용)
 
     public override IBinder? OnBind(Intent? intent) => null;
@@ -298,10 +299,7 @@ public sealed class OverlayService : Service
         int Dp(float dp) => (int)(dp * density + 0.5f);
         var size = Dp(BubbleSizeDp);
 
-        _bubbleBackground = new GradientDrawable();
-        _bubbleBackground.SetShape(ShapeType.Oval);
-        _bubbleBackground.SetColor(Color.Argb(0xC8, 0x18, 0x18, 0x18));
-        _bubbleBackground.SetStroke(Dp(2), Color.Argb(0xFF, 0xE8, 0xE8, 0xE8));
+        _bubbleBackground = new BubbleStatusDrawable(density);
 
         _bubbleLabel = new TextView(this) { Text = "♪", Gravity = GravityFlags.Center };
         _bubbleLabel.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 20f);
@@ -333,6 +331,7 @@ public sealed class OverlayService : Service
 
     private void RemoveBubble()
     {
+        _bubbleBackground?.Stop(); // 회전 틱이 남지 않도록 뷰를 떼기 전에 멈춘다
         if (_windowManager is not null && _bubbleView is not null)
         {
             try { _windowManager.RemoveView(_bubbleView); }
@@ -344,22 +343,54 @@ public sealed class OverlayService : Service
         _bubbleLp = null;
     }
 
-    /// <summary>버블 테두리 색으로 번역 상태를 알린다(꺼짐=회색, 실패/한도=주황, 그 외=흰색).</summary>
+    /// <summary>
+    /// 버블 하나에 세 가지를 싣는다.
+    /// ① 테두리 링 = 가사 상태(검색 중 회전 / 찾음 밝게 / 못 찾음 회색),
+    /// ② 안쪽 채움 = 오버레이가 지금 보이는지(보이면 링 색으로 채우고 음표를 반전),
+    /// ③ 우상단 점 = 번역 예외(한도·실패=주황, API 꺼짐=회색). 정상이면 점 없음.
+    /// </summary>
     private void UpdateBubbleAppearance()
     {
         if (_bubbleBackground is null) return;
-        var density = Resources!.DisplayMetrics!.Density;
-        var status = _coordinator?.CurrentTranslationStatus ?? TranslationDisplayStatus.None;
-        var color = status switch
+        var settings = MusebaseApp.Instance?.Settings;
+
+        var state = (_lastStatus ?? _coordinator?.CurrentStatus)?.Kind switch
         {
-            TranslationDisplayStatus.Disabled => Color.Argb(0xFF, 0x9E, 0x9E, 0x9E),
-            TranslationDisplayStatus.DisabledCached => Color.Argb(0xFF, 0x9E, 0x9E, 0x9E),
-            TranslationDisplayStatus.Quota or TranslationDisplayStatus.Failed => Color.Argb(0xFF, 0xFF, 0xA7, 0x26),
-            _ => Color.Argb(0xFF, 0xE8, 0xE8, 0xE8),
+            LyricsStatusKind.Searching => BubbleLyricsState.Searching,
+            LyricsStatusKind.Found or LyricsStatusKind.Cache
+                or LyricsStatusKind.Manual or LyricsStatusKind.Edited => BubbleLyricsState.Found,
+            _ => BubbleLyricsState.Missing, // NotFound·Wrong·HiddenByUser·NoTrack·미발행
         };
-        _bubbleBackground.SetStroke((int)(2 * density + 0.5f), color);
-        // 접혀 있을 때는 살짝 흐리게 해서 화면을 덜 방해한다.
-        if (_bubbleView is not null) _bubbleView.Alpha = _bandExpanded ? 1f : 0.75f;
+
+        var translation = _coordinator?.CurrentTranslationStatus ?? TranslationDisplayStatus.None;
+        Color? badge = translation switch
+        {
+            TranslationDisplayStatus.Quota or TranslationDisplayStatus.Failed
+                => Color.Argb(0xFF, 0xFF, 0xA7, 0x26),
+            // 껐지만 캐시로 다 채워진 경우(DisabledCached)는 표시가 정상이므로 점을 찍지 않는다.
+            TranslationDisplayStatus.Disabled => Color.Argb(0xFF, 0x9E, 0x9E, 0x9E),
+            _ => null,
+        };
+
+        _bubbleBackground.SetStatus(
+            state,
+            _bandVisible,
+            AndroidSettings.ParseColor(settings?.OverlayTextColor, Color.White),
+            AndroidSettings.ParseColor(settings?.OverlayKaraokeColor, KaraokeTextView.DefaultFillColor),
+            badge);
+
+        if (_bubbleLabel is not null) _bubbleLabel.SetTextColor(_bubbleBackground.GlyphColor);
+        if (_bubbleView is not null)
+        {
+            // 곡이 없을 때만 살짝 흐리게 — 그 외에는 상태를 또렷하게 읽히도록 완전 불투명.
+            _bubbleView.Alpha = state == BubbleLyricsState.Missing && !_isPlaying ? 0.8f : 1f;
+            _bubbleView.ContentDescription = state switch
+            {
+                BubbleLyricsState.Searching => "가사 찾는 중",
+                BubbleLyricsState.Found => _bandVisible ? "가사 표시 중" : "가사 있음 — 탭하면 표시",
+                _ => "가사 없음",
+            };
+        }
     }
 
     /// <summary>버블 탭 — 가사 밴드를 펼치거나 접는다.</summary>
@@ -931,7 +962,8 @@ public sealed class OverlayService : Service
         _onProgress = OnProgress;
         _onPlayingChanged = OnPlayingChanged;
         // 알림바의 곡명·상태 갱신용 — 표시만 하고 엔진은 건드리지 않는다.
-        _onStatusChanged = status => { _lastStatus = status; UpdateNotification(); };
+        // 가사 상태는 알림바 문구와 버블 링(검색 중 회전 / 찾음 / 못 찾음)을 함께 움직인다.
+        _onStatusChanged = status => { _lastStatus = status; UpdateNotification(); UpdateBubbleAppearance(); };
         _onTranslationStatusChanged = _ => { UpdateNotification(); UpdateBubbleAppearance(); };
         // 곡이 바뀌면 이전 곡의 마지막 줄이 남아 떠 있지 않도록 카드를 비운다
         // (새 곡의 줄은 코디네이터가 곧 다시 발행한다).
@@ -1008,8 +1040,14 @@ public sealed class OverlayService : Service
     /// </summary>
     private void UpdateVisibility()
     {
+        var show = _overlayView is not null
+            && (_moveMode || (_hasLine && _isPlaying && (!_bubbleMode || _bandExpanded)));
+        // 버블의 "표시 중" 표기는 _bandExpanded가 아니라 **실제로 보이는지**를 따라야 한다
+        // (펼쳐 뒀어도 일시정지·무가사면 밴드는 보이지 않는다).
+        _bandVisible = show;
+        UpdateBubbleAppearance();
+
         if (_overlayView is null) return;
-        var show = _moveMode || (_hasLine && _isPlaying && (!_bubbleMode || _bandExpanded));
         SetBandVisible(show);
         // 저장된 위치는 뷰 크기가 정해진 뒤에만 적용할 수 있다(보이는 시점에 1회).
         if (show && _bandPositionPending) _overlayView.Post(RestoreBandPositionIfPending);
