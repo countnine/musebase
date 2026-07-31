@@ -345,9 +345,11 @@ public sealed class OverlayService : Service
 
     /// <summary>
     /// 버블 하나에 세 가지를 싣는다.
-    /// ① 테두리 링 = 가사 상태(검색 중 회전 / 찾음 밝게 / 못 찾음 회색),
-    /// ② 안쪽 채움 = 오버레이가 지금 보이는지(보이면 링 색으로 채우고 음표를 반전),
+    /// ① 테두리 링 색 = 가사 상태(검색 중 회전 / 찾음 밝게 / 못 찾음 회색),
+    /// ② 링 굵기·이중선 = 오버레이가 지금 보이는지,
     /// ③ 우상단 점 = 번역 예외(한도·실패=주황, API 꺼짐=회색). 정상이면 점 없음.
+    /// 안쪽 채움은 상태를 나타내지 않고 **오버레이 배경 설정**을 따른다 — 상태를 채움으로
+    /// 알리면 버블이 불투명해져 뒤의 화면을 가린다.
     /// </summary>
     private void UpdateBubbleAppearance()
     {
@@ -377,6 +379,7 @@ public sealed class OverlayService : Service
             _bandVisible,
             AndroidSettings.ParseColor(settings?.OverlayTextColor, Color.White),
             AndroidSettings.ParseColor(settings?.OverlayKaraokeColor, KaraokeTextView.DefaultFillColor),
+            BubbleFillColor(settings),
             badge);
 
         if (_bubbleLabel is not null) _bubbleLabel.SetTextColor(_bubbleBackground.GlyphColor);
@@ -391,6 +394,19 @@ public sealed class OverlayService : Service
                 _ => "가사 없음",
             };
         }
+    }
+
+    /// <summary>
+    /// 버블 안쪽 채움 — 가사 밴드와 같은 재질로 보이도록 오버레이 배경 설정(색·불투명도)을 따른다.
+    /// 배경을 꺼 뒀으면 검정 45%를 쓴다(완전 투명이면 밝은 화면 위에서 음표가 읽히지 않는다).
+    /// 같은 이유로 불투명도가 아주 낮게 설정돼 있어도 25%까지만 내려간다.
+    /// </summary>
+    private static Color BubbleFillColor(AndroidSettings? settings)
+    {
+        if (settings is not { OverlayBackgroundEnabled: true }) return Color.Argb(0x73, 0x00, 0x00, 0x00);
+        var color = AndroidSettings.ParseColor(settings.OverlayBackgroundColor, Color.Black);
+        var alpha = (int)(Math.Clamp(settings.OverlayBackgroundOpacity, 0.25f, 1f) * 255);
+        return Color.Argb(alpha, color.R, color.G, color.B);
     }
 
     /// <summary>버블 탭 — 가사 밴드를 펼치거나 접는다.</summary>
