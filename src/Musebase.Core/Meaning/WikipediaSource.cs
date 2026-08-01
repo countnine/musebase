@@ -152,15 +152,7 @@ public sealed partial class WikipediaSource : ISongMeaningSource
         return names;
     }
 
-    /// <summary>비교용 정규화 — 소문자 + 영숫자/한글만 남긴다(괄호·구두점·공백 제거).</summary>
-    private static string Normalize(string s)
-    {
-        Span<char> buffer = s.Length <= 256 ? stackalloc char[s.Length] : new char[s.Length];
-        var n = 0;
-        foreach (var c in s)
-            if (char.IsLetterOrDigit(c)) buffer[n++] = char.ToLowerInvariant(c);
-        return new string(buffer[..n]);
-    }
+    private static string Normalize(string s) => MeaningText.Normalize(s);
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();

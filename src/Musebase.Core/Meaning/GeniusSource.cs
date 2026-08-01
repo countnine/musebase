@@ -82,12 +82,46 @@ public sealed class GeniusSource : ISongMeaningSource
         {
             var url = "/search?q=" + Uri.EscapeDataString(term);
             var found = await GetAsync<GeniusSearchEnvelope>(url, ct).ConfigureAwait(false);
-            var song = found?.Response?.Hits?
-                .FirstOrDefault(h => string.Equals(h.Type, "song", StringComparison.OrdinalIgnoreCase))?
-                .Result;
-            if (song is { Id: > 0 }) return song;
+            if (found?.Response?.Hits is not { Length: > 0 } hits) continue;
+
+            foreach (var wrapper in hits)
+            {
+                if (!string.Equals(wrapper.Type, "song", StringComparison.OrdinalIgnoreCase)) continue;
+                if (wrapper.Result is not { Id: > 0 } song) continue;
+                if (!Matches(song.Title, song.Artists, title, artist)) continue;
+                return song;
+            }
         }
         return null;
+    }
+
+    /// <summary>
+    /// 이 검색 결과가 정말 그 곡인지 확인한다(순수 함수 — 테스트 대상).
+    ///
+    /// Genius 검색은 <b>무엇을 넣든 무언가를 돌려준다.</b> 실측에서 음악이 아닌 유튜브 제목
+    /// ("해외에서 화제라는 한국의 지하철 문화")으로 검색했더니 전혀 무관한 <c>119 REMIX</c>가
+    /// 첫 히트로 나왔고, 확인 없이 받았으면 그 곡의 해설이 이 트랙의 "의미"로 붙었을 것이다.
+    /// <b>엉뚱한 근거는 자료가 없는 것보다 나쁘다</b> — 위키피디아 문서 선택과 같은 원칙이라,
+    /// 제목 일치를 필수로 두고 아티스트를 아는 경우 확인까지 요구한다.
+    /// </summary>
+    internal static bool Matches(string? hitTitle, string? hitArtists, string title, string artist)
+    {
+        var wanted = MeaningText.Normalize(title);
+        var got = MeaningText.Normalize(hitTitle ?? "");
+        if (wanted.Length == 0 || got.Length == 0) return false;
+
+        // 제목은 어느 쪽이 담아도 인정한다 — "(Remix)"·"(Live)" 같은 꼬리표가 흔하다.
+        if (!got.Contains(wanted, StringComparison.Ordinal)
+            && !wanted.Contains(got, StringComparison.Ordinal)) return false;
+
+        var names = ArtistNames.All(artist)
+            .Select(MeaningText.Normalize)
+            .Where(n => n.Length >= 3)
+            .ToList();
+        if (names.Count == 0) return true; // 아티스트를 모르면 제목만으로 받아들인다
+
+        var haystack = MeaningText.Normalize(hitArtists ?? "");
+        return names.Any(n => haystack.Contains(n, StringComparison.Ordinal));
     }
 
     private static IEnumerable<string> Terms(string title, string artist)
@@ -119,7 +153,11 @@ public sealed class GeniusSource : ISongMeaningSource
     private sealed record GeniusSearchEnvelope(GeniusSearchResponse? Response);
     private sealed record GeniusSearchResponse(GeniusHitWrapper[]? Hits);
     private sealed record GeniusHitWrapper(string? Type, GeniusHit? Result);
-    private sealed record GeniusHit(long Id, string? Url);
+    private sealed record GeniusHit(
+        long Id,
+        string? Url,
+        string? Title,
+        [property: JsonPropertyName("artist_names")] string? Artists);
 
     private sealed record GeniusSongEnvelope(GeniusSongResponse? Response);
     private sealed record GeniusSongResponse(GeniusSong? Song);

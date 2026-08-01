@@ -24,7 +24,8 @@ public class MeaningTests
             if (path.StartsWith("/search"))
                 return Json("""
                     {"response":{"hits":[
-                      {"type":"song","result":{"id":378195,"url":"https://genius.com/Mgmt-kids-lyrics"}}]}}
+                      {"type":"song","result":{"id":378195,"title":"Kids","artist_names":"MGMT",
+                        "url":"https://genius.com/Mgmt-kids-lyrics"}}]}}
                     """);
             return Json("""
                 {"response":{"song":{"url":"https://genius.com/Mgmt-kids-lyrics",
@@ -47,7 +48,10 @@ public class MeaningTests
         // 대부분의 곡에는 About이 없다 — 빈 문자열을 근거로 넘기면 모델이 지어낸다.
         var handler = new StubHandler(req =>
             req.RequestUri!.PathAndQuery.StartsWith("/search")
-                ? Json("""{"response":{"hits":[{"type":"song","result":{"id":1,"url":"u"}}]}}""")
+                ? Json("""
+                    {"response":{"hits":[{"type":"song",
+                      "result":{"id":1,"title":"Kids","artist_names":"MGMT","url":"u"}}]}}
+                    """)
                 : Json("""{"response":{"song":{"url":"u","description":{"plain":"?"}}}}"""));
 
         Assert.Null(await new GeniusSource("token", handler.Client).FetchAsync("X", "Y"));
@@ -190,6 +194,39 @@ public class MeaningTests
         ];
 
         Assert.Null(WikipediaSource.PickPage(hits, "Shallow", "Lady Gaga/Bradley Cooper"));
+    }
+
+    // ---- Genius 검색 결과 확인 ----
+
+    [Fact]
+    public void Genius가_무관한_곡을_돌려주면_거른다()
+    {
+        // 실측: 음악이 아닌 유튜브 제목으로 검색했더니 "119 REMIX"가 첫 히트로 나왔다.
+        // 확인 없이 받으면 남의 곡 해설이 이 트랙의 "의미"가 된다.
+        Assert.False(GeniusSource.Matches(
+            "119 REMIX", "GRAY", "해외에서 화제라는 한국의 지하철 문화", "여기는한국"));
+    }
+
+    [Fact]
+    public void Genius의_제목_꼬리표는_허용한다()
+    {
+        Assert.True(GeniusSource.Matches("Shallow", "Lady Gaga & Bradley Cooper",
+            "Shallow", "Lady Gaga/Bradley Cooper"));
+        Assert.True(GeniusSource.Matches("Wonderwall (Live)", "Oasis", "Wonderwall", "Oasis"));
+    }
+
+    [Fact]
+    public void Genius에서_제목이_같아도_아티스트가_다르면_거른다()
+    {
+        // 동명이곡 — 가장 위험한 오염원이다.
+        Assert.False(GeniusSource.Matches("Shallow", "Porcupine Tree",
+            "Shallow", "Lady Gaga/Bradley Cooper"));
+    }
+
+    [Fact]
+    public void Genius에서_아티스트를_모르면_제목만으로_받아들인다()
+    {
+        Assert.True(GeniusSource.Matches("Wonderwall", "Oasis", "Wonderwall", ""));
     }
 
     // ---- 아티스트 표기 정리 ----
