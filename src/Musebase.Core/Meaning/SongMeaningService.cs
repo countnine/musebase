@@ -1,7 +1,7 @@
 namespace Musebase.Core.Meaning;
 
 /// <summary>한 곡에 대한 의미 생성 결과.</summary>
-/// <param name="Status">`ok` | `no-source` | `failed`.</param>
+/// <param name="Status">`ok` | `no-source` | `failed` | `retry`.</param>
 /// <param name="Summary">생성된 대상 언어 문단. `ok`가 아니면 null.</param>
 /// <param name="Sources">근거로 쓴 원문들(출처 표기·재생성 판단용).</param>
 public sealed record SongMeaning(
@@ -14,8 +14,14 @@ public sealed record SongMeaning(
     public const string Ok = "ok";
     /// <summary>어느 소스에도 자료가 없었다 — LLM은 부르지 않았다.</summary>
     public const string NoSource = "no-source";
-    /// <summary>자료는 있었지만 생성이 실패했다(키·쿼타·네트워크).</summary>
+    /// <summary>자료는 있었지만 생성이 영구적으로 실패했다(키가 틀렸다, 응답이 비었다).</summary>
     public const string Failed = "failed";
+
+    /// <summary>
+    /// 일시적 실패(쿼타·서버·네트워크) — **저장하지 않는다.** 저장하면 쿼타가 풀린 뒤에도
+    /// 백필이 이 곡을 영영 건너뛴다. 이 상태는 DB에 들어가지 않는 값이다.
+    /// </summary>
+    public const string Retry = "retry";
 
     public string? GeniusUrl =>
         Sources.FirstOrDefault(s => s.Name == "Genius")?.Url;
@@ -53,10 +59,13 @@ public sealed class SongMeaningService
         if (_writer is null)
             return new SongMeaning(SongMeaning.Failed, null, collected, null, null);
 
-        var summary = await _writer.WriteAsync(title, artist, collected, targetLang, ct).ConfigureAwait(false);
-        return summary is null
-            ? new SongMeaning(SongMeaning.Failed, null, collected, _writer.EngineId, _writer.Model)
-            : new SongMeaning(SongMeaning.Ok, summary, collected, _writer.EngineId, _writer.Model);
+        var written = await _writer.WriteAsync(title, artist, collected, targetLang, ct).ConfigureAwait(false);
+        if (written.Text is not null)
+            return new SongMeaning(SongMeaning.Ok, written.Text, collected, _writer.EngineId, _writer.Model);
+
+        // 쿼타·네트워크처럼 시간이 풀어 줄 실패는 `failed`로 굳히지 않는다.
+        var status = written.Retryable ? SongMeaning.Retry : SongMeaning.Failed;
+        return new SongMeaning(status, null, collected, _writer.EngineId, _writer.Model);
     }
 
     /// <summary>모든 소스를 동시에 부르고 성공한 것만 모은다(레지스트리 등록 순서 유지).</summary>

@@ -177,7 +177,7 @@ Spotify Connect처럼 **PC에서 재생하고 폰에서 조작**하면 두 기�
 
 | 키 | 어디서 | 비고 |
 |---|---|---|
-| `MUSEBASE_GEMINI_API_KEY` | <https://aistudio.google.com/apikey> | 기존 GCP 프로젝트에 결제를 연결하면 무료 크레딧이 그대로 적용된다. 무료 티어만으로도 보유 곡 전체를 하루에 채울 수 있다 |
+| `MUSEBASE_GEMINI_API_KEY` | <https://aistudio.google.com/apikey> | 요금은 아래 "무료로 쓰려면" 참고 |
 | `MUSEBASE_GENIUS_TOKEN` | <https://genius.com/api-clients> → New API Client → **Generate Access Token** | 무료. OAuth 사용자 플로우 불필요 |
 | `MUSEBASE_LASTFM_KEY` | <https://www.last.fm/api/account/create> | 선택. Genius에 설명이 없는 곡을 메워 준다 |
 
@@ -191,14 +191,33 @@ MUSEBASE_GEMINI_MODEL=gemini-2.5-flash-lite # 생략 가능
 MUSEBASE_GENIUS_TOKEN=...
 MUSEBASE_LASTFM_KEY=...
 MUSEBASE_MEANING_BACKFILL_LIMIT=50          # 일괄 생성 1회 처리량
+MUSEBASE_MEANING_BACKFILL_DELAY_MS=0        # 호출 간 간격 — 무료 티어면 4500
 ```
+
+### 무료로 쓰려면 — 헷갈리는 지점
+
+**"$300 무료 체험 크레딧"과 "Gemini API 무료 티어"는 다른 제도다.** 크레딧은 Gemini API에
+**쓸 수 없다**(Google 공식 문서의 명시적 제외 항목). 무료로 쓰는 길은 무료 티어 하나뿐이고,
+그건 **결제 계정이 연결되지 않은 프로젝트에만** 적용된다.
+
+여기서 함정: 결제를 연결하는 순간 그 프로젝트는 즉시 **Tier 1(유료)** 이 되고 무료 티어는
+사라진다. 크레딧은 안 먹히므로 카드에서 실제로 청구된다. 되돌리려면 결제를 명시적으로 해제해야 한다.
+
+- **무료로 가려면**: 결제가 없는 **별도 프로젝트**를 만들어 그 안에서 키를 발급한다.
+  가사 번역용 프로젝트(Cloud Translation)는 결제가 필요하므로 **그쪽 결제를 끄면 안 된다.**
+  무료 티어는 15 RPM이라 백필을 한 번에 돌리려면 `MUSEBASE_MEANING_BACKFILL_DELAY_MS=4500`을 준다.
+- **유료(Tier 1)로 가도 된다**: 곡당 사실상 0원이라 보유 곡 전체를 채워도 몇백 원 수준이고,
+  분당 한도가 넉넉해 간격이 필요 없다. 무료 티어와 달리 **보낸 내용이 학습에 쓰이지 않는다.**
+
+쿼타에 걸려도 안전하다 — 429·5xx는 저장하지 않고 백필이 그 자리에서 멈춘다. 남은 곡은
+손대지 않으므로 나중에 다시 누르면 이어서 진행된다(영구 실패만 행으로 남아 건너뛰어진다).
 
 ### 모델을 바꿔 보고 싶다면
 
 `MUSEBASE_MEANING_ENGINE=openrouter` + `MUSEBASE_OPENROUTER_API_KEY`로 바꾸고
 `MUSEBASE_OPENROUTER_MODEL`에 모델 문자열만 넣으면 된다(`anthropic/claude-opus-5`,
 `google/gemini-2.5-flash` …). 같은 곡을 [다시 생성]으로 만들어 문장을 비교할 수 있다.
-대량 백필은 무료 티어가 있는 Gemini 쪽이 낫다.
+OpenRouter는 Google Cloud 프로젝트가 아예 필요 없어, 프로젝트 한도에 막혔을 때의 우회로이기도 하다.
 
 ### 쓰는 법
 

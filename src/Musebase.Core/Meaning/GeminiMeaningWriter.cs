@@ -13,8 +13,12 @@ namespace Musebase.Core.Meaning;
 /// 무료 티어가 있어 보유 곡 전체를 0원에 채울 수 있다. IAM·데이터 레지던시 같은 거버넌스가
 /// 필요해지면 그때 Vertex로 옮기면 된다.
 ///
-/// 키는 <see href="https://aistudio.google.com/apikey"/>에서 만들고, 기존 GCP 프로젝트에
-/// 결제를 연결하면 무료 크레딧이 그대로 적용된다.
+/// 키는 <see href="https://aistudio.google.com/apikey"/>에서 만든다. **$300 무료 체험
+/// 크레딧은 Gemini API에 쓸 수 없다**(공식 문서에 명시된 제외 항목) — 별개인 "Gemini API
+/// 무료 티어"가 있고, 그건 **결제를 연결하지 않은 프로젝트에만** 적용된다. 결제를 붙이는
+/// 순간 그 프로젝트는 Tier 1(유료)이 되고 무료 티어는 사라지므로, 무료로 쓰려면 결제가
+/// 없는 프로젝트에서 키를 만들어야 한다. 다만 요약 한 번은 매우 싸서(곡당 사실상 0원)
+/// 유료 티어로 두는 선택도 합리적이다 — 그쪽은 보낸 내용이 학습에 쓰이지 않는다.
 /// </summary>
 public sealed class GeminiMeaningWriter : IMeaningWriter
 {
@@ -44,11 +48,11 @@ public sealed class GeminiMeaningWriter : IMeaningWriter
     public string EngineId => "gemini";
     public string Model { get; }
 
-    public async Task<string?> WriteAsync(
+    public async Task<MeaningWriteResult> WriteAsync(
         string title, string artist, IReadOnlyList<MeaningSource> sources,
         string targetLang, CancellationToken ct = default)
     {
-        if (_apiKey.Length == 0 || sources.Count == 0) return null;
+        if (_apiKey.Length == 0 || sources.Count == 0) return MeaningWriteResult.Failed;
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -67,17 +71,28 @@ public sealed class GeminiMeaningWriter : IMeaningWriter
             request.Headers.Add("x-goog-api-key", _apiKey);
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode) return MeaningWriteResult.FromStatus(response.StatusCode);
 
             var body = await response.Content.ReadFromJsonAsync<GeminiResponse>(Json, cts.Token).ConfigureAwait(false);
             var text = body?.Candidates?
                 .FirstOrDefault()?.Content?.Parts?
                 .FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.Text))?.Text;
-            return string.IsNullOrWhiteSpace(text) ? null : text!.Trim();
+            return string.IsNullOrWhiteSpace(text)
+                ? MeaningWriteResult.Failed
+                : MeaningWriteResult.Written(text!.Trim());
+        }
+        catch (OperationCanceledException)
+        {
+            // 타임아웃이든 호출자 취소든 "결과를 모른다"는 뜻이다 — 실패로 못 박지 않는다.
+            return MeaningWriteResult.Transient;
+        }
+        catch (HttpRequestException)
+        {
+            return MeaningWriteResult.Transient; // 네트워크는 다음에 될 수 있다
         }
         catch (Exception)
         {
-            return null; // 의미는 부가 기능 — 실패해도 가사에 영향이 없어야 한다
+            return MeaningWriteResult.Failed; // 의미는 부가 기능 — 가사에 영향이 없어야 한다
         }
     }
 

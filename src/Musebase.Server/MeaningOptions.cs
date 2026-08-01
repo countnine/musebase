@@ -17,14 +17,20 @@ public sealed record MeaningOptions(
     string? GeniusToken,
     string? LastFmKey,
     bool UseWikipedia,
-    int BackfillLimit)
+    int BackfillLimit,
+    int BackfillDelayMs)
 {
     /// <summary>
     /// `MUSEBASE_MEANING_ENGINE`(gemini|openrouter|none, 기본 none),
     /// `MUSEBASE_MEANING_LANG`(기본 ko), `MUSEBASE_GEMINI_API_KEY` / `MUSEBASE_GEMINI_MODEL`,
     /// `MUSEBASE_OPENROUTER_API_KEY` / `MUSEBASE_OPENROUTER_MODEL`,
     /// `MUSEBASE_GENIUS_TOKEN`, `MUSEBASE_LASTFM_KEY`, `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔),
-    /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50).
+    /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50),
+    /// `MUSEBASE_MEANING_BACKFILL_DELAY_MS`(기본 0 — 아래 설명).
+    ///
+    /// 백필 간격이 기본 0인 이유: 유료 티어는 분당 한도가 넉넉해 일부러 느리게 돌 이유가 없고,
+    /// 429가 나더라도 백필이 그 자리에서 멈추고 **아무것도 저장하지 않으므로** 망가지지 않는다.
+    /// Gemini 무료 티어(15 RPM)처럼 빡빡한 한도에서 끝까지 한 번에 돌리고 싶으면 4500 정도를 준다.
     /// </summary>
     public static MeaningOptions FromEnvironment()
     {
@@ -33,6 +39,8 @@ public sealed record MeaningOptions(
 
         var limit = int.TryParse(Env("MUSEBASE_MEANING_BACKFILL_LIMIT"), out var n)
             ? Math.Clamp(n, 1, 500) : 50;
+        var delay = int.TryParse(Env("MUSEBASE_MEANING_BACKFILL_DELAY_MS"), out var d)
+            ? Math.Clamp(d, 0, 60_000) : 0;
 
         return new MeaningOptions(
             Engine: Env("MUSEBASE_MEANING_ENGINE") ?? MeaningWriterRegistry.None,
@@ -44,7 +52,8 @@ public sealed record MeaningOptions(
             GeniusToken: Env("MUSEBASE_GENIUS_TOKEN"),
             LastFmKey: Env("MUSEBASE_LASTFM_KEY"),
             UseWikipedia: Env("MUSEBASE_MEANING_WIKIPEDIA") != "0",
-            BackfillLimit: limit);
+            BackfillLimit: limit,
+            BackfillDelayMs: delay);
     }
 
     /// <summary>구성된 소스만 골라 서비스를 만든다. 키가 하나도 없으면 소스가 비어 꺼진 상태가 된다.</summary>

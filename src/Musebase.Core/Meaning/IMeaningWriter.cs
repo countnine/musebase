@@ -9,7 +9,8 @@ namespace Musebase.Core.Meaning;
 /// bio를 넣으면 긴 한국어 문서가 나올 뿐 "의미"가 되지 않는다. 구현은 순수 HTTP + JSON이며
 /// 엔진은 <see cref="MeaningWriterRegistry"/>로 갈아끼운다(번역 엔진과 같은 구조).
 ///
-/// 실패는 예외가 아니라 null이다 — 의미는 부가 기능이고, 없다고 가사가 안 뜨면 안 된다.
+/// 실패는 예외가 아니라 <see cref="MeaningWriteResult"/>다 — 의미는 부가 기능이고, 없다고
+/// 가사가 안 뜨면 안 된다. 다만 "일시적 실패"만은 구분해서 돌려준다(그쪽 설명 참고).
 /// </summary>
 public interface IMeaningWriter
 {
@@ -19,7 +20,7 @@ public interface IMeaningWriter
     /// <summary>실제로 호출한 모델 이름(재생성 판단·기록용).</summary>
     string Model { get; }
 
-    Task<string?> WriteAsync(
+    Task<MeaningWriteResult> WriteAsync(
         string title, string artist, IReadOnlyList<MeaningSource> sources,
         string targetLang, CancellationToken ct = default);
 }

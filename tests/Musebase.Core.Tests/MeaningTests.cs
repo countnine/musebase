@@ -185,12 +185,47 @@ public class MeaningTests
     public async Task 엔진이_실패하면_자료는_남기고_failed로_기록한다()
     {
         var service = new SongMeaningService(
-            [new FixedSource("Genius", "설명")], new NullWriter());
+            [new FixedSource("Genius", "설명")], new FailingWriter(MeaningWriteResult.Failed));
 
         var result = await service.BuildAsync("Kids", "MGMT", "ko");
 
         Assert.Equal(SongMeaning.Failed, result.Status);
         Assert.Single(result.Sources); // 다시 시도할 때 재수집하지 않아도 되도록 남긴다
+    }
+
+    [Fact]
+    public async Task 쿼타_초과는_failed가_아니라_retry다()
+    {
+        // 429를 영구 실패로 굳히면 한도가 회복된 뒤에도 백필이 이 곡을 영영 건너뛴다.
+        var service = new SongMeaningService(
+            [new FixedSource("Genius", "설명")], new FailingWriter(MeaningWriteResult.Transient));
+
+        var result = await service.BuildAsync("Kids", "MGMT", "ko");
+
+        Assert.Equal(SongMeaning.Retry, result.Status);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, true)]   // 쿼타 — 기다리면 풀린다
+    [InlineData(HttpStatusCode.ServiceUnavailable, true)]
+    [InlineData(HttpStatusCode.InternalServerError, true)]
+    [InlineData(HttpStatusCode.Unauthorized, false)]     // 키가 틀렸다 — 다시 불러도 같다
+    [InlineData(HttpStatusCode.BadRequest, false)]
+    public void 다시_시도할_가치가_있는_응답만_retryable이다(HttpStatusCode code, bool retryable)
+    {
+        Assert.Equal(retryable, MeaningWriteResult.FromStatus(code).Retryable);
+    }
+
+    [Fact]
+    public async Task 엔진이_429를_주면_두_엔진_모두_일시적_실패로_본다()
+    {
+        var busy = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        var sources = new[] { new MeaningSource("Genius", null, "text") };
+
+        Assert.True((await new GeminiMeaningWriter("k", null, busy.Client)
+            .WriteAsync("T", "A", sources, "ko")).Retryable);
+        Assert.True((await new OpenRouterMeaningWriter("k", null, busy.Client)
+            .WriteAsync("T", "A", sources, "ko")).Retryable);
     }
 
     [Fact]
@@ -249,10 +284,10 @@ public class MeaningTests
             {"candidates":[{"content":{"parts":[{"text":"이 곡은 성장의 불안을 다룬다."}]}}]}
             """));
 
-        var text = await new GeminiMeaningWriter("key", null, handler.Client)
+        var result = await new GeminiMeaningWriter("key", null, handler.Client)
             .WriteAsync("Kids", "MGMT", [new MeaningSource("Genius", null, "about growing up")], "ko");
 
-        Assert.Equal("이 곡은 성장의 불안을 다룬다.", text);
+        Assert.Equal("이 곡은 성장의 불안을 다룬다.", result.Text);
     }
 
     [Fact]
@@ -262,20 +297,25 @@ public class MeaningTests
             {"choices":[{"message":{"role":"assistant","content":"이 곡은 이별을 다룬다."}}]}
             """));
 
-        var text = await new OpenRouterMeaningWriter("key", "anthropic/claude-opus-5", handler.Client)
+        var result = await new OpenRouterMeaningWriter("key", "anthropic/claude-opus-5", handler.Client)
             .WriteAsync("X", "Y", [new MeaningSource("Genius", null, "about a breakup")], "ko");
 
-        Assert.Equal("이 곡은 이별을 다룬다.", text);
+        Assert.Equal("이 곡은 이별을 다룬다.", result.Text);
     }
 
     [Fact]
-    public async Task 엔진_오류는_예외_대신_null()
+    public async Task 엔진_오류는_예외_대신_빈_결과()
     {
-        var down = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        var denied = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
         var sources = new[] { new MeaningSource("Genius", null, "text") };
 
-        Assert.Null(await new GeminiMeaningWriter("k", null, down.Client).WriteAsync("T", "A", sources, "ko"));
-        Assert.Null(await new OpenRouterMeaningWriter("k", null, down.Client).WriteAsync("T", "A", sources, "ko"));
+        var gemini = await new GeminiMeaningWriter("k", null, denied.Client).WriteAsync("T", "A", sources, "ko");
+        var openRouter = await new OpenRouterMeaningWriter("k", null, denied.Client).WriteAsync("T", "A", sources, "ko");
+
+        Assert.Null(gemini.Text);
+        Assert.Null(openRouter.Text);
+        Assert.False(gemini.Retryable);    // 키가 틀린 건 다시 눌러도 같다
+        Assert.False(openRouter.Retryable);
     }
 
     // ---- 테스트 더블 ----
@@ -300,22 +340,23 @@ public class MeaningTests
         public string EngineId => "gemini";
         public string Model => "test-model";
 
-        public Task<string?> WriteAsync(
+        public Task<MeaningWriteResult> WriteAsync(
             string title, string artist, IReadOnlyList<MeaningSource> sources,
             string targetLang, CancellationToken ct = default)
         {
             Calls++;
-            return Task.FromResult<string?>("생성된 한국어 문단");
+            return Task.FromResult(MeaningWriteResult.Written("생성된 한국어 문단"));
         }
     }
 
-    private sealed class NullWriter : IMeaningWriter
+    /// <summary>정해진 실패를 돌려주는 엔진(영구 실패 / 일시적 실패를 갈라 보기 위한 것).</summary>
+    private sealed class FailingWriter(MeaningWriteResult result) : IMeaningWriter
     {
         public string EngineId => "gemini";
         public string Model => "test-model";
-        public Task<string?> WriteAsync(
+        public Task<MeaningWriteResult> WriteAsync(
             string title, string artist, IReadOnlyList<MeaningSource> sources,
-            string targetLang, CancellationToken ct = default) => Task.FromResult<string?>(null);
+            string targetLang, CancellationToken ct = default) => Task.FromResult(result);
     }
 
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)

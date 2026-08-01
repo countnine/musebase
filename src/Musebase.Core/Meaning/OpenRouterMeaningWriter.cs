@@ -43,11 +43,11 @@ public sealed class OpenRouterMeaningWriter : IMeaningWriter
     public string EngineId => "openrouter";
     public string Model { get; }
 
-    public async Task<string?> WriteAsync(
+    public async Task<MeaningWriteResult> WriteAsync(
         string title, string artist, IReadOnlyList<MeaningSource> sources,
         string targetLang, CancellationToken ct = default)
     {
-        if (_apiKey.Length == 0 || sources.Count == 0) return null;
+        if (_apiKey.Length == 0 || sources.Count == 0) return MeaningWriteResult.Failed;
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -76,15 +76,25 @@ public sealed class OpenRouterMeaningWriter : IMeaningWriter
             request.Headers.Add("HTTP-Referer", "https://github.com/countnine/musebase");
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode) return MeaningWriteResult.FromStatus(response.StatusCode);
 
             var body = await response.Content.ReadFromJsonAsync<ChatResponse>(Json, cts.Token).ConfigureAwait(false);
             var text = body?.Choices?.FirstOrDefault()?.Message?.Content;
-            return string.IsNullOrWhiteSpace(text) ? null : text!.Trim();
+            return string.IsNullOrWhiteSpace(text)
+                ? MeaningWriteResult.Failed
+                : MeaningWriteResult.Written(text!.Trim());
+        }
+        catch (OperationCanceledException)
+        {
+            return MeaningWriteResult.Transient; // 타임아웃·취소 — 결과를 모른다
+        }
+        catch (HttpRequestException)
+        {
+            return MeaningWriteResult.Transient; // 네트워크는 다음에 될 수 있다
         }
         catch (Exception)
         {
-            return null; // 조용한 강등
+            return MeaningWriteResult.Failed; // 조용한 강등
         }
     }
 

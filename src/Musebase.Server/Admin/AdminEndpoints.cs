@@ -234,16 +234,30 @@ public static class AdminEndpoints
                 return Results.Redirect($"/admin?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
 
             var targets = store.SongsWithoutMeaning(meaningOptions.BackfillLimit);
-            int ok = 0, none = 0, failed = 0;
+            int ok = 0, none = 0, failed = 0, done = 0;
+            var stopped = false;
             foreach (var (key, title, artist) in targets)
             {
+                if (done > 0 && meaningOptions.BackfillDelayMs > 0)
+                    await Task.Delay(meaningOptions.BackfillDelayMs);
+
                 var status = await GenerateStatusAsync(key, title, artist);
+
+                // 쿼타·네트워크 같은 일시적 실패면 여기서 멈춘다. 계속 돌아 봐야 남은 곡까지
+                // 같은 벽에 부딪힐 뿐이고, 중단해도 아무것도 망가지지 않는다 — 저장을 안 했으므로
+                // 다음에 다시 누르면 이 곡부터 그대로 이어진다.
+                if (status == Musebase.Core.Meaning.SongMeaning.Retry) { stopped = true; break; }
+
+                done++;
                 if (status == Musebase.Core.Meaning.SongMeaning.Ok) ok++;
                 else if (status == Musebase.Core.Meaning.SongMeaning.NoSource) none++;
                 else failed++;
             }
 
-            var summary = $"{targets.Count}곡 처리 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}";
+            var summary = stopped
+                ? $"{done}곡 처리 후 중단 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}. "
+                  + "쿼타·네트워크 문제로 보입니다. 남은 곡은 손대지 않았으니 잠시 후 다시 눌러 주세요."
+                : $"{targets.Count}곡 처리 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}";
             return Results.Redirect($"/admin?notice={Uri.EscapeDataString(summary)}");
         });
 
@@ -256,7 +270,9 @@ public static class AdminEndpoints
             {
                 Musebase.Core.Meaning.SongMeaning.Ok => "의미를 만들었습니다.",
                 Musebase.Core.Meaning.SongMeaning.NoSource => "외부 자료를 찾지 못했습니다.",
-                _ => "생성에 실패했습니다(키·쿼타·네트워크를 확인하세요).",
+                Musebase.Core.Meaning.SongMeaning.Retry =>
+                    "일시적인 오류입니다(쿼타·네트워크). 저장하지 않았으니 잠시 후 다시 시도하세요.",
+                _ => "생성에 실패했습니다(키를 확인하세요).",
             };
         }
 
@@ -269,11 +285,13 @@ public static class AdminEndpoints
         }
 
         // 결과를 저장하고 status만 돌려준다. 실패·자료없음도 행으로 남겨 백필이 같은 곡을
-        // 무한히 재시도하지 않게 한다.
+        // 무한히 재시도하지 않게 한다 — 단 **일시적 실패는 예외다.** 쿼타 초과를 행으로
+        // 남기면 한도가 회복된 뒤에도 그 곡은 영영 건너뛰어진다.
         async Task<string> GenerateStatusAsync(string key, string title, string artist)
         {
             var result = await meanings.BuildAsync(title, artist, meaningOptions.Lang);
-            store.UpsertMeaning(MeaningMapper.ToEntry(key, title, artist, meaningOptions.Lang, result));
+            if (result.Status != Musebase.Core.Meaning.SongMeaning.Retry)
+                store.UpsertMeaning(MeaningMapper.ToEntry(key, title, artist, meaningOptions.Lang, result));
             return result.Status;
         }
     }
