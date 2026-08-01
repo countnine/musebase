@@ -45,3 +45,13 @@ public sealed record ServerStats(int Songs, int WithTranslation, string? LastUpd
 
 /// <summary>JSON 오류 본문.</summary>
 public sealed record ApiError([property: JsonPropertyName("error")] string Error);
+
+/// <summary>
+/// 조회 미스 응답(404). <see cref="Pending"/>가 true면 최근에 **다른 기기**도 같은 곡을 물었다는 뜻이다 —
+/// 받는 쪽은 제공자 검색은 그대로 하되 번역을 잠시 미루고 서버를 다시 조회하면 중복 번역을 피한다
+/// (`contracts/lyrics-api.md`의 "번역 양보"). 모르는 필드는 무시하면 되므로 하위 호환이다.
+/// </summary>
+public sealed record NotFoundBody(
+    [property: JsonPropertyName("error")] string Error,
+    bool Pending,
+    int RetryAfterMs);

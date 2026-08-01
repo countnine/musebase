@@ -44,11 +44,15 @@ public static partial class SearchTermCleaner
         return Collapse(s);
     }
 
-    /// <summary>아티스트 정제: 피처링만 제거(구분자 분할은 다인 아티스트 오손 우려로 하지 않음).</summary>
+    /// <summary>
+    /// 아티스트 정제: 피처링과 스트리밍 앱이 붙인 문맥 꼬리표를 제거한다
+    /// (구분자 분할은 다인 아티스트 오손 우려로 하지 않음).
+    /// </summary>
     internal static string CleanArtist(string artist)
     {
         var s = BracketFeatRegex().Replace(artist, " ");
         s = InlineFeatRegex().Replace(s, " ");
+        s = BulletSuffixRegex().Replace(s, " ");
         return Collapse(s);
     }
 
@@ -70,6 +74,11 @@ public static partial class SearchTermCleaner
     // 괄호 없는 트레일링 "feat. ..."(with는 정상 제목 오손 우려로 제외)
     [GeneratedRegex(@"\s(?:feat|ft|featuring)\b\.?\s.*$", RegexOptions.IgnoreCase)]
     private static partial Regex InlineFeatRegex();
+
+    // " • 스마트셔플 추천" / " • 회원님을 위한 추천 목록" — 스트리밍 앱이 아티스트 뒤에 붙이는
+    // 문맥 표기(실측: Spotify Android). 공백으로 감싼 불릿만 대상으로 해 이름 안의 기호는 남긴다.
+    [GeneratedRegex(@"\s[•·]\s.*$")]
+    private static partial Regex BulletSuffixRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();

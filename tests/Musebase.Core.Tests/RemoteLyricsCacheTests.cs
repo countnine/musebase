@@ -21,33 +21,50 @@ public class RemoteLyricsCacheTests
             $$"""{"key":"t|a","title":"T","artist":"A","lrc":{{System.Text.Json.JsonSerializer.Serialize(Lrc)}},"service":"LRCLIB","origin":"provider","langs":["ko"],"match":"exact"}""")));
         var cache = Create(handler);
 
-        var lyrics = await cache.GetAsync("T", "A");
+        var result = await cache.GetAsync("T", "A");
 
+        var lyrics = result.Lyrics;
         Assert.NotNull(lyrics);
         Assert.Single(lyrics!.Lines);
         Assert.Equal("LRCLIB", lyrics.Metadata.ServiceName);
         Assert.Equal("안녕", lyrics.Lines[0].Attachments.Translation("ko"));
+        Assert.True(result.HasLanguage("KO")); // 서버가 알려 준 언어 목록도 함께 온다
     }
 
     [Fact]
-    public async Task Get_404면_null이고_예외가_없다()
+    public async Task Get_404면_미스이고_예외가_없다()
     {
         var cache = Create(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
-        Assert.Null(await cache.GetAsync("T", "A"));
+        var result = await cache.GetAsync("T", "A");
+        Assert.Null(result.Lyrics);
+        Assert.False(result.Pending); // 본문 없는 404(구버전 서버)는 평범한 미스다
     }
 
     [Fact]
-    public async Task Get_서버가_죽어도_예외_대신_null()
+    public async Task Get_404_본문의_양보_힌트를_읽는다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.NotFound,
+            """{"error":"not found","pending":true,"retryAfterMs":3000}"""))));
+
+        var result = await cache.GetAsync("T", "A");
+
+        Assert.Null(result.Lyrics);
+        Assert.True(result.Pending);
+        Assert.Equal(3000, result.RetryAfterMs);
+    }
+
+    [Fact]
+    public async Task Get_서버가_죽어도_예외_대신_미스()
     {
         var cache = Create(new StubHandler(_ => Task.FromException<HttpResponseMessage>(new HttpRequestException("connection refused"))));
-        Assert.Null(await cache.GetAsync("T", "A"));
+        Assert.Null((await cache.GetAsync("T", "A")).Lyrics);
     }
 
     [Fact]
-    public async Task Get_응답이_깨져도_null()
+    public async Task Get_응답이_깨져도_미스()
     {
         var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK, "{ this is not json"))));
-        Assert.Null(await cache.GetAsync("T", "A"));
+        Assert.Null((await cache.GetAsync("T", "A")).Lyrics);
     }
 
     [Fact]

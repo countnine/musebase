@@ -112,34 +112,103 @@ public class TranslationSharingTests
         Assert.Equal(2, remote.Lookups);
     }
 
+    /// <summary>
+    /// Spotify Connect처럼 두 기기가 같은 곡을 동시에 처리할 때, 서버가 "다른 기기도 방금 물었다"고
+    /// 알려 주면 두 번째 기기는 번역을 양보한다 — 저쪽이 올린 번역본을 받아 쓰고 API를 부르지 않는다.
+    /// </summary>
+    [Fact]
+    public async Task 양보_중_서버에_번역본이_올라오면_직접_번역하지_않는다()
+    {
+        var translator = new FakeTranslator();
+        var remote = new FakeRemoteCache(null)
+        {
+            PendingOnMiss = true,     // 첫 조회: 미스 + 양보 힌트
+            ArrivingLrc = Translated, // 재조회부터는 다른 기기가 올린 번역본이 있다
+            ArriveAfter = 2,
+        };
+        using var coordinator = NewCoordinator(
+            remote, out _, translator: translator, provider: new StubProvider(Plain));
+        coordinator.Start();
+
+        await WaitAsync(() => remote.Lookups >= 2, "양보 재조회");
+        await Task.Delay(200);
+
+        Assert.Equal(0, translator.Calls);                       // DeepL을 부르지 않았다
+        Assert.Contains("[tr:ko]", coordinator.CurrentLyrics!.ToString()); // 번역은 붙어 있다
+        Assert.Empty(remote.Uploads);                            // 받아 쓴 것을 되돌려 올리지도 않는다
+    }
+
+    [Fact]
+    public async Task 양보해도_번역본이_안_오면_직접_번역한다()
+    {
+        var translator = new FakeTranslator();
+        var remote = new FakeRemoteCache(null) { PendingOnMiss = true }; // 끝까지 미스
+        using var coordinator = NewCoordinator(
+            remote, out _, translator: translator, provider: new StubProvider(Plain));
+        coordinator.Start();
+
+        await WaitAsync(() => translator.Calls > 0, "직접 번역");
+        Assert.Contains("[tr:ko]", coordinator.CurrentLyrics!.ToString());
+    }
+
+    private static async Task WaitAsync(Func<bool> done, string what, int timeoutMs = 15_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (done()) return;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException($"{what}가 일어나지 않았습니다.");
+    }
+
     // ---- 배선 ----
 
     private static LyricsCoordinator NewCoordinator(
-        FakeRemoteCache remote, out FakeSource source, LyricsCacheStore? cache = null)
+        FakeRemoteCache remote, out FakeSource source,
+        LyricsCacheStore? cache = null, FakeTranslator? translator = null, ILyricsProvider? provider = null)
     {
         source = new FakeSource { CurrentTrack = new TrackInfo("Song", "Artist", "", null, "TestPlayer.exe") };
-        return new LyricsCoordinator(source, new InlineDispatcher(), new LyricsSearchService(new EmptyProvider()))
+        return new LyricsCoordinator(
+            source, new InlineDispatcher(), new LyricsSearchService(provider ?? new EmptyProvider()))
         {
             RemoteCache = remote,
             Cache = cache,
-            Translation = new LyricsTranslationService(new FakeTranslator(), new InMemoryTranslationCache()),
+            Translation = new LyricsTranslationService(
+                translator ?? new FakeTranslator(), new InMemoryTranslationCache()),
         };
     }
 
-    /// <summary>조회는 정해진 LRC(없으면 미스)를 돌려주고, 업로드는 기록만 한다.</summary>
+    /// <summary>
+    /// 조회는 정해진 LRC(없으면 미스)를 돌려주고, 업로드는 기록만 한다.
+    /// <see cref="PendingOnMiss"/>를 켜면 미스에 양보 힌트를 실어 주고, <see cref="ArriveAfter"/>번째
+    /// 조회부터 <see cref="ArrivingLrc"/>를 내려 준다(다른 기기가 뒤늦게 올린 상황을 흉내낸다).
+    /// </summary>
     private sealed class FakeRemoteCache(string? lrc) : IRemoteLyricsCache
     {
         private readonly object _lock = new();
         public List<(string Title, string Artist, string Lrc)> Uploads { get; } = [];
         public int Lookups { get; private set; }
 
-        public Task<Lyrics?> GetAsync(string title, string artist, CancellationToken ct = default)
+        public bool PendingOnMiss { get; init; }
+        public string? ArrivingLrc { get; init; }
+        public int ArriveAfter { get; init; } = int.MaxValue;
+
+        public Task<RemoteLyricsResult> GetAsync(string title, string artist, CancellationToken ct = default)
         {
-            lock (_lock) Lookups++;
-            if (lrc is null) return Task.FromResult<Lyrics?>(null);
-            var lyrics = Lyrics.Parse(lrc)!;
+            int n;
+            lock (_lock) n = ++Lookups;
+
+            var body = n >= ArriveAfter ? ArrivingLrc ?? lrc : lrc;
+            if (body is null)
+                return Task.FromResult(PendingOnMiss
+                    ? new RemoteLyricsResult(null, true, 1000, [])
+                    : RemoteLyricsResult.Miss);
+
+            var lyrics = Lyrics.Parse(body)!;
             lyrics.Metadata.ServiceName = "LRCLIB";
-            return Task.FromResult<Lyrics?>(lyrics);
+            var langs = body.Contains("[tr:ko]", StringComparison.Ordinal) ? new[] { "ko" } : [];
+            return Task.FromResult(new RemoteLyricsResult(lyrics, false, 0, langs));
         }
 
         public Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)
@@ -170,9 +239,32 @@ public class TranslationSharingTests
 
     private sealed class FakeTranslator : ITranslator
     {
+        private int _calls;
+        /// <summary>실제로 번역 API를 호출한 횟수 — 양보가 먹었는지 보는 잣대다.</summary>
+        public int Calls => Volatile.Read(ref _calls);
+
         public Task<IReadOnlyList<string?>> TranslateAsync(
-            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<string?>>(texts.Select(t => (string?)$"{targetLang}:{t}").ToList());
+            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult<IReadOnlyList<string?>>(texts.Select(t => (string?)$"{targetLang}:{t}").ToList());
+        }
+    }
+
+    /// <summary>가사를 하나 돌려주는 제공자(양보 경로는 제공자 검색이 성공해야 진입한다).</summary>
+    private sealed class StubProvider(string lrc) : ILyricsProvider
+    {
+        public string ServiceName => "LRCLIB";
+
+        public async IAsyncEnumerable<Lyrics> GetLyricsAsync(
+            LyricsSearchRequest request, [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            var lyrics = Lyrics.Parse(lrc)!;
+            lyrics.Metadata.ServiceName = ServiceName;
+            lyrics.Metadata.Request = request;
+            yield return lyrics;
+        }
     }
 
     private sealed class EmptyProvider : ILyricsProvider

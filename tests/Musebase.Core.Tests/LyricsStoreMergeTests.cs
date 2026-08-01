@@ -74,6 +74,24 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.Equal(1, store.Stats().Songs);
     }
 
+    /// <summary>
+    /// Spotify Android는 아티스트 뒤에 "• 스마트셔플 추천"을 붙인다(실측). 이걸 흡수하지 않으면
+    /// 같은 곡이 기기마다 다른 키로 갈려 서로의 업로드를 받지 못한다.
+    /// </summary>
+    [Fact]
+    public void 불릿_꼬리표가_붙은_표기도_기존_행에_합쳐진다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Go!", "M83", Plain), "윈도우PC", out _);
+
+        var saved = store.Upsert(Entry("Go!", "M83 • 스마트셔플 추천", Translated), "안드로이드", out var rejection);
+
+        Assert.Null(rejection);
+        Assert.Equal(1, store.Stats().Songs);
+        Assert.Equal(2, saved!.Revision);
+        Assert.Equal("M83", store.Get("Go!", "M83")!.Artist); // 먼저 저장된 표기 유지
+    }
+
     [Fact]
     public void 서로_다른_곡은_합쳐지지_않는다()
     {

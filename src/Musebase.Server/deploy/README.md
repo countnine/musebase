@@ -27,6 +27,7 @@ MUSEBASE_DB=/var/lib/musebase/lyrics.db
 # MUSEBASE_TZ=Asia/Seoul             # 화면 표시 시간대(기본값)
 # MUSEBASE_LOG_LOOKUPS=0             # 조회 기록을 남기지 않으려면
 # MUSEBASE_LOOKUP_RETENTION_DAYS=90  # 조회 기록 보존 기간(기본 90일)
+# MUSEBASE_YIELD_WINDOW_SECONDS=30   # 번역 양보 판정 창(0이면 끔) — 아래 참고
 EOF
 sudo chmod 600 /etc/musebase/server.env     # 토큰 파일은 절대 저장소에 커밋하지 않는다
 ```
@@ -135,7 +136,24 @@ sudo chmod +x /usr/local/bin/musebase-backup
 
 > **프라이버시**: 조회 기록에는 곡명·아티스트·기기·시각이 남는다(기본 90일 보관 후 자동 삭제).
 > 사실상 청취 이력이므로, 남기고 싶지 않으면 `MUSEBASE_LOG_LOOKUPS=0`으로 끈다(대시보드의 히트율·
-> 미스 목록은 그만큼 비게 된다).
+> 미스 목록은 그만큼 비게 되고, 아래 **번역 양보**도 함께 꺼진다 — 판단 근거가 조회 기록이다).
+
+## 10. 번역 양보 (동시 재생 중복 줄이기)
+
+Spotify Connect처럼 **PC에서 재생하고 폰에서 조작**하면 두 기기가 같은 곡을 동시에 처리해 각자
+유료 번역 API를 부른다. 서버는 조회가 미스일 때 최근 `MUSEBASE_YIELD_WINDOW_SECONDS`(기본 30초)
+안에 **다른 기기**도 같은 제목을 미스했는지 보고, 그렇다면 404 본문에 힌트를 실어 준다:
+
+```json
+{ "error": "not found", "pending": true, "retryAfterMs": 3000 }
+```
+
+받은 앱은 제공자 검색은 그대로 하되(원문 가사 표시는 늦어지지 않는다) 번역만 잠시 미루고 서버를
+재조회해, 먼저 끝낸 기기가 올린 번역본을 받아 쓴다. 계약 전문은 `contracts/lyrics-api.md`.
+
+- `MUSEBASE_YIELD_WINDOW_SECONDS=0`이면 힌트를 주지 않는다(기능 끔).
+- 구버전 앱은 이 필드를 무시하므로 서버만 새로 올려도 안전하다.
+- 잘 도는지는 관리자 대시보드 "최근 업로드"로 본다 — 동시에 튼 곡을 **한 기기만** 올렸으면 성공이다.
 
 ## 9. 앱 설정
 

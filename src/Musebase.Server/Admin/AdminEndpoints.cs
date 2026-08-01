@@ -8,11 +8,13 @@ public sealed record AdminOptions(
     TimeZoneInfo TimeZone,
     IReadOnlyDictionary<string, string> DeviceLabels,
     bool LogLookups,
-    int RetentionDays)
+    int RetentionDays,
+    int YieldWindowSeconds)
 {
     /// <summary>
     /// `MUSEBASE_ADMIN_TOKEN`(없으면 `MUSEBASE_TOKEN`), `MUSEBASE_TZ`(기본 Asia/Seoul),
-    /// `MUSEBASE_DEVICES`, `MUSEBASE_LOG_LOOKUPS`, `MUSEBASE_LOOKUP_RETENTION_DAYS`.
+    /// `MUSEBASE_DEVICES`, `MUSEBASE_LOG_LOOKUPS`, `MUSEBASE_LOOKUP_RETENTION_DAYS`,
+    /// `MUSEBASE_YIELD_WINDOW_SECONDS`(0이면 번역 양보 힌트를 주지 않는다).
     /// </summary>
     public static AdminOptions FromEnvironment(string apiToken)
     {
@@ -24,12 +26,16 @@ public sealed record AdminOptions(
         var retention = int.TryParse(Environment.GetEnvironmentVariable("MUSEBASE_LOOKUP_RETENTION_DAYS"), out var d)
             ? Math.Clamp(d, 1, 3650) : 90;
 
+        var yieldWindow = int.TryParse(Environment.GetEnvironmentVariable("MUSEBASE_YIELD_WINDOW_SECONDS"), out var y)
+            ? Math.Clamp(y, 0, 600) : 30;
+
         return new AdminOptions(
             Token: Environment.GetEnvironmentVariable("MUSEBASE_ADMIN_TOKEN") is { Length: > 0 } t ? t : apiToken,
             TimeZone: tz,
             DeviceLabels: DeviceLabel.ParseLabels(Environment.GetEnvironmentVariable("MUSEBASE_DEVICES")),
             LogLookups: Environment.GetEnvironmentVariable("MUSEBASE_LOG_LOOKUPS") != "0",
-            RetentionDays: retention);
+            RetentionDays: retention,
+            YieldWindowSeconds: yieldWindow);
     }
 }
 
