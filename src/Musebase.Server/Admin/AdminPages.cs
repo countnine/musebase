@@ -184,6 +184,11 @@ public static class AdminPages
               · <a href="/admin/song?key={Url(key)}&lang={Url(selectedLang)}&tags={(showTags ? 0 : 1)}">
                   타임태그 {(showTags ? "숨기기" : "보기")}</a>
               · <a href="/admin/raw?key={Url(key)}">원문(.lrc)</a></p>
+            <p class="meta">곡의 배경·의미:
+              <a href="{Esc(MeaningLinks.MusixmatchSearch(entry.Title, entry.Artist))}"
+                 target="_blank" rel="noopener noreferrer">Musixmatch</a>
+              · <a href="{Esc(MeaningLinks.GeniusSearch(entry.Title, entry.Artist))}"
+                 target="_blank" rel="noopener noreferrer">Genius</a></p>
             {body}
 
             <h2>편집</h2>
