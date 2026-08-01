@@ -351,8 +351,14 @@ public sealed class NowPlayingService : INowPlayingSource, IDisposable
                 var props = await session.TryGetMediaPropertiesAsync();
                 var timeline = session.GetTimelineProperties();
                 var duration = timeline.EndTime > TimeSpan.Zero ? timeline.EndTime : (TimeSpan?)null;
-                if (!string.IsNullOrEmpty(props.Title))
-                    track = new TrackInfo(props.Title, props.Artist ?? "", props.AlbumTitle ?? "", duration, session.SourceAppUserModelId);
+                var artist = props.Artist ?? "";
+                var album = props.AlbumTitle ?? "";
+
+                // 광고 구간은 곡이 아니다 — 트랙을 만들지 않아 가사 검색·서버 조회가 아예 돌지 않는다.
+                // SMTC에는 광고 플래그·mediaId가 없으므로 실측 검증된 신호 ③(아티스트=Spotify +
+                // 앨범 비어 있음)만 본다. 판정 규칙은 Android와 같은 코드(Engine의 AdSignals)다.
+                if (!string.IsNullOrEmpty(props.Title) && !AdSignals.LooksLikeAd(artist, album))
+                    track = new TrackInfo(props.Title, artist, album, duration, session.SourceAppUserModelId);
             }
             catch
             {

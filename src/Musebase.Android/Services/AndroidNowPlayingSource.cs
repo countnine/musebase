@@ -313,13 +313,26 @@ public sealed class AndroidNowPlayingSource : Java.Lang.Object,
                 var title = md?.GetString(MediaMetadata.MetadataKeyTitle);
                 if (!string.IsNullOrEmpty(title))
                 {
-                    var durationMs = md!.GetLong(MediaMetadata.MetadataKeyDuration);
-                    track = new TrackInfo(
-                        title,
-                        md.GetString(MediaMetadata.MetadataKeyArtist) ?? "",
-                        md.GetString(MediaMetadata.MetadataKeyAlbum) ?? "",
-                        durationMs > 0 ? TimeSpan.FromMilliseconds(durationMs) : null,
-                        controller.PackageName ?? "");
+                    var artist = md!.GetString(MediaMetadata.MetadataKeyArtist) ?? "";
+                    var album = md.GetString(MediaMetadata.MetadataKeyAlbum) ?? "";
+
+                    // 광고 구간은 곡이 아니다 — 가사를 찾지도, 가사 서버에 올리지도 않게 트랙을
+                    // 만들지 않는다(실제로 "Spotify / 광고 • 1/2"가 서버에 저장돼 있었다).
+                    // IsAdvertisement 속성에 기대지 않고 같은 메타데이터에서 직접 판정한다 —
+                    // RefreshAdvertisement가 이 뒤에 돌아 그 값은 아직 이전 곡 기준이다.
+                    var isAd = AdSignals.LooksLikeAd(
+                        md.GetLong(AdSignals.AdvertisementMetadataKey),
+                        md.GetString(MediaMetadata.MetadataKeyMediaId),
+                        artist, album);
+
+                    if (!isAd)
+                    {
+                        var durationMs = md.GetLong(MediaMetadata.MetadataKeyDuration);
+                        track = new TrackInfo(
+                            title, artist, album,
+                            durationMs > 0 ? TimeSpan.FromMilliseconds(durationMs) : null,
+                            controller.PackageName ?? "");
+                    }
                 }
             }
             catch { /* 세션 소멸 레이스 — 트랙 없음 처리 */ }

@@ -143,12 +143,14 @@ public sealed class LyricsStore : IDisposable
     }
 
     /// <summary>
-    /// "아티스트 — 앨범" 표기에서 앨범 꼬리를 떼어 낸다. 공백으로 감싼 em/en 대시만 대상으로 해
-    /// "Jay-Z" 같은 이름은 건드리지 않는다(대시가 없으면 원본 그대로).
+    /// 아티스트 뒤에 붙은 문맥 꼬리를 떼어 낸다. 두 가지 실측 형태를 다룬다 —
+    /// Windows SMTC의 "아티스트 — 앨범", Spotify Android의 "아티스트 • 스마트셔플 추천".
+    /// 공백으로 감싼 구분자만 대상으로 해 "Jay-Z" 같은 이름은 건드리지 않는다
+    /// (구분자가 없으면 원본 그대로).
     /// </summary>
     public static string StripAlbumSuffix(string artist)
     {
-        foreach (var separator in new[] { " — ", " – " })
+        foreach (var separator in new[] { " — ", " – ", " • ", " · " })
         {
             var index = artist.IndexOf(separator, StringComparison.Ordinal);
             if (index > 0) return artist[..index].Trim();
@@ -398,6 +400,33 @@ public sealed class LyricsStore : IDisposable
             cmd.Parameters.AddWithValue("$device", device);
             cmd.Parameters.AddWithValue("$client", (object?)client ?? DBNull.Value);
             cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// 최근 <paramref name="sinceUtc"/> 이후에 **다른 기기**가 같은 제목을 미스했는가.
+    /// 참이면 그 기기가 지금 이 곡을 찾아 번역하고 있을 가능성이 높다 — 두 번째 기기가
+    /// 번역을 양보하도록 GET 응답에 힌트를 실어 준다(`contracts/lyrics-api.md`의 "번역 양보").
+    ///
+    /// 아티스트가 아니라 **제목만** 비교한다. 기기마다 아티스트 표기가 갈리는 것이 애초의 문제라
+    /// (`Phoenix` ↔ `Phoenix • 스마트셔플 추천`) 제목 쪽이 훨씬 안정적이다.
+    /// </summary>
+    public bool RecentlyMissedByOther(string title, string device, string sinceUtc)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT 1 FROM lookups
+                WHERE result = 'miss' AND at >= $since AND device <> $device
+                  AND lower(title) = lower($title)
+                LIMIT 1;
+                """;
+            cmd.Parameters.AddWithValue("$since", sinceUtc);
+            cmd.Parameters.AddWithValue("$device", device);
+            cmd.Parameters.AddWithValue("$title", title);
+            using var reader = cmd.ExecuteReader();
+            return reader.Read();
         }
     }
 

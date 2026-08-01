@@ -31,6 +31,13 @@ public sealed class LyricsCoordinator : IDisposable
     private CancellationTokenSource? _searchCts;
     private int _lastLineIndex = int.MinValue;
 
+    // 마지막으로 검색 파이프라인을 돌린 곡("제목|아티스트"). 같은 곡이 다시 통지되면 건너뛴다.
+    private string? _searchedTrackKey;
+
+    /// <summary>번역 양보를 포기하기까지의 시간(ms). 이 안에 안 오면 직접 번역한다.</summary>
+    private const int YieldBudgetMs = 8000;
+    private int _yieldRetryMs = 3000; // 서버가 제안한 재조회 간격(clamp된 값)
+
     // 텔레메트리 발화 제어: playback_source는 같은 트랙 반복 발화 방지, translation은 곡당 1회
     private string? _lastPlaybackSourceKey;
     private bool _translationReported;
@@ -172,6 +179,18 @@ public sealed class LyricsCoordinator : IDisposable
 
     private async void OnTrackChanged(TrackInfo? track)
     {
+        // 제목·아티스트가 그대로면 다시 검색하지 않는다. 재생 소스는 길이·앨범 같은 메타데이터를
+        // 뒤늦게 채워 넣으며 트랙 변경을 한 번 더 통지하는데(TrackInfo는 record라 그 필드까지
+        // 같아야 같은 값이다), 그때마다 파이프라인을 다시 돌리면 **가사 서버·제공자에 같은 요청이
+        // 두 번** 나간다(실측: 안드로이드에서 1~8초 간격 중복 조회). 표시 상태는 갱신해 준다.
+        var trackKey = track is null ? null : LyricsCacheStore.MakeKey(track.Title, track.Artist);
+        if (trackKey is not null && trackKey == _searchedTrackKey)
+        {
+            EmitState(); // 길이·앨범 등 바뀐 메타데이터는 반영
+            return;
+        }
+        _searchedTrackKey = trackKey;
+
         _searchCts?.Cancel();
         CurrentLyrics = null;
         _lastLineIndex = int.MinValue;
@@ -230,14 +249,21 @@ public sealed class LyricsCoordinator : IDisposable
         }
 
         // 1-b) 가사 서버(개인 서버)에 물어본다 — 다른 기기가 이미 찾아 둔 가사·번역을 그대로 받는다.
-        //      실패·미접속·미스는 모두 null이라 아래 제공자 검색으로 자연히 흘러간다.
+        //      실패·미접속·미스는 모두 미스라 아래 제공자 검색으로 자연히 흘러간다.
+        var yielding = false;
         if (RemoteCache is { } remoteCache)
         {
             var remoteCts = new CancellationTokenSource();
             _searchCts = remoteCts;
-            var remote = await remoteCache.GetAsync(track.Title, track.Artist, remoteCts.Token);
+            var result = await remoteCache.GetAsync(track.Title, track.Artist, remoteCts.Token);
             if (remoteCts.Token.IsCancellationRequested) return; // 트랙이 또 바뀜
-            if (remote is not null)
+
+            // 미스인데 "다른 기기도 방금 이 곡을 물었다"면 번역을 양보한다 — 저쪽이 곧 번역본을
+            // 올릴 테니 우리는 제공자 검색만 하고(원문 표시는 그대로) 번역은 미뤘다가 받아 쓴다.
+            yielding = result is { Pending: true, Lyrics: null } && CanShareTranslation;
+            if (yielding) _yieldRetryMs = Math.Clamp(result.RetryAfterMs, 1000, 5000);
+
+            if (result.Lyrics is { } remote)
             {
                 CurrentLyrics = remote;
                 _lastLineIndex = int.MinValue;
@@ -281,13 +307,24 @@ public sealed class LyricsCoordinator : IDisposable
                     _lastLineIndex = int.MinValue; // 라인 재계산 강제
                     RaiseStatus(new LyricsStatus(
                         LyricsStatusKind.Found, track.ToString(), lyrics.Metadata.ServiceName ?? "", lyrics.Quality()));
-                    await TranslateAsync(lyrics, cts.Token);
+                    // 양보 중이면 후보마다 번역하지 않는다 — 루프가 끝난 뒤 최종 채택본에 대해
+                    // 한 번만, 그것도 서버를 먼저 기다려 보고 번역한다.
+                    if (!yielding) await TranslateAsync(lyrics, cts.Token);
                 }
             }
 
             // 검색 1회 완료 — 트랙이 교체됐으면(취소) 발화하지 않는다
             if (!cts.Token.IsCancellationRequested)
                 TrackLyricsSearch(request, diagnostics);
+
+            // 양보: 저쪽 기기가 번역본을 올릴 시간을 잠깐 준다. 원문은 이미 화면에 있으므로
+            // 여기서 기다려도 표시가 늦어지지 않는다(번역은 원래 나중에 붙는다).
+            var tookShared = false;
+            if (yielding && CurrentLyrics is { } adopted && !cts.Token.IsCancellationRequested)
+            {
+                tookShared = await TryTakeSharedTranslationAsync(track, adopted, cts.Token);
+                if (!tookShared) await TranslateAsync(adopted, cts.Token);
+            }
 
             if (CurrentLyrics is null)
             {
@@ -310,7 +347,9 @@ public sealed class LyricsCoordinator : IDisposable
                     Cache?.Set(track.Title, track.Artist, CurrentLyrics);
                     Log?.Invoke($"[cache] 저장: {track}");
                     // 가사 서버에도 올려 다른 기기가 재검색·재번역하지 않게 한다(실패는 무시).
-                    _ = RemoteCache?.SetAsync(track.Title, track.Artist, CurrentLyrics);
+                    // 방금 서버에서 받아 쓴 것(양보)은 되돌려 올리지 않는다 — 같은 내용으로
+                    // revision만 올라간다.
+                    if (!tookShared) _ = RemoteCache?.SetAsync(track.Title, track.Artist, CurrentLyrics);
                 }
                 catch (Exception e)
                 {
@@ -490,6 +529,47 @@ public sealed class LyricsCoordinator : IDisposable
         {
             // 트랙 교체됨
         }
+    }
+
+    /// <summary>
+    /// 번역을 남과 나눌 수 있는 상태인가 — 번역기가 켜져 있고 대상이 중국어가 아닐 때만
+    /// "양보"에 의미가 있다(중국어는 제공자 번역을 그대로 쓰므로 API를 아예 거치지 않는다).
+    /// </summary>
+    private bool CanShareTranslation =>
+        !TargetIsChinese && Translation is { IsEnabled: true, CacheOnly: false };
+
+    /// <summary>
+    /// 다른 기기가 올릴 번역본을 잠깐 기다렸다 받아 쓴다. 받았으면 true(직접 번역하지 않는다).
+    ///
+    /// 원문 가사는 이미 화면에 있으므로 이 대기는 표시를 늦추지 않는다 — 번역이 몇 초 뒤에
+    /// 붙는 것은 원래 동작이다. 시간 안에 안 오면 false를 돌려주고 호출자가 직접 번역한다.
+    /// </summary>
+    private async Task<bool> TryTakeSharedTranslationAsync(TrackInfo track, Lyrics current, CancellationToken ct)
+    {
+        if (RemoteCache is not { } remoteCache) return false;
+
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(YieldBudgetMs);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try { await Task.Delay(_yieldRetryMs, ct); }
+            catch (OperationCanceledException) { return false; }
+            if (ct.IsCancellationRequested || !ReferenceEquals(CurrentLyrics, current)) return false;
+
+            var result = await remoteCache.GetAsync(track.Title, track.Artist, ct);
+            if (ct.IsCancellationRequested || !ReferenceEquals(CurrentLyrics, current)) return false;
+            if (result.Lyrics is not { } shared || !result.HasLanguage(TargetLangLower)) continue;
+
+            CurrentLyrics = shared;
+            _lastLineIndex = int.MinValue; // 번역이 붙은 줄로 다시 발행
+            try { Cache?.Set(track.Title, track.Artist, shared); }
+            catch (Exception e) { Log?.Invoke($"[server] 양보분 캐시 저장 실패: {e.Message}"); }
+            SetTranslationStatus(TranslationDisplayStatus.Cache);
+            Log?.Invoke($"[server] 다른 기기의 번역을 받아 썼습니다 — {track}");
+            return true;
+        }
+
+        Log?.Invoke($"[server] 양보 시간 초과 — 직접 번역합니다: {track}");
+        return false;
     }
 
     /// <summary>

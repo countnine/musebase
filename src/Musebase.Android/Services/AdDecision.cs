@@ -1,64 +1,9 @@
+using Musebase.Engine;
+
 namespace Musebase.Android.Services;
 
-/// <summary>
-/// 광고 판정 규칙. Android 타입에 의존하지 않는다 — 나중에 코어 변경 요청으로 Engine에 옮겨
-/// 유닛 테스트를 붙일 수 있게 하기 위함(현재 Musebase.Android는 sln 밖이라 CI 테스트가 없다).
-///
-/// 신호를 신뢰도 순으로 겹친다. 1·2번은 Spotify가 시스템 계약에 맞춰 내보내는 값이라
-/// 지역·언어와 무관하고, 3번만 추측이다.
-/// </summary>
-public static class AdSignals
-{
-    /// <summary>
-    /// 표준 광고 메타데이터 키. 플랫폼 상수(<c>MediaMetadata.METADATA_KEY_ADVERTISEMENT</c>)를
-    /// 그대로 쓰지 못하고 문자열을 박은 이유: <b>.NET for Android 바인딩에 이 상수가 없다</b>
-    /// (Microsoft.Android.Ref.34의 <c>Android.Media.MediaMetadata</c>에는 <c>MetadataKeyMediaId</c>
-    /// 등은 있지만 <c>MetadataKeyAdvertisement</c>는 없다 — 직접 확인함).
-    /// 값 자체는 안드로이드 플랫폼 계약이라 바뀌지 않는다.
-    /// </summary>
-    public const string AdvertisementMetadataKey = "android.media.metadata.ADVERTISEMENT";
-
-    /// <summary>위 키가 광고를 뜻하는 값.</summary>
-    private const long AdvertisementFlagSet = 1;
-
-    /// <summary>Spotify가 광고 구간에 쓰는 미디어 ID 접두사. macOS 원본이 쓰던 것과 같은 신호.</summary>
-    private const string SpotifyAdMediaIdPrefix = "spotify:ad";
-
-    /// <summary>
-    /// Windows(SMTC)에서 실측 검증된 폴백. 앨범 조건이 안전장치다 — Spotify의 실제 곡은 앨범이
-    /// 항상 채워져 있으므로, 이 이름으로 발매된 진짜 곡이 있어도 뮤트되지 않는다.
-    ///
-    /// <b>안드로이드에서는 이 표가 맞지 않는다</b> — 실측 결과 광고의 아티스트는
-    /// <c>'광고 • 1/2'</c>(현지화 + 순번)였다. 순번이 붙어 고정 문자열로 잡을 수 없고 언어마다
-    /// 다르다. 그래도 지우지 않는 이유는 이게 신호 ③이기 때문이다: ①(플래그)과 ②(mediaId)가
-    /// 둘 다 오는 것을 확인했으므로 실무상 여기까지 내려올 일이 없고, 만약 Spotify가 ①②를
-    /// 빼면 최소한 다른 지역/버전에서 걸릴 여지를 남겨 둔다.
-    /// </summary>
-    private static readonly string[] AdArtists = { "Spotify", "Sponsored Message" };
-
-    /// <param name="advertisementFlag">`METADATA_KEY_ADVERTISEMENT` 값(없으면 0).</param>
-    /// <param name="mediaId">`METADATA_KEY_MEDIA_ID` 값.</param>
-    public static bool LooksLikeAd(long advertisementFlag, string? mediaId, string? artist, string? album)
-    {
-        // 1) 시스템 표준 광고 플래그 — 있으면 이게 결론이다.
-        if (advertisementFlag == AdvertisementFlagSet) return true;
-
-        // 2) Spotify 고유 광고 URI.
-        if (!string.IsNullOrWhiteSpace(mediaId) &&
-            mediaId!.TrimStart().StartsWith(SpotifyAdMediaIdPrefix, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        // 3) 문자열 폴백. 앨범이 비어 있을 때만 본다.
-        if (!string.IsNullOrWhiteSpace(album)) return false;
-        if (string.IsNullOrWhiteSpace(artist)) return false;
-
-        var trimmed = artist!.Trim();
-        foreach (var candidate in AdArtists)
-            if (string.Equals(trimmed, candidate, StringComparison.OrdinalIgnoreCase)) return true;
-
-        return false;
-    }
-}
+// 광고 **판정 규칙**(AdSignals)은 Musebase.Engine으로 옮겼다 — Windows도 같은 규칙으로
+// 광고 구간에는 가사를 찾지 않아야 해서다. 여기 남은 것은 안드로이드 뮤트용 상태 기계뿐이다.
 
 /// <summary>한 번의 관측 결과. <c>Unknown</c>이 있는 이유는 <see cref="AdDecision"/> 주석 참고.</summary>
 public enum AdSignal

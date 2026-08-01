@@ -13,6 +13,8 @@ using Musebase.Server;
 //   --import <translations.db>   기존 클라이언트 캐시를 흡수하고 종료(시드용)
 
 const int MaxBodyBytes = 256 * 1024;
+// 양보 힌트에 실어 보내는 재조회 간격. 클라이언트는 이 값을 자기 상한으로 clamp한다.
+const int YieldRetryAfterMs = 3000;
 
 var dbPath = Environment.GetEnvironmentVariable("MUSEBASE_DB") ?? "lyrics.db";
 
@@ -86,6 +88,21 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
 
     var found = store.Get(title!, artist ?? "");
+    var device = AdminEndpoints.DeviceOf(request, admin);
+
+    // 미스일 때만, 최근에 다른 기기도 같은 곡을 물었는지 본다(번역 양보 힌트).
+    // **기록을 남기기 전에** 판정해 자기 행이 끼어들 여지를 없앤다. 조회 기록이 꺼져 있으면
+    // 판단 근거가 없으므로 힌트도 주지 않는다.
+    var pending = false;
+    if (found is null && admin.LogLookups && admin.YieldWindowSeconds > 0)
+    {
+        try
+        {
+            var since = DateTimeOffset.UtcNow.AddSeconds(-admin.YieldWindowSeconds).ToString(LyricsStore.TimeFormat);
+            pending = store.RecentlyMissedByOther(title!, device, since);
+        }
+        catch (Exception e) { app.Logger.LogWarning("양보 판정 실패: {Message}", e.Message); }
+    }
 
     // 관리자 화면용 조회 기록 — 실패해도 조회 자체를 깨뜨리지 않는다.
     if (admin.LogLookups)
@@ -93,12 +110,15 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
         try
         {
             store.LogLookup(title!, artist ?? "", found?.Match ?? "miss", found?.Key,
-                AdminEndpoints.DeviceOf(request, admin), request.Headers.UserAgent.ToString());
+                device, request.Headers.UserAgent.ToString());
         }
         catch (Exception e) { app.Logger.LogWarning("조회 기록 실패: {Message}", e.Message); }
     }
 
-    return found is null ? Results.NotFound() : Results.Ok(found);
+    if (found is not null) return Results.Ok(found);
+    return pending
+        ? Results.Json(new NotFoundBody("not found", true, YieldRetryAfterMs), statusCode: 404)
+        : Results.NotFound();
 });
 
 app.MapPut("/v1/lyrics", async (HttpRequest request) =>

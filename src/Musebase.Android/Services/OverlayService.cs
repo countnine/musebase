@@ -56,6 +56,7 @@ public sealed class OverlayService : Service
     private const float PocketSizeDp = 72f;    // 하단 포켓(놓으면 오버레이 종료) 지름
     private const float PocketBottomDp = 48f;  // 포켓을 화면 하단에서 띄우는 여백(+시스템 인셋)
     private const int FadeMs = 220;            // 밴드 페이드 인/아웃 시간(Windows 오버레이와 같은 감각)
+    private const int NotifyMinIntervalMs = 400; // 알림 갱신 최소 간격(시스템의 갱신 빈도 제한 회피)
 
     /// <summary>서비스 실행 여부(MainActivity 토글 라벨용).</summary>
     public static bool IsRunning { get; private set; }
@@ -88,11 +89,13 @@ public sealed class OverlayService : Service
     // (Action 오버로드는 호출마다 래퍼가 새로 생겨 취소가 빗나갈 수 있다).
     private Java.Lang.IRunnable? _peekCollapse;
     private Java.Lang.IRunnable? _longPress;
+    private Java.Lang.IRunnable? _pendingNotify; // 알림 갱신 스로틀(예약된 재갱신)
+    private long _lastNotifyMs;
 
     private bool _moveMode;              // 이동 모드(밴드가 터치를 받는 동안만 true)
     private bool _bubbleMode;            // 버블 모드(설정에서 켬)
-    private bool _bandExpanded = true;   // 버블 모드에서 밴드를 펼쳐 두었는지(사용자가 버블 탭으로 정한다)
-    private bool _expandedBeforeMove;    // 이동 모드가 강제로 펼치기 전의 상태(끝나면 되돌린다)
+    private bool _bandExpanded = true;   // 사용자가 오버레이를 켜 두었는지(버블 탭으로만 바뀐다)
+    private bool _peeking;               // 새 줄이 나와 잠깐 보여 주는 중(켬/끔과 별개)
     private bool _bandPositionPending;   // 저장된 위치를 아직 적용하지 못했다(뷰 크기 확정 전)
     private int _screenWidth, _screenHeight;
 
@@ -112,6 +115,7 @@ public sealed class OverlayService : Service
 
     private bool _hasLine;
     private bool _isPlaying;
+    private DisplayLine? _currentLine;  // 알림에 실을 현재 줄(원문+번역). 빈 줄이면 null.
     private bool _bandVisible;        // 가사 밴드가 지금 실제로 보이는가(버블 채움 표기의 근거)
     private string? _lastLineContent; // 같은 줄 재발행과 진짜 새 줄을 구분(peek 트리거용)
 
@@ -352,7 +356,7 @@ public sealed class OverlayService : Service
     /// <summary>
     /// 버블 하나에 세 가지를 싣는다.
     /// ① 테두리 링 색 = 가사 상태(검색 중 회전 / 찾음 밝게 / 못 찾음 회색),
-    /// ② 링 굵기·이중선 = 오버레이가 지금 보이는지,
+    /// ② 링 줄 수 = 사용자가 오버레이를 **켜 두었는지**(지금 그려지고 있는지가 아니다),
     /// ③ 우상단 점 = 번역 예외(한도·실패=주황, API 꺼짐=회색). 정상이면 점 없음.
     /// 안쪽 채움은 상태를 나타내지 않고 **오버레이 배경 설정**을 따른다 — 상태를 채움으로
     /// 알리면 버블이 불투명해져 뒤의 화면을 가린다.
@@ -380,9 +384,12 @@ public sealed class OverlayService : Service
             _ => null,
         };
 
+        // 사용자가 버블을 눌러 켜 둔 상태. 밴드 모드(버블 없음)에서는 항상 켜져 있는 셈이다.
+        var overlayOn = !_bubbleMode || _bandExpanded;
+
         _bubbleBackground.SetStatus(
             state,
-            _bandVisible,
+            overlayOn,
             AndroidSettings.ParseColor(settings?.OverlayTextColor, Color.White),
             AndroidSettings.ParseColor(settings?.OverlayKaraokeColor, KaraokeTextView.DefaultFillColor),
             BubbleFillColor(settings),
@@ -393,12 +400,13 @@ public sealed class OverlayService : Service
         {
             // 곡이 없을 때만 살짝 흐리게 — 그 외에는 상태를 또렷하게 읽히도록 완전 불투명.
             _bubbleView.Alpha = state == BubbleLyricsState.Missing && !_isPlaying ? 0.8f : 1f;
-            _bubbleView.ContentDescription = state switch
+            var lyrics = state switch
             {
                 BubbleLyricsState.Searching => "가사 찾는 중",
-                BubbleLyricsState.Found => _bandVisible ? "가사 표시 중" : "가사 있음 — 탭하면 표시",
+                BubbleLyricsState.Found => _bandVisible ? "가사 표시 중" : "가사 있음",
                 _ => "가사 없음",
             };
+            _bubbleView.ContentDescription = $"{lyrics} · 오버레이 {(overlayOn ? "켬" : "끔")}";
         }
     }
 
@@ -922,9 +930,9 @@ public sealed class OverlayService : Service
         _moveMode = on;
         if (on)
         {
-            _bandLp.Flags = WindowManagerFlags.NotFocusable; // NotTouchable 해제 = 드래그 가능
-            _expandedBeforeMove = _bandExpanded;             // 이동이 끝나면 사용자가 정한 상태로 되돌린다
-            _bandExpanded = true;                            // 버블 모드여도 옮기려면 보여야 한다
+            // NotTouchable 해제 = 드래그 가능. 이동 중에는 UpdateVisibility가 _moveMode만 보고
+            // 밴드를 띄우므로, 사용자의 켬/끔(_bandExpanded)은 건드리지 않는다.
+            _bandLp.Flags = WindowManagerFlags.NotFocusable;
             CancelPeek();
             // 재생 중이 아니면 빈 카드가 되어 잡을 곳이 없으므로 안내 문구를 넣어 준다.
             if (!_hasLine) _lineView?.SetLine("드래그해서 위치를 잡으세요", null, 0);
@@ -933,7 +941,6 @@ public sealed class OverlayService : Service
         {
             _bandLp.Flags = WindowManagerFlags.NotFocusable | WindowManagerFlags.NotTouchable;
             SavePosition(_overlayView, _bandLp, isBubble: false);
-            if (_bubbleMode) _bandExpanded = _expandedBeforeMove;
             _coordinator?.RefreshCurrentLine(); // 안내 문구 → 실제 가사로 복귀
         }
 
@@ -947,18 +954,21 @@ public sealed class OverlayService : Service
 
     // ---- peek(접힌 상태에서 잠깐 보여 주기) ----
 
+    /// <summary>
+    /// 접혀 있을 때 새 줄이 나오면 잠깐 보여 준다. **사용자의 켬/끔(<c>_bandExpanded</c>)은 건드리지
+    /// 않는다** — 여기서 그 값을 흔들면 버블의 "켜 둠" 표기가 3초마다 깜빡인다.
+    /// </summary>
     private void PeekIfCollapsed()
     {
         if (!_bubbleMode || _bandExpanded || _moveMode) return;
         if (!(MusebaseApp.Instance?.Settings.OverlayPeekOnNewLine ?? true)) return;
         CancelPeek();
-        _bandExpanded = true;
+        _peeking = true;
         UpdateVisibility();
         _peekCollapse = new Java.Lang.Runnable(() =>
         {
-            _bandExpanded = false;
+            _peeking = false;
             UpdateVisibility();
-            UpdateBubbleAppearance();
             _peekCollapse = null;
         });
         _handler.PostDelayed(_peekCollapse, PeekMs);
@@ -966,6 +976,7 @@ public sealed class OverlayService : Service
 
     private void CancelPeek()
     {
+        _peeking = false;
         if (_peekCollapse is null) return;
         _handler.RemoveCallbacks(_peekCollapse);
         _peekCollapse = null;
@@ -994,6 +1005,7 @@ public sealed class OverlayService : Service
         {
             _hasLine = false;
             _lastLineContent = null;
+            _currentLine = null;
             _lineView?.SetLine(null, null, 0);
             if (_translationView is not null) _translationView.Visibility = ViewStates.Gone;
             CancelPeek();
@@ -1045,7 +1057,10 @@ public sealed class OverlayService : Service
                 _translationView.Visibility = ViewStates.Visible;
             }
         }
+        _currentLine = content is null ? null : line;
         UpdateVisibility();
+        // 알림에도 같은 줄을 싣는다 — 잠금화면에서 읽히는 경로다(설정으로 끌 수 있다).
+        if (isNew || content is null) UpdateNotificationForLine();
         // 접혀 있어도 새 줄이 나오면 잠깐 보여 준다(설정으로 끌 수 있다).
         if (isNew && _isPlaying) PeekIfCollapsed();
     }
@@ -1066,10 +1081,11 @@ public sealed class OverlayService : Service
     private void UpdateVisibility()
     {
         var show = _overlayView is not null
-            && (_moveMode || (_hasLine && _isPlaying && (!_bubbleMode || _bandExpanded)));
-        // 버블의 "표시 중" 표기는 _bandExpanded가 아니라 **실제로 보이는지**를 따라야 한다
-        // (펼쳐 뒀어도 일시정지·무가사면 밴드는 보이지 않는다).
+            && (_moveMode || (_hasLine && _isPlaying && (!_bubbleMode || _bandExpanded || _peeking)));
         _bandVisible = show;
+        // 버블의 두 줄 표기는 **사용자가 켜 둔 상태**(_bandExpanded)를 따른다 — 실제 표시 여부가
+        // 아니다. 가사가 없는 구간이나 일시정지에는 밴드가 잠깐 사라지는데, 그때 한 줄로 돌아가면
+        // "내가 꺼진 건가?" 싶어 버블을 또 누르게 된다. 켜 둔 상태와 지금 그려지고 있는지는 별개다.
         UpdateBubbleAppearance();
 
         if (_overlayView is null) return;
@@ -1159,12 +1175,16 @@ public sealed class OverlayService : Service
         var apiOn = MusebaseApp.Instance?.Settings.ApiTranslationEnabled ?? true;
         var toggleLabel = apiOn ? "번역 끄기" : "번역 켜기";
 
+        var fallback = string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status;
+
+        // 알림에 현재 가사를 실으면 **잠금화면에서도 읽힌다** — 오버레이 창은 키가드 위로 올라갈 수
+        // 없으므로 이게 잠금화면에 가사를 보이는 유일한 길이다(설정에서 끌 수 있다).
+        var (contentText, bigText) = NotificationLines(track, fallback);
+
         var builder = new Notification.Builder(this, ChannelId)
             .SetContentTitle(track ?? "Musebase 가사 표시 중")
-            .SetContentText(string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status)
-            .SetStyle(new Notification.BigTextStyle().BigText(
-                (track is null ? "" : track + "\n") +
-                (string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status)))
+            .SetContentText(contentText)
+            .SetStyle(new Notification.BigTextStyle().BigText(bigText))
             .SetSmallIcon(global::Android.Resource.Drawable.IcMediaPlay)
             .SetContentIntent(openPending)
             .SetOngoing(true)
@@ -1178,14 +1198,54 @@ public sealed class OverlayService : Service
         return builder.Build();
     }
 
+    /// <summary>
+    /// 알림 본문 두 가지를 만든다 — 접힌 줄과 펼친(BigText) 줄.
+    /// 가사 표시가 켜져 있고 지금 보여 줄 줄이 있으면 접힌 줄은 원문, 펼친 줄은 원문+번역이다.
+    /// 그렇지 않으면 기존대로 곡명·상태만 보여 준다.
+    /// </summary>
+    private (string Content, string Big) NotificationLines(string? track, string fallback)
+    {
+        var wantLyrics = MusebaseApp.Instance?.Settings.NotificationLyrics ?? true;
+        var line = wantLyrics ? _currentLine : null;
+        if (line?.Content is not { Length: > 0 } content || string.IsNullOrWhiteSpace(content))
+            return (fallback, (track is null ? "" : track + "\n") + fallback);
+
+        var translation = line.Translation;
+        var big = string.IsNullOrWhiteSpace(translation) ? content : $"{content}\n{translation}";
+        return (content, big);
+    }
+
     /// <summary>알림바 내용을 현재 곡·상태로 갱신한다(서비스가 떠 있을 때만).</summary>
     private void UpdateNotification()
     {
         // 이미 StartForeground로 떠 있는 알림을 갱신하는 것이므로 엔진 구독 여부만 본다.
         if (_coordinator is null) return;
+        _lastNotifyMs = SystemClock.UptimeMillis();
         var nm = (NotificationManager?)GetSystemService(NotificationService);
         try { nm?.Notify(NotificationId, BuildNotification()); }
         catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"notify: {e.Message}"); }
+    }
+
+    /// <summary>
+    /// 가사 줄이 바뀌어 알림을 갱신한다. 시스템이 알림 갱신 빈도를 제한하므로
+    /// <see cref="NotifyMinIntervalMs"/> 안에 또 바뀌면 한 번만 뒤늦게 반영한다
+    /// (간주 구간처럼 짧은 줄이 연달아 나올 때 갱신이 통째로 버려지는 것을 막는다).
+    /// </summary>
+    private void UpdateNotificationForLine()
+    {
+        if (_coordinator is null) return;
+        if (!(MusebaseApp.Instance?.Settings.NotificationLyrics ?? true)) return;
+        if (_pendingNotify is not null) return; // 이미 예약됨 — 그때 최신값으로 그린다
+
+        var since = SystemClock.UptimeMillis() - _lastNotifyMs;
+        if (since >= NotifyMinIntervalMs) { UpdateNotification(); return; }
+
+        _pendingNotify = new Java.Lang.Runnable(() =>
+        {
+            _pendingNotify = null;
+            UpdateNotification();
+        });
+        _handler.PostDelayed(_pendingNotify, NotifyMinIntervalMs - since);
     }
 
     /// <summary>알림바 액션: API 번역 사용을 토글하고 즉시 반영한다(켤 때는 현재 곡을 바로 번역).</summary>
@@ -1298,6 +1358,7 @@ public sealed class OverlayService : Service
     public override void OnDestroy()
     {
         UnsubscribeEngine();
+        if (_pendingNotify is not null) { _handler.RemoveCallbacks(_pendingNotify); _pendingNotify = null; }
         RemoveOverlay();
         IsRunning = false;
         base.OnDestroy();

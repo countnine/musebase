@@ -47,7 +47,7 @@ Spotify만 음소거하고, 그동안 지정 폴더의 MP3를 랜덤 재생하�
 
 ## 결과
 
-- 감지 신호는 신뢰도 순으로 셋을 겹친다(`Services/AdDecision.cs`의 `AdSignals`):
+- 감지 신호는 신뢰도 순으로 셋을 겹친다(`AdSignals` — 2026-08-01에 `Musebase.Engine`으로 옮겼다):
   ① 표준 광고 플래그 → ② `spotify:ad` 미디어 ID → ③ `artist=Spotify` + 빈 앨범(Windows 실측 폴백).
   ③의 앨범 조건이 안전장치다 — Spotify의 실제 곡은 앨범이 항상 채워져 있다.
 - **.NET for Android 바인딩에 `MetadataKeyAdvertisement` 상수가 없어** 플랫폼 키 문자열
@@ -61,6 +61,20 @@ Spotify만 음소거하고, 그동안 지정 폴더의 MP3를 랜덤 재생하�
 - 유닛 테스트는 붙지 않는다. `Musebase.Android`는 `Musebase.sln` 밖이고 `Musebase.Core.Tests`는
   net8.0이다. 그래서 판정·디바운스 로직(`AdSignals`/`AdDecision`)을 **Android 타입 무의존**으로
   써 두었다 — 나중에 코어 변경 요청으로 `Musebase.Engine`에 옮기면 그대로 테스트할 수 있다.
+
+### 보완 (2026-08-01) — `AdSignals`를 Engine으로
+
+위의 "나중에"가 왔다. **광고 구간에는 가사를 찾지 않는다**를 Windows에도 넣으면서 판정 규칙이
+두 플랫폼 공통이 됐으므로 `AdSignals`를 `Musebase.Engine`으로 옮겼다(`AdSignalsTests` 5건 추가).
+
+- 뮤트 상태 기계(`AdDecision`/`AdSignal`)는 **Android에 남는다** — 볼륨을 다루는 안전장치라
+  가사 쪽에는 필요 없다.
+- Windows에는 광고 플래그도 `mediaId`도 없어 신호 ③만 쓴다(`LooksLikeAd(artist, album)` 오버로드).
+  디바운스도 없다 — ③은 아티스트가 비면 false라서 곡 전환 순간의 빈 메타데이터를 광고로 보지 않고,
+  설령 한 틱 틀려도 가사 검색이 잠깐 늦어질 뿐 볼륨처럼 사용자에게 남는 피해가 없다.
+- Windows에서 광고를 뮤트하고 MP3를 채우는 일은 **별도 앱(Mutefy)** 이 한다. Musebase Windows는
+  광고를 **표시하지 않을** 뿐이며, 두 앱은 서로 간섭하지 않는다(Mutefy는 Spotify 프로세스의
+  오디오 세션만 음소거하고, 필러는 `WasapiOut` 직접 출력이라 SMTC 세션을 만들지 않는다).
 
 ## 대안 (기각)
 

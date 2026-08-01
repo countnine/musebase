@@ -37,6 +37,19 @@ public class SearchTermCleanerTests
         Assert.Equal("Simon & Garfunkel", SearchTermCleaner.CleanArtist("Simon & Garfunkel"));
     }
 
+    /// <summary>
+    /// Spotify Android가 아티스트 뒤에 붙이는 문맥 표기(실측). 이걸 남기면 같은 곡이 기기마다
+    /// 다른 검색어·다른 캐시 키가 된다.
+    /// </summary>
+    [Fact]
+    public void CleanArtist_RemovesStreamingContextSuffix()
+    {
+        Assert.Equal("Phoenix", SearchTermCleaner.CleanArtist("Phoenix • 스마트셔플 추천"));
+        Assert.Equal("Billy Joel", SearchTermCleaner.CleanArtist("Billy Joel • 회원님을 위한 추천 목록"));
+        // 공백으로 감싼 불릿만 대상 — 이름 안의 기호는 남긴다
+        Assert.Equal("A·B", SearchTermCleaner.CleanArtist("A·B"));
+    }
+
     [Fact]
     public void Variants_ReturnsCleanedInfoVariant()
     {

@@ -64,9 +64,9 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token!.Trim());
     }
 
-    public async Task<Lyrics?> GetAsync(string title, string artist, CancellationToken ct = default)
+    public async Task<RemoteLyricsResult> GetAsync(string title, string artist, CancellationToken ct = default)
     {
-        if (IsCircuitOpen()) return null;
+        if (IsCircuitOpen()) return RemoteLyricsResult.Miss;
 
         try
         {
@@ -75,31 +75,55 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
             cts.CancelAfter(_timeout);
 
             using var response = await _http.GetAsync(url, cts.Token).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.NotFound) { OnSuccess(); return null; } // 미스도 정상 응답
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                OnSuccess(); // 미스도 정상 응답이다
+                return await ReadMissAsync(response, cts.Token).ConfigureAwait(false);
+            }
             if (!response.IsSuccessStatusCode)
             {
                 OnFailure($"HTTP {(int)response.StatusCode}");
-                return null;
+                return RemoteLyricsResult.Miss;
             }
 
             var entry = await response.Content.ReadFromJsonAsync<RemoteLyricsEntry>(Json, cts.Token).ConfigureAwait(false);
             OnSuccess();
-            if (entry?.Lrc is not { Length: > 0 } lrc) return null;
+            if (entry?.Lrc is not { Length: > 0 } lrc) return RemoteLyricsResult.Miss;
 
             var lyrics = Lyrics.Parse(lrc);
-            if (lyrics is null) return null;
+            if (lyrics is null) return RemoteLyricsResult.Miss;
             lyrics.Metadata.ServiceName = entry.Service ?? "Server";
-            _log?.Invoke($"[server] 히트: {title} — {entry.Service} (match={entry.Match}, langs={string.Join(",", entry.Langs ?? [])})");
-            return lyrics;
+            var langs = entry.Langs ?? [];
+            _log?.Invoke($"[server] 히트: {title} — {entry.Service} (match={entry.Match}, langs={string.Join(",", langs)})");
+            return new RemoteLyricsResult(lyrics, false, 0, langs);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return null; // 트랙 교체 등 — 실패로 세지 않는다
+            return RemoteLyricsResult.Miss; // 트랙 교체 등 — 실패로 세지 않는다
         }
         catch (Exception e)
         {
             OnFailure(e.Message);
-            return null;
+            return RemoteLyricsResult.Miss;
+        }
+    }
+
+    /// <summary>
+    /// 404 본문의 양보 힌트를 읽는다. 본문이 없거나 깨졌으면 평범한 미스로 취급한다 —
+    /// 구버전 서버(본문 없는 404)와 그대로 호환된다.
+    /// </summary>
+    private async Task<RemoteLyricsResult> ReadMissAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var body = await response.Content.ReadFromJsonAsync<MissBody>(Json, ct).ConfigureAwait(false);
+            if (body is not { Pending: true }) return RemoteLyricsResult.Miss;
+            _log?.Invoke($"[server] 다른 기기도 이 곡을 찾는 중 — 번역을 양보합니다({body.RetryAfterMs}ms)");
+            return new RemoteLyricsResult(null, true, body.RetryAfterMs, []);
+        }
+        catch (Exception)
+        {
+            return RemoteLyricsResult.Miss;
         }
     }
 
@@ -184,5 +208,13 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         public int? Revision { get; init; }
         public string? UpdatedAt { get; init; }
         public string? Match { get; init; }
+    }
+
+    /// <summary>404 본문(계약 v1의 "번역 양보"). 구버전 서버는 본문이 없다.</summary>
+    private sealed record MissBody
+    {
+        public string? Error { get; init; }
+        public bool Pending { get; init; }
+        public int RetryAfterMs { get; init; }
     }
 }
