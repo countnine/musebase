@@ -56,6 +56,7 @@ public sealed class OverlayService : Service
     private const float PocketSizeDp = 72f;    // 하단 포켓(놓으면 오버레이 종료) 지름
     private const float PocketBottomDp = 48f;  // 포켓을 화면 하단에서 띄우는 여백(+시스템 인셋)
     private const int FadeMs = 220;            // 밴드 페이드 인/아웃 시간(Windows 오버레이와 같은 감각)
+    private const int NotifyMinIntervalMs = 400; // 알림 갱신 최소 간격(시스템의 갱신 빈도 제한 회피)
 
     /// <summary>서비스 실행 여부(MainActivity 토글 라벨용).</summary>
     public static bool IsRunning { get; private set; }
@@ -88,6 +89,8 @@ public sealed class OverlayService : Service
     // (Action 오버로드는 호출마다 래퍼가 새로 생겨 취소가 빗나갈 수 있다).
     private Java.Lang.IRunnable? _peekCollapse;
     private Java.Lang.IRunnable? _longPress;
+    private Java.Lang.IRunnable? _pendingNotify; // 알림 갱신 스로틀(예약된 재갱신)
+    private long _lastNotifyMs;
 
     private bool _moveMode;              // 이동 모드(밴드가 터치를 받는 동안만 true)
     private bool _bubbleMode;            // 버블 모드(설정에서 켬)
@@ -112,6 +115,7 @@ public sealed class OverlayService : Service
 
     private bool _hasLine;
     private bool _isPlaying;
+    private DisplayLine? _currentLine;  // 알림에 실을 현재 줄(원문+번역). 빈 줄이면 null.
     private bool _bandVisible;        // 가사 밴드가 지금 실제로 보이는가(버블 채움 표기의 근거)
     private string? _lastLineContent; // 같은 줄 재발행과 진짜 새 줄을 구분(peek 트리거용)
 
@@ -1001,6 +1005,7 @@ public sealed class OverlayService : Service
         {
             _hasLine = false;
             _lastLineContent = null;
+            _currentLine = null;
             _lineView?.SetLine(null, null, 0);
             if (_translationView is not null) _translationView.Visibility = ViewStates.Gone;
             CancelPeek();
@@ -1052,7 +1057,10 @@ public sealed class OverlayService : Service
                 _translationView.Visibility = ViewStates.Visible;
             }
         }
+        _currentLine = content is null ? null : line;
         UpdateVisibility();
+        // 알림에도 같은 줄을 싣는다 — 잠금화면에서 읽히는 경로다(설정으로 끌 수 있다).
+        if (isNew || content is null) UpdateNotificationForLine();
         // 접혀 있어도 새 줄이 나오면 잠깐 보여 준다(설정으로 끌 수 있다).
         if (isNew && _isPlaying) PeekIfCollapsed();
     }
@@ -1167,12 +1175,16 @@ public sealed class OverlayService : Service
         var apiOn = MusebaseApp.Instance?.Settings.ApiTranslationEnabled ?? true;
         var toggleLabel = apiOn ? "번역 끄기" : "번역 켜기";
 
+        var fallback = string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status;
+
+        // 알림에 현재 가사를 실으면 **잠금화면에서도 읽힌다** — 오버레이 창은 키가드 위로 올라갈 수
+        // 없으므로 이게 잠금화면에 가사를 보이는 유일한 길이다(설정에서 끌 수 있다).
+        var (contentText, bigText) = NotificationLines(track, fallback);
+
         var builder = new Notification.Builder(this, ChannelId)
             .SetContentTitle(track ?? "Musebase 가사 표시 중")
-            .SetContentText(string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status)
-            .SetStyle(new Notification.BigTextStyle().BigText(
-                (track is null ? "" : track + "\n") +
-                (string.IsNullOrEmpty(status) ? "다른 앱 위에 실시간 가사를 표시합니다" : status)))
+            .SetContentText(contentText)
+            .SetStyle(new Notification.BigTextStyle().BigText(bigText))
             .SetSmallIcon(global::Android.Resource.Drawable.IcMediaPlay)
             .SetContentIntent(openPending)
             .SetOngoing(true)
@@ -1186,14 +1198,54 @@ public sealed class OverlayService : Service
         return builder.Build();
     }
 
+    /// <summary>
+    /// 알림 본문 두 가지를 만든다 — 접힌 줄과 펼친(BigText) 줄.
+    /// 가사 표시가 켜져 있고 지금 보여 줄 줄이 있으면 접힌 줄은 원문, 펼친 줄은 원문+번역이다.
+    /// 그렇지 않으면 기존대로 곡명·상태만 보여 준다.
+    /// </summary>
+    private (string Content, string Big) NotificationLines(string? track, string fallback)
+    {
+        var wantLyrics = MusebaseApp.Instance?.Settings.NotificationLyrics ?? true;
+        var line = wantLyrics ? _currentLine : null;
+        if (line?.Content is not { Length: > 0 } content || string.IsNullOrWhiteSpace(content))
+            return (fallback, (track is null ? "" : track + "\n") + fallback);
+
+        var translation = line.Translation;
+        var big = string.IsNullOrWhiteSpace(translation) ? content : $"{content}\n{translation}";
+        return (content, big);
+    }
+
     /// <summary>알림바 내용을 현재 곡·상태로 갱신한다(서비스가 떠 있을 때만).</summary>
     private void UpdateNotification()
     {
         // 이미 StartForeground로 떠 있는 알림을 갱신하는 것이므로 엔진 구독 여부만 본다.
         if (_coordinator is null) return;
+        _lastNotifyMs = SystemClock.UptimeMillis();
         var nm = (NotificationManager?)GetSystemService(NotificationService);
         try { nm?.Notify(NotificationId, BuildNotification()); }
         catch (Exception e) { global::Android.Util.Log.Warn("Musebase", $"notify: {e.Message}"); }
+    }
+
+    /// <summary>
+    /// 가사 줄이 바뀌어 알림을 갱신한다. 시스템이 알림 갱신 빈도를 제한하므로
+    /// <see cref="NotifyMinIntervalMs"/> 안에 또 바뀌면 한 번만 뒤늦게 반영한다
+    /// (간주 구간처럼 짧은 줄이 연달아 나올 때 갱신이 통째로 버려지는 것을 막는다).
+    /// </summary>
+    private void UpdateNotificationForLine()
+    {
+        if (_coordinator is null) return;
+        if (!(MusebaseApp.Instance?.Settings.NotificationLyrics ?? true)) return;
+        if (_pendingNotify is not null) return; // 이미 예약됨 — 그때 최신값으로 그린다
+
+        var since = SystemClock.UptimeMillis() - _lastNotifyMs;
+        if (since >= NotifyMinIntervalMs) { UpdateNotification(); return; }
+
+        _pendingNotify = new Java.Lang.Runnable(() =>
+        {
+            _pendingNotify = null;
+            UpdateNotification();
+        });
+        _handler.PostDelayed(_pendingNotify, NotifyMinIntervalMs - since);
     }
 
     /// <summary>알림바 액션: API 번역 사용을 토글하고 즉시 반영한다(켤 때는 현재 곡을 바로 번역).</summary>
@@ -1306,6 +1358,7 @@ public sealed class OverlayService : Service
     public override void OnDestroy()
     {
         UnsubscribeEngine();
+        if (_pendingNotify is not null) { _handler.RemoveCallbacks(_pendingNotify); _pendingNotify = null; }
         RemoveOverlay();
         IsRunning = false;
         base.OnDestroy();

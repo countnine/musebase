@@ -94,6 +94,7 @@ public sealed class SettingsActivity : Activity
     private CheckBox? _includeVideoCheck;
     private CheckBox? _bubbleModeCheck;
     private CheckBox? _peekCheck;
+    private CheckBox? _notificationLyricsCheck;
     private EditText? _serverEndpointEdit;
     private EditText? _serverTokenEdit;
 
@@ -335,6 +336,22 @@ public sealed class SettingsActivity : Activity
             peekCheck.Visibility = e.IsChecked ? ViewStates.Visible : ViewStates.Gone;
         _overlaySection.AddView(_peekCheck);
 
+        _notificationLyricsCheck = new CheckBox(this)
+        {
+            Text = "알림에 현재 가사 표시 (잠금화면에서도 보임)",
+            Checked = settings?.NotificationLyrics != false,
+        };
+        _overlaySection.AddView(_notificationLyricsCheck);
+        var notificationNote = new TextView(this)
+        {
+            Text = "플로팅 오버레이는 안드로이드 제약으로 잠금화면 위에 뜰 수 없습니다. "
+                 + "대신 알림에 현재 줄(원문+번역)을 실어 잠금화면에서도 읽히게 합니다. "
+                 + "끄면 알림은 곡명·상태만 보여 줍니다.",
+        };
+        notificationNote.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        notificationNote.Alpha = 0.75f;
+        _overlaySection.AddView(notificationNote);
+
         var overlayNote = new TextView(this)
         {
             Text = "가사 위치는 알림바의 '위치 이동'을 눌러 드래그로 옮길 수 있습니다"
@@ -491,6 +508,7 @@ public sealed class SettingsActivity : Activity
 
         settings.OverlayBubbleMode = _bubbleModeCheck?.Checked == true;
         settings.OverlayPeekOnNewLine = _peekCheck?.Checked != false;
+        settings.NotificationLyrics = _notificationLyricsCheck?.Checked != false;
 
         settings.OverlayFontSizeSp = SliderValue(_fontSizeBar, settings.OverlayFontSizeSp);
         settings.OverlayCornerRadius = SliderValue(_cornerBar, settings.OverlayCornerRadius);

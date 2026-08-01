@@ -35,6 +35,7 @@ public sealed class AndroidSettings
     private const string KeyAdMuteSavedVolume = "AdMuteSavedVolume";
     private const string KeyOverlayBubbleMode = "OverlayBubbleMode";
     private const string KeyOverlayPeekOnNewLine = "OverlayPeekOnNewLine";
+    private const string KeyNotificationLyrics = "NotificationLyrics";
     private const string KeyOverlayRatioX = "OverlayRatioX";
     private const string KeyOverlayRatioY = "OverlayRatioY";
     private const string KeyBubbleRatioX = "BubbleRatioX";
@@ -340,6 +341,20 @@ public sealed class AndroidSettings
     {
         get => _prefs.GetBoolean(KeyOverlayPeekOnNewLine, true);
         set => PutBool(KeyOverlayPeekOnNewLine, value);
+    }
+
+    /// <summary>
+    /// 포그라운드 알림에 현재 가사 줄(원문+번역)을 싣는다. 기본 켬.
+    ///
+    /// 잠금화면에 가사를 보이게 하는 유일한 방법이다 — 오버레이 창(<c>TYPE_APPLICATION_OVERLAY</c>)은
+    /// Android 8부터 키가드보다 아래 레이어로 고정돼 잠금화면 위로 올라갈 수 없다. 알림은 이미
+    /// <c>Visibility.Public</c>이라 잠금화면에 내용이 그대로 나온다.
+    /// 끄면 알림은 곡명·상태만 보여 준다(듣는 내용이 잠금화면에 남지 않는다).
+    /// </summary>
+    public bool NotificationLyrics
+    {
+        get => _prefs.GetBoolean(KeyNotificationLyrics, true);
+        set => PutBool(KeyNotificationLyrics, value);
     }
 
     /// <summary>
