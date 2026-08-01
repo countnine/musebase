@@ -29,7 +29,13 @@ public sealed class GeniusSource : ISongMeaningSource
     private readonly string _token;
     private readonly TimeSpan _timeout;
 
-    public GeniusSource(string token, HttpClient? http = null, int timeoutMs = 2500)
+    /// <param name="timeoutMs">
+    /// **두 번의 순차 호출 전체**에 대한 예산이라 넉넉해야 한다. 실측에서 유명 곡일수록
+    /// 설명이 길어 느렸다 — <c>Lady Gaga / Shallow</c>는 검색 0.96초 + 상세 2.0초로 2.95초였고,
+    /// 예전 기본값 2.5초에서는 **정확히 그런 곡들만 조용히 잘려 나갔다**(자료가 가장 좋은 곡들이다).
+    /// 가사 검색과 달리 여기서는 사람이 버튼을 누르고 기다리므로 지연보다 누락이 훨씬 나쁘다.
+    /// </param>
+    public GeniusSource(string token, HttpClient? http = null, int timeoutMs = 8000)
     {
         _token = token.Trim();
         _http = http ?? MeaningHttp.Client;

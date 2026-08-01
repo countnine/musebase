@@ -152,6 +152,81 @@ public class MeaningTests
             WikipediaSource.PickPage(hits, "Don’t Delete The Kisses", "Wolf Alice"));
     }
 
+    [Fact]
+    public void 합작곡은_아티스트_한_명만_맞아도_받아들인다()
+    {
+        // 실측 함정: 재생 메타데이터는 "Lady Gaga/Bradley Cooper"로 오는데 문서 제목은
+        // "…(Lady Gaga and Bradley Cooper song)"이다. 구두점을 지우고 통째로 포함 검사를 하면
+        // 가운데 "and" 때문에 영영 일치하지 않아, 자료가 가장 좋은 곡이 조용히 버려졌다.
+        WikipediaSource.SearchHit[] hits =
+        [
+            new("Shallow (Lady Gaga and Bradley Cooper song)", "from A Star Is Born"),
+        ];
+
+        Assert.Equal("Shallow (Lady Gaga and Bradley Cooper song)",
+            WikipediaSource.PickPage(hits, "Shallow", "Lady Gaga/Bradley Cooper"));
+    }
+
+    [Fact]
+    public void 아티스트에_앨범_꼬리표가_붙어도_찾는다()
+    {
+        // 재생 메타데이터의 아티스트에 앨범이 " — "로 붙어 오는 경우가 흔하다.
+        WikipediaSource.SearchHit[] hits =
+        [
+            new("As It Was", "a song by English singer Harry Styles"),
+        ];
+
+        Assert.Equal("As It Was",
+            WikipediaSource.PickPage(hits, "As It Was", "harry styles — harry's house"));
+    }
+
+    [Fact]
+    public void 한_명만_맞으면_되지만_아무도_안_맞으면_여전히_버린다()
+    {
+        // 완화가 "아무나 통과"가 되면 안 된다 — 동명이곡 방어는 그대로여야 한다.
+        WikipediaSource.SearchHit[] hits =
+        [
+            new("Shallow (song)", "a 2016 single by Porcupine Tree"),
+        ];
+
+        Assert.Null(WikipediaSource.PickPage(hits, "Shallow", "Lady Gaga/Bradley Cooper"));
+    }
+
+    // ---- 아티스트 표기 정리 ----
+
+    [Theory]
+    [InlineData("harry styles — harry's house", "harry styles")]
+    [InlineData("요네즈 켄시 — 1991 - single", "요네즈 켄시")]
+    [InlineData("westside cowboy • it goes on", "westside cowboy")]
+    [InlineData("Lady Gaga", "Lady Gaga")]
+    public void 앨범_꼬리표를_떼어_낸다(string raw, string expected)
+    {
+        Assert.Equal(expected, ArtistNames.StripAlbumSuffix(raw));
+    }
+
+    [Fact]
+    public void 여러_아티스트를_나눈다()
+    {
+        Assert.Equal(["Lady Gaga", "Bradley Cooper"], ArtistNames.All("Lady Gaga/Bradley Cooper"));
+        Assert.Equal(["Calvin Harris", "Dua Lipa"], ArtistNames.All("Calvin Harris & Dua Lipa"));
+        Assert.Equal(["Drake", "Rihanna"], ArtistNames.All("Drake feat. Rihanna"));
+    }
+
+    [Fact]
+    public void 이름_자체에_든_기호는_자르지_않는다()
+    {
+        // 공백 없는 하이픈·앰퍼샌드는 이름의 일부다.
+        Assert.Equal(["Jay-Z"], ArtistNames.All("Jay-Z"));
+        Assert.Equal("Jay-Z", ArtistNames.Primary("Jay-Z"));
+    }
+
+    [Fact]
+    public void 검색어에는_대표_이름만_쓴다()
+    {
+        Assert.Equal("harry styles", ArtistNames.Primary("harry styles — harry's house"));
+        Assert.Equal("Lady Gaga", ArtistNames.Primary("Lady Gaga/Bradley Cooper"));
+    }
+
     // ---- 생성 ----
 
     [Fact]

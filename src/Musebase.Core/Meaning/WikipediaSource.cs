@@ -23,7 +23,8 @@ public sealed partial class WikipediaSource : ISongMeaningSource
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     /// <param name="language">위키 언어 코드. 기본 영어 — 곡 해설은 영어판이 압도적으로 두껍다.</param>
-    public WikipediaSource(string language = "en", HttpClient? http = null, int timeoutMs = 2500)
+    /// <param name="timeoutMs">검색 + 본문 두 호출 전체의 예산(<see cref="GeniusSource"/> 참고).</param>
+    public WikipediaSource(string language = "en", HttpClient? http = null, int timeoutMs = 6000)
     {
         _endpoint = $"https://{language}.wikipedia.org/w/api.php";
         _http = http ?? MeaningHttp.Client;
@@ -76,7 +77,10 @@ public sealed partial class WikipediaSource : ISongMeaningSource
         var t = clean?.Title ?? title;
         var a = clean?.Artist ?? artist;
 
-        var query = string.IsNullOrWhiteSpace(a) ? $"{t} song" : $"{t} {a} song";
+        // 검색어에는 **대표 이름 하나만** 넣는다 — 앨범 꼬리표나 공동 아티스트가 그대로 들어가면
+        // 검색이 흐려진다("little freak harry styles — harry's house song").
+        var primary = ArtistNames.Primary(a);
+        var query = string.IsNullOrWhiteSpace(primary) ? $"{t} song" : $"{t} {primary} song";
         var url = $"{_endpoint}?action=query&format=json&formatversion=2&list=search&srlimit=5"
                 + $"&srsearch={Uri.EscapeDataString(query)}";
         var body = await _http.GetFromJsonAsync<SearchEnvelope>(url, Json, ct).ConfigureAwait(false);
@@ -94,7 +98,7 @@ public sealed partial class WikipediaSource : ISongMeaningSource
     {
         var wantedTitle = Normalize(title);
         if (wantedTitle.Length == 0) return null;
-        var wantedArtist = Normalize(artist);
+        var wantedArtists = ArtistCandidates(artist);
 
         SearchHit? best = null;
         var bestScore = int.MinValue;
@@ -107,13 +111,15 @@ public sealed partial class WikipediaSource : ISongMeaningSource
             var normalizedPage = Normalize(pageTitle);
             if (!normalizedPage.Contains(wantedTitle, StringComparison.Ordinal)) continue;
 
-            var titleHasArtist = wantedArtist.Length > 0
-                && normalizedPage.Contains(wantedArtist, StringComparison.Ordinal);
-            var snippetHasArtist = wantedArtist.Length > 0
-                && Normalize(hit.Snippet ?? "").Contains(wantedArtist, StringComparison.Ordinal);
+            // 이름 **하나라도** 걸리면 이 곡의 문서로 본다. 합작곡의 문서 제목은
+            // "Shallow (Lady Gaga and Bradley Cooper song)"처럼 우리가 받은 표기와 다르게 적히므로,
+            // 전원 일치를 요구하면 아무것도 통과하지 못한다.
+            var normalizedSnippet = Normalize(hit.Snippet ?? "");
+            var titleHasArtist = wantedArtists.Any(n => normalizedPage.Contains(n, StringComparison.Ordinal));
+            var snippetHasArtist = wantedArtists.Any(n => normalizedSnippet.Contains(n, StringComparison.Ordinal));
 
             // 필수 ②: 아티스트를 아는데 제목에도 스니펫에도 없으면 동명이곡일 수 있다 — 버린다.
-            if (wantedArtist.Length > 0 && !titleHasArtist && !snippetHasArtist) continue;
+            if (wantedArtists.Count > 0 && !titleHasArtist && !snippetHasArtist) continue;
 
             var score =
                   (titleHasArtist ? 4 : 0)                                                    // "Kids (MGMT song)"
@@ -125,6 +131,25 @@ public sealed partial class WikipediaSource : ISongMeaningSource
         }
 
         return best?.Title;
+    }
+
+    /// <summary>
+    /// 비교에 쓸 아티스트 이름들. 너무 짧은 조각(<c>AC/DC</c> → "ac","dc")은 아무 데나 걸리므로
+    /// 버리고, 그렇게 다 버려지면 원본 전체로 되돌린다 — 확인 자체를 포기하는 것보다 낫다.
+    /// </summary>
+    private static IReadOnlyList<string> ArtistCandidates(string artist)
+    {
+        var names = ArtistNames.All(artist)
+            .Select(Normalize)
+            .Where(n => n.Length >= 3)
+            .ToList();
+
+        if (names.Count == 0)
+        {
+            var whole = Normalize(artist);
+            if (whole.Length > 0) names.Add(whole);
+        }
+        return names;
     }
 
     /// <summary>비교용 정규화 — 소문자 + 영숫자/한글만 남긴다(괄호·구두점·공백 제거).</summary>

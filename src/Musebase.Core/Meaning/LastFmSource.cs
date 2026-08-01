@@ -25,7 +25,7 @@ public sealed partial class LastFmSource : ISongMeaningSource
     private readonly string _apiKey;
     private readonly TimeSpan _timeout;
 
-    public LastFmSource(string apiKey, HttpClient? http = null, int timeoutMs = 2500)
+    public LastFmSource(string apiKey, HttpClient? http = null, int timeoutMs = 6000)
     {
         _apiKey = apiKey.Trim();
         _http = http ?? MeaningHttp.Client;
