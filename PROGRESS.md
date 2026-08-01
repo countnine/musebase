@@ -13,8 +13,12 @@
 - **동시 재생 중복 작업 줄이기(코어+서버, Android 일부)** — Spotify Connect로 PC 재생 + 폰 조작을 하면 두 기기가 같은 곡을 동시에 처리해 각자 검색하고 **각자 유료 번역**을 부른다. 서버 로그 실측: 조회 304건 중 동시 조회 26건, 그중 22건이 양쪽 다 miss(= 곡 11개를 두 번씩 번역).
   - **번역 양보** — 서버가 미스 응답 본문에 `pending`(최근 30초 안에 다른 기기도 같은 제목을 미스함)을 실어 준다. 받은 앱은 제공자 검색은 그대로 하되 **번역만** 미루고 서버를 재조회해(1~5초 간격, 상한 8초) 저쪽이 올린 번역본을 받아 쓴다. **원문 표시는 늦어지지 않는다** — 번역이 몇 초 뒤 붙는 건 원래 동작이라 손해가 없다. 받아 쓴 것은 되올리지 않는다(revision만 오른다). 판정 근거는 기존 `lookups`라 새 테이블이 없고, 조회 기록을 끄면 양보도 함께 꺼진다. `MUSEBASE_YIELD_WINDOW_SECONDS`(0이면 끔).
   - **아티스트 꼬리표에 `•` 추가** — Spotify Android가 `Phoenix • 스마트셔플 추천`처럼 붙여 같은 곡이 기기별로 다른 키가 되고 있었다(조회 29건, 실제 중복 행 `uptown girl`·`Go!` 확인). `SearchTermCleaner.CleanArtist`(제공자 검색)와 `LyricsStore.StripAlbumSuffix`(서버 키) 양쪽에 반영.
-  - **광고 트랙 차단** — 광고 구간에는 `TrackChanged`를 발화하지 않는다(같은 메타데이터에서 직접 판정 — `IsAdvertisement`는 `RefreshTrack` 뒤에 갱신돼 아직 이전 곡 기준이다). 서버에 `Spotify / 광고 • 1/2`가 실제로 저장돼 있었다.
-  - `IRemoteLyricsCache.GetAsync`가 `RemoteLyricsResult`(가사 + `Pending`/`RetryAfterMs`/`Langs`)를 돌려주도록 바꿨다. 구버전 서버(본문 없는 404)와 그대로 호환. 테스트 5건 추가(169개 통과).
+  - **광고 트랙 차단(Windows·Android 공통)** — 광고 구간에는 트랙을 만들지 않아 가사 검색·서버 조회가 아예 돌지 않는다. 서버에 `Spotify / 광고 • 1/2`가 실제로 저장돼 있었다.
+    - Android는 같은 메타데이터에서 직접 판정한다 — `IsAdvertisement` 속성은 `RefreshTrack` **뒤에** 갱신돼 아직 이전 곡 기준이다.
+    - Windows는 SMTC에 광고 플래그·`mediaId`가 없어 실측 검증된 신호 ③(아티스트=`Spotify`/`Sponsored Message` + 앨범 비어 있음)만 본다. 앨범 조건이 오탐 안전장치다.
+    - 그러려면 판정 규칙이 공통이어야 해서 **`AdSignals`를 `Musebase.Android` → `Musebase.Engine`으로 옮겼다**(ADR-0006이 예고한 이동). 뮤트 상태 기계(`AdDecision`)는 볼륨 안전장치라 Android에 남는다. 옮기면서 유닛 테스트 5건이 붙었다(`AdSignalsTests`).
+    - Windows에서 광고를 뮤트하고 MP3를 채우는 건 별도 앱 **Mutefy**가 한다. 충돌 없음 — Mutefy는 Spotify 프로세스의 오디오 세션만 음소거하고, 필러는 `WasapiOut` 직접 출력이라 SMTC 세션을 만들지 않는다(자동시작 Run 키 값·설정 경로·단일 인스턴스 뮤텍스도 모두 다르다).
+  - `IRemoteLyricsCache.GetAsync`가 `RemoteLyricsResult`(가사 + `Pending`/`RetryAfterMs`/`Langs`)를 돌려주도록 바꿨다. 구버전 서버(본문 없는 404)와 그대로 호환. 테스트 10건 추가(174개 통과).
   - **서버 재배포 필요**(앱 릴리스와 별개). 앱이 구버전이어도 추가 필드를 무시할 뿐이라 안전하다.
 - **잠금화면 가사(Android)** — 플로팅 오버레이는 잠금화면 위에 뜰 수 **없다**(Android 8부터 `TYPE_APPLICATION_OVERLAY`가 키가드보다 아래 레이어로 고정, `TYPE_SYSTEM_OVERLAY`는 일반 앱에서 제거 — 오버레이 권한 예외 없음). 대신 이미 `Visibility.Public`인 포그라운드 알림에 현재 줄을 실어 잠금화면에서 읽히게 한다: 접힌 알림 = 원문, 펼친 알림 = **원문 + 번역**. 설정 [오버레이] 탭의 "알림에 현재 가사 표시"로 끌 수 있다(기본 켬 — 끄면 듣는 내용이 잠금화면에 남지 않는다). 갱신은 최소 400ms 간격으로 묶는다(시스템의 알림 갱신 빈도 제한 — 간주 표시 줄처럼 짧은 줄이 연달아 나오면 갱신이 통째로 버려진다). 카라오케·색은 알림에서 불가능.
 - **설정 [정보] 탭(Android)** — Windows [정보] 탭과 같은 내용(앱 이름·버전·구 LyricsX·소개·MPL-2.0·LyricsKit 출처·링크)에 안드로이드 전용 줄을 더했다: 패키지명·OS·기기를 보여 주고 **탭하면 버전까지 붙여 클립보드로 복사**(문제 신고용). 버전은 `PackageManager.GetPackageInfo`에서 읽어 릴리스마다 손댈 곳이 없다. 탭 이름은 5개가 한 줄에 들어가도록 줄였다(소스/번역/오버레이/광고/정보).
