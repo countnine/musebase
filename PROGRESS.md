@@ -55,6 +55,14 @@
   - **삼성 One UI는 서드파티 앱 로그를 막는다** — `adb shell setprop log.tag.Musebase VERBOSE` 없이는 `Musebase` 태그가 logcat에 한 줄도 안 나와 앱이 죽은 것처럼 보인다. `dumpsys media_session`은 metadata를 제목/아티스트/앨범 3개로만 덤프해서 광고 플래그가 안 보이므로, 앱이 찍는 `ad-signals` 로그가 사실상 유일한 프로브다.
 
 ## 미배포 (서버 쪽 작업 — 앱 릴리스와 무관하게 이미 운영 중)
+- **곡의 의미(서버)** — 곡이 무엇에 대한 노래인지 한 문단으로. 관리자 곡 상세의 가사 **위**에 카드로 뜨고, 앱용 `GET /v1/meaning`도 열어 뒀다(앱 표시는 다음 작업). 배경은 `docs/adr/0007-song-meaning.md`.
+  - **Musixmatch는 링크만** — 공개 API에 meaning 엔드포인트가 없고(그 섹션은 사용자 기여 웹 콘텐츠) 크롤링은 약관 위반이다. 자동 수집은 **Genius**(`/songs/{id}`의 `description`, 무료 토큰) + **Last.fm**(`track.getInfo`의 wiki, 무료 키) + **Wikipedia**(키 불필요) 셋을 병렬로 겹친다.
+  - **엔진은 갈아끼운다** — `IMeaningWriter` + `MeaningWriterRegistry`(기존 `ITranslator`/`TranslatorRegistry`와 같은 모양). 기본은 **Gemini Developer API 직결**(API 키 한 줄, 무료 티어로 보유 곡 전체를 0원에 채운다 — Vertex AI는 서비스 계정·IAM 배선이 개인 프로젝트엔 과하다), 비교·전환용으로 **OpenRouter**(OpenAI 호환, `model` 문자열만 바꾸면 Claude·GPT·Gemini). 둘 다 순수 HttpClient라 SDK 의존성 0.
+  - **생성은 사람이 누를 때만** — 곡 상세 [의미 가져오기] + 대시보드 [의미 일괄 생성]. 자동 생성을 두지 않은 이유는 쿼타·비용이 예측 가능해야 하고 실패가 조용히 쌓이면 안 되기 때문. 실패·자료없음도 행으로 남겨 백필이 같은 곡을 무한 재시도하지 않는다.
+  - **환각 방어 둘** — ① 소스가 하나도 없으면 LLM을 아예 호출하지 않는다 ② Wikipedia 문서 선택은 제목 일치 + 아티스트 확인을 필수 조건으로 걸고 못 채우면 포기한다. 실측 함정: "(song)" 제목을 무조건 우선했더니 `Kids/MGMT`에서 정답 `Kids (MGMT song)`을 제치고 `Pursuit of Happiness (song)`이 뽑혔다 — 엉뚱한 문서는 자료가 없는 것보다 나쁘다(그럴듯하고 완전히 틀린 의미가 나온다).
+  - **실측 함정 하나 더**: Wikimedia는 User-Agent가 없으면 **403**을 준다. .NET `HttpClient`는 기본 UA를 안 보내므로 그대로 두면 위키피디아 소스가 항상 조용히 빈다 — 가사 제공자들의 검증된 동작을 건드리지 않도록 의미 전용 `MeaningHttp`에만 UA를 붙였다.
+  - **출처 표기 의무**(Wikipedia CC BY-SA, Genius·Last.fm 링크)를 화면과 `/v1/meaning`의 `attribution`에 함께 싣는다. 저장은 새 `meanings` 테이블(`user_version=2`), 조회 키는 **가사와 같은 해석기** — 가사가 느슨한 키로 맞는 곡은 의미도 맞아야 한다.
+  - 키를 하나도 넣지 않으면 기능이 통째로 꺼지고 외부 링크만 남는다(가사 기능 영향 0). 테스트 31건 추가(205개 통과).
 - **가사 서버 백업 강화 + 컨테이너화** — 앱에는 영향 없음(서버 운영용).
   - 백업: `sqlite3 .backup` → **`PRAGMA integrity_check` 검증**(깨지면 폐기) → gzip(2MB→660KB) → 보존 정리. `MUSEBASE_BACKUP_REMOTE`를 넣으면 매일 오프사이트 사본까지. 복구 절차 문서화.
   - `Dockerfile`(멀티스테이지, tzdata·sqlite3·curl 포함, 비루트 실행, `/data` 볼륨, HEALTHCHECK) + `docker-compose.yml`(루프백 바인딩, 이름 있는 볼륨). WSL 도커에서 빌드·기동·백업·재시작 지속성·헬스체크까지 실측(이미지 372MB).

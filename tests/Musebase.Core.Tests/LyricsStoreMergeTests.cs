@@ -102,6 +102,68 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.Equal(2, store.Stats().Songs);
     }
 
+    /// <summary>
+    /// 의미는 가사와 **같은 해석기**로 찾아야 한다 — 가사가 느슨한 키로 맞는 곡은
+    /// 의미도 같이 맞지 않으면 앱에서 가사는 뜨는데 의미만 비는 일이 생긴다.
+    /// </summary>
+    [Fact]
+    public void 의미는_가사와_같은_키_해석기로_찾는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "kids|mgmt",
+            Title = "Kids",
+            Artist = "MGMT",
+            Summary = "성장의 불안에 대한 곡이다.",
+            Lang = "ko",
+            Sources = "[]",
+            Status = MeaningEntry.StatusOk,
+            UpdatedAt = "2026-08-01T00:00:00Z",
+        });
+
+        // 정확 키
+        Assert.NotNull(store.GetMeaning("Kids", "MGMT"));
+        // 꼬리표가 붙은 표기(느슨한 키)로도 같은 의미가 나와야 한다
+        Assert.NotNull(store.GetMeaning("Kids", "MGMT • 스마트셔플 추천"));
+        Assert.NotNull(store.GetMeaning("Kids", "MGMT — Oracular Spectacular"));
+        // 다른 곡은 없다
+        Assert.Null(store.GetMeaning("Time to Pretend", "MGMT"));
+    }
+
+    [Fact]
+    public void 이미_시도한_곡은_백필_대상에서_빠진다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+        store.Upsert(Entry("Go!", "M83", Plain), "윈도우PC", out _);
+
+        Assert.Equal(2, store.SongsWithoutMeaning(50).Count);
+
+        // 자료를 못 찾은 곡도 행으로 남는다 — 백필을 다시 눌러도 무한 재시도하지 않는다.
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "kids|mgmt",
+            Title = "Kids",
+            Artist = "MGMT",
+            Lang = "ko",
+            Sources = "[]",
+            Status = MeaningEntry.StatusNoSource,
+            UpdatedAt = "2026-08-01T00:00:00Z",
+        });
+
+        var remaining = store.SongsWithoutMeaning(50);
+        Assert.Single(remaining);
+        Assert.Equal("Go!", remaining[0].Title);
+
+        var (ok, none, failed) = store.MeaningStats();
+        Assert.Equal(0, ok);
+        Assert.Equal(1, none);
+        Assert.Equal(0, failed);
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

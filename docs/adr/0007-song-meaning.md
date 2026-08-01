@@ -1,0 +1,94 @@
+# ADR-0007: 곡의 의미 — 외부 자료 수집 + 요약
+
+- 상태: 채택 (2026-08-01)
+- 관련: ADR-0005(개인 가사 서버), `contracts/lyrics-api.md`
+
+## 배경
+
+가사는 있는데 **그 곡이 무슨 이야기인지**는 어디에도 없다. 관리자 화면에서 곡을 열었을 때
+가사 위에 "이 곡의 의미"를 한국어로 보여 주고, 나중에 Windows·Android 앱에서도 확인할 수
+있게 하려 한다.
+
+## 결정
+
+### 1. Musixmatch의 "Meaning"은 링크로만 제공한다
+
+공개 API(`track.search` / `matcher.track.get` / `track.lyrics.get` / `track.snippet.get` /
+`artist.search` …)에 **meaning 엔드포인트가 없다** — 그 섹션은 사용자 기여 웹 콘텐츠다.
+크롤링은 약관 위반이고 Cloudflare로 막혀 있다. 그래서 자동 수집 대상에서 제외하고,
+사람이 직접 읽으러 가는 링크만 건다.
+
+### 2. 소스는 셋을 겹친다 — Genius · Last.fm · Wikipedia
+
+| 소스 | 인증 | 얻는 것 |
+|---|---|---|
+| Genius | 무료 Client Access Token(OAuth 플로우 불필요) | `/songs/{id}?text_format=plain`의 `description`(About) |
+| Last.fm | 무료 API 키 | `track.getInfo`의 `wiki.content` |
+| Wikipedia | **없음** | 곡 문서 도입부(`prop=extracts`) |
+
+하나가 비어도 나머지가 채운다. 셋을 **병렬로** 부르고 실패는 무시한다 —
+`HttpRemoteLyricsCache`의 조용한 강등과 같은 원칙이다. Songfacts는 API가 없어 제외했다.
+
+### 3. 번역이 아니라 요약이다 — LLM을 쓴다
+
+세 소스 모두 영어 산문이다. DeepL은 번역만 하므로 그대로 넣으면 "의미"가 아니라 긴 영어
+문서의 긴 한국어판이 나온다. 그래서 요약이 가능한 LLM을 쓰되, 엔진을 **갈아끼울 수 있게**
+`IMeaningWriter` + `MeaningWriterRegistry`로 감쌌다(기존 `ITranslator`/`TranslatorRegistry`와 같은 모양).
+
+- **기본은 Google Gemini Developer API 직결.** Vertex AI가 아닌 이유는 인증이 API 키 한 줄이라
+  이미 쓰는 `GoogleTranslateTranslator`와 패턴이 같고(서비스 계정·ADC 불필요), 무료 티어가
+  있어 보유 곡 전체를 0원에 채울 수 있어서다. IAM·데이터 레지던시가 필요해지면 Vertex로 옮긴다.
+- **OpenRouter를 함께 둔다.** OpenAI 호환 엔드포인트라 키 하나로 Claude·GPT·Gemini·Llama를
+  `model` 문자열만 바꿔 부를 수 있다. 같은 곡을 여러 모델로 만들어 문장 품질을 비교할 때 쓴다.
+- 둘 다 순수 HttpClient + System.Text.Json — SDK 의존성을 늘리지 않는다.
+
+### 4. 생성은 사람이 누를 때만 — 자동 생성을 두지 않는다
+
+새 가사가 올라올 때 자동으로 만들지 않는다. 관리자 화면의 단건 버튼과 일괄 백필만 둔다.
+
+- 쿼타·비용이 예측 가능하다(무료 티어 한도를 모르게 긁지 않는다).
+- 실패가 조용히 쌓이지 않는다.
+- 광고·오인식 트랙까지 토큰을 쓰지 않는다.
+
+결과는 실패·자료없음도 행으로 남긴다 — 백필을 다시 눌러도 같은 곡을 무한히 재시도하지 않는다.
+
+### 5. 근거가 없으면 부르지 않고, 확신이 없으면 포기한다
+
+곡 해설은 **그럴듯한 창작이 특히 쉬운 영역**이다. 두 가지 방어를 뒀다.
+
+- 소스가 하나도 없으면 LLM을 **아예 호출하지 않는다**(`status='no-source'`).
+- Wikipedia 문서 선택은 제목 일치와 아티스트 확인을 **필수 조건**으로 걸고, 못 채우면 포기한다.
+  실측으로 걸린 함정: "(song)"이 붙은 제목을 무조건 우선했더니 `Kids / MGMT`에서 정답인
+  `Kids (MGMT song)`("(song)"이 아니라 "(MGMT song)"이다)을 제치고 상위에 섞여 있던
+  `Pursuit of Happiness (song)`이 뽑혔다. **엉뚱한 문서는 자료가 없는 것보다 나쁘다** —
+  그럴듯하고 완전히 틀린 의미가 만들어지기 때문이다.
+- 프롬프트도 "자료에 없는 내용은 지어내지 않는다 / 부족하면 부족하다고 쓴다"로 못을 박는다.
+
+### 6. 출처 표기는 의무다
+
+Wikipedia 본문은 CC BY-SA이고 Genius·Last.fm도 링크 표기를 요구한다. 요약을 보여 주는 화면은
+출처 이름·링크를 함께 렌더해야 하며, 이를 위해 `/v1/meaning` 응답에 `attribution`을 싣는다
+(원문 전체는 무거워 응답에서 비운다).
+
+### 7. 저장은 별도 테이블
+
+`meanings` 테이블을 새로 만들고(`PRAGMA user_version = 2`) 가사 테이블은 건드리지 않는다.
+의미가 없어도 가사는 멀쩡해야 하고, 재생성이 가사 `revision`을 올리면 안 된다.
+조회 키는 **가사와 같은 해석기**(`Locate`)를 쓴다 — 가사가 느슨한 키로 맞는 곡은 의미도 맞아야
+앱에서 "가사는 뜨는데 의미만 빈" 상태가 생기지 않는다.
+
+## 결과
+
+- 앱에는 LLM 키를 심지 않는다. 서버가 대행하고 앱은 `/v1/meaning`을 읽기만 한다 —
+  ADR-0005가 v2로 예고한 "서버가 번역 대행"과 같은 방향이다.
+- 키를 하나도 넣지 않으면 기능이 통째로 꺼지고 외부 링크만 남는다. 가사 기능에는 영향이 없다.
+- 실측으로 잡은 함정 하나 더: **Wikimedia는 User-Agent가 없으면 403을 준다.**
+  .NET `HttpClient`는 기본 User-Agent를 보내지 않으므로 그대로 두면 위키피디아 소스가 항상
+  조용히 빈다. 가사 제공자들의 검증된 동작을 건드리지 않도록 의미 전용 `MeaningHttp`에만 붙였다.
+
+## 대안 (기각)
+
+- **DeepL로 번역만** — 새 키가 필요 없지만 요약이 안 돼 긴 영어 bio가 긴 한국어 글이 될 뿐이고,
+  가사 번역용 무료 할당까지 함께 먹는다.
+- **Musixmatch 크롤링** — 약관 위반이고 Cloudflare로 막혀 있다.
+- **Vertex AI** — 거버넌스가 필요할 때의 선택지다. 개인 프로젝트에는 서비스 계정·IAM 배선이 과하다.

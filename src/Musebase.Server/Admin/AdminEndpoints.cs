@@ -49,7 +49,9 @@ public static class AdminEndpoints
     private const string CookieName = "musebase_admin";
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
-    public static void MapAdmin(this WebApplication app, LyricsStore store, AdminOptions options)
+    public static void MapAdmin(
+        this WebApplication app, LyricsStore store, AdminOptions options,
+        Musebase.Core.Meaning.SongMeaningService meanings, MeaningOptions meaningOptions)
     {
         // JS가 없으므로 스크립트를 통째로 막는다(인라인 스타일만 허용).
         const string Csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'";
@@ -102,7 +104,7 @@ public static class AdminEndpoints
 
         // ---- 대시보드 ----
 
-        app.MapGet("/admin", (HttpRequest req, HttpResponse res, string? token) =>
+        app.MapGet("/admin", (HttpRequest req, HttpResponse res, string? token, string? notice) =>
         {
             // ?token=…로 들어오면 쿠키를 굽고 주소창을 정리한다(토큰이 히스토리·로그에 남지 않도록).
             if (!string.IsNullOrEmpty(token))
@@ -131,9 +133,11 @@ public static class AdminEndpoints
                 WithoutTranslation: store.WithoutTranslation(100),
                 DuplicateCandidates: store.DuplicateCandidates(),
                 Health: Health(options.RetentionDays),
-                Diagnostics: Diagnostics(req, options));
+                Diagnostics: Diagnostics(req, options),
+                Meanings: MeaningSummaryOf(),
+                Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""));
 
-            return Html(AdminPages.Dashboard(model, now, options.TimeZone));
+            return Html(AdminPages.Dashboard(model, now, options.TimeZone, notice));
         });
 
         // ---- 검색·열람 ----
@@ -156,7 +160,8 @@ public static class AdminEndpoints
 
             return Html(AdminPages.SongPage(
                 entry, AdminLrc.ToDisplayLines(entry.Lrc, selected), langs, selected, showTags,
-                AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), options.TimeZone, notice));
+                AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), options.TimeZone, notice,
+                store.GetMeaningByKey(entry.Key ?? ""), meanings.IsEnabled));
         });
 
         app.MapGet("/admin/raw", (HttpRequest req, string? key) =>
@@ -197,6 +202,80 @@ public static class AdminEndpoints
             if (!string.IsNullOrWhiteSpace(key)) store.Delete(key);
             return Results.Redirect("/admin/search");
         });
+
+        // ---- 곡의 의미 ----
+        // 생성은 **사람이 누를 때만** 일어난다. 자동 생성을 두지 않는 이유는 쿼타·비용이
+        // 예측 가능해야 하고, 실패가 조용히 쌓이면 안 되기 때문이다.
+
+        app.MapPost("/admin/song/meaning", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var key = form["key"].ToString();
+            var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
+            if (entry is null) return Results.Redirect("/admin/search");
+
+            var notice = await GenerateMeaningAsync(entry.Key ?? key, entry.Title, entry.Artist);
+            return Results.Redirect(
+                $"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
+        });
+
+        app.MapPost("/admin/meanings/backfill", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            if (!meanings.IsEnabled)
+                return Results.Redirect($"/admin?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
+
+            var targets = store.SongsWithoutMeaning(meaningOptions.BackfillLimit);
+            int ok = 0, none = 0, failed = 0;
+            foreach (var (key, title, artist) in targets)
+            {
+                var status = await GenerateStatusAsync(key, title, artist);
+                if (status == Musebase.Core.Meaning.SongMeaning.Ok) ok++;
+                else if (status == Musebase.Core.Meaning.SongMeaning.NoSource) none++;
+                else failed++;
+            }
+
+            var summary = $"{targets.Count}곡 처리 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}";
+            return Results.Redirect($"/admin?notice={Uri.EscapeDataString(summary)}");
+        });
+
+        // 단건 생성 후 사람에게 보여 줄 한 줄.
+        async Task<string> GenerateMeaningAsync(string key, string title, string artist)
+        {
+            if (!meanings.IsEnabled) return "의미 엔진이 구성되지 않았습니다(키를 확인하세요).";
+            var status = await GenerateStatusAsync(key, title, artist);
+            return status switch
+            {
+                Musebase.Core.Meaning.SongMeaning.Ok => "의미를 만들었습니다.",
+                Musebase.Core.Meaning.SongMeaning.NoSource => "외부 자료를 찾지 못했습니다.",
+                _ => "생성에 실패했습니다(키·쿼타·네트워크를 확인하세요).",
+            };
+        }
+
+        MeaningSummary MeaningSummaryOf()
+        {
+            var (ok, none, failed) = store.MeaningStats();
+            // "아직 안 해 본 곡"은 백필 버튼이 실제로 처리할 대상 수다(상한까지만 센다).
+            var pending = store.SongsWithoutMeaning(meaningOptions.BackfillLimit).Count;
+            return new MeaningSummary(ok, none, failed, pending, meanings.IsEnabled);
+        }
+
+        // 결과를 저장하고 status만 돌려준다. 실패·자료없음도 행으로 남겨 백필이 같은 곡을
+        // 무한히 재시도하지 않게 한다.
+        async Task<string> GenerateStatusAsync(string key, string title, string artist)
+        {
+            var result = await meanings.BuildAsync(title, artist, meaningOptions.Lang);
+            store.UpsertMeaning(MeaningMapper.ToEntry(key, title, artist, meaningOptions.Lang, result));
+            return result.Status;
+        }
     }
 
     /// <summary>기기 라벨 계산(요청 헤더 → 이름). 조회 기록과 업로드 표기에 함께 쓴다.</summary>

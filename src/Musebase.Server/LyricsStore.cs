@@ -56,27 +56,53 @@ public sealed class LyricsStore : IDisposable
     /// 스키마 버전 마이그레이션. <c>PRAGMA user_version</c>으로 관리한다 —
     /// <c>CREATE TABLE IF NOT EXISTS</c>와 달리 <c>ALTER TABLE</c>은 재실행하면 실패하므로,
     /// 컬럼을 더할 일이 생기기 전에 버전 관리를 들여 둔다.
-    /// 0 = lyrics만(v1 배포본), 1 = lookups(조회 기록) 추가.
+    /// 0 = lyrics만(v1 배포본), 1 = lookups(조회 기록), 2 = meanings(곡의 의미).
     /// </summary>
     private void Migrate()
     {
-        if (ScalarInt("PRAGMA user_version;") >= 1) return;
+        var version = ScalarInt("PRAGMA user_version;");
 
-        Execute("""
-            CREATE TABLE IF NOT EXISTS lookups (
-                id     INTEGER PRIMARY KEY AUTOINCREMENT,
-                at     TEXT NOT NULL,     -- ISO-8601 UTC (lyrics.updated_at과 같은 포맷)
-                title  TEXT NOT NULL,
-                artist TEXT NOT NULL,
-                result TEXT NOT NULL,     -- 'exact' | 'cleaned' | 'miss'
-                key    TEXT,              -- 히트 시 맞은 행의 key, 미스면 NULL
-                device TEXT NOT NULL,
-                client TEXT               -- User-Agent 원문(진단용)
-            );
-            CREATE INDEX IF NOT EXISTS ix_lookups_at        ON lookups(at);
-            CREATE INDEX IF NOT EXISTS ix_lookups_result_at ON lookups(result, at);
-            """);
-        Execute("PRAGMA user_version = 1;");
+        if (version < 1)
+        {
+            Execute("""
+                CREATE TABLE IF NOT EXISTS lookups (
+                    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at     TEXT NOT NULL,     -- ISO-8601 UTC (lyrics.updated_at과 같은 포맷)
+                    title  TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    result TEXT NOT NULL,     -- 'exact' | 'cleaned' | 'miss'
+                    key    TEXT,              -- 히트 시 맞은 행의 key, 미스면 NULL
+                    device TEXT NOT NULL,
+                    client TEXT               -- User-Agent 원문(진단용)
+                );
+                CREATE INDEX IF NOT EXISTS ix_lookups_at        ON lookups(at);
+                CREATE INDEX IF NOT EXISTS ix_lookups_result_at ON lookups(result, at);
+                """);
+            Execute("PRAGMA user_version = 1;");
+        }
+
+        if (version < 2)
+        {
+            // 가사와 1:1(같은 key). 별도 테이블인 이유는 의미가 없어도 가사는 멀쩡해야 하고,
+            // 재생성이 가사 revision을 건드리면 안 되기 때문이다.
+            Execute("""
+                CREATE TABLE IF NOT EXISTS meanings (
+                    key        TEXT PRIMARY KEY,   -- lyrics.key와 같은 규칙
+                    title      TEXT NOT NULL,
+                    artist     TEXT NOT NULL,
+                    summary    TEXT,               -- 생성된 대상 언어 문단
+                    lang       TEXT NOT NULL,
+                    sources    TEXT NOT NULL,      -- JSON 배열: [{name,url,text}]
+                    genius_url TEXT,
+                    engine     TEXT,
+                    model      TEXT,               -- 재생성 판단용
+                    status     TEXT NOT NULL,      -- 'ok' | 'no-source' | 'failed'
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_meanings_status ON meanings(status);
+                """);
+            Execute("PRAGMA user_version = 2;");
+        }
     }
 
     // ---- 키 계산 (클라이언트와 같은 코드를 쓴다) ----
@@ -314,6 +340,131 @@ public sealed class LyricsStore : IDisposable
                 UpdatedAt = updatedAt,
                 Match = LyricsEntry.MatchExact,
             };
+        }
+    }
+
+    // ---- 곡의 의미 ----
+
+    /// <summary>
+    /// 저장된 의미를 찾는다. **가사와 같은 해석기(<see cref="Locate"/>)로 키를 정한다** —
+    /// 가사가 느슨한 키로 맞는 곡은 의미도 같이 맞아야 한다.
+    /// </summary>
+    public MeaningEntry? GetMeaning(string title, string artist)
+    {
+        lock (_lock)
+        {
+            var key = Locate(title, artist)?.Key ?? ExactKey(title, artist);
+            return ReadMeaning(key);
+        }
+    }
+
+    /// <summary>관리자 화면처럼 이미 key를 아는 곳에서 쓴다.</summary>
+    public MeaningEntry? GetMeaningByKey(string key)
+    {
+        lock (_lock) return ReadMeaning(key);
+    }
+
+    private MeaningEntry? ReadMeaning(string key)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT key, title, artist, summary, lang, sources, genius_url, engine, model, status, updated_at
+            FROM meanings WHERE key = $k LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$k", key);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+
+        return new MeaningEntry
+        {
+            Key = reader.GetString(0),
+            Title = reader.GetString(1),
+            Artist = reader.GetString(2),
+            Summary = reader.IsDBNull(3) ? null : reader.GetString(3),
+            Lang = reader.GetString(4),
+            Sources = reader.GetString(5),
+            GeniusUrl = reader.IsDBNull(6) ? null : reader.GetString(6),
+            Engine = reader.IsDBNull(7) ? null : reader.GetString(7),
+            Model = reader.IsDBNull(8) ? null : reader.GetString(8),
+            Status = reader.GetString(9),
+            UpdatedAt = reader.GetString(10),
+        };
+    }
+
+    /// <summary>의미를 저장한다(같은 key면 덮어쓴다 — 재생성이 정상 경로다).</summary>
+    public void UpsertMeaning(MeaningEntry entry)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO meanings (key, title, artist, summary, lang, sources, genius_url,
+                                      engine, model, status, updated_at)
+                VALUES ($key, $title, $artist, $summary, $lang, $sources, $genius,
+                        $engine, $model, $status, $at)
+                ON CONFLICT(key) DO UPDATE SET
+                    title = $title, artist = $artist, summary = $summary, lang = $lang,
+                    sources = $sources, genius_url = $genius, engine = $engine, model = $model,
+                    status = $status, updated_at = $at;
+                """;
+            cmd.Parameters.AddWithValue("$key", entry.Key);
+            cmd.Parameters.AddWithValue("$title", entry.Title);
+            cmd.Parameters.AddWithValue("$artist", entry.Artist);
+            cmd.Parameters.AddWithValue("$summary", (object?)entry.Summary ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$lang", entry.Lang);
+            cmd.Parameters.AddWithValue("$sources", entry.Sources);
+            cmd.Parameters.AddWithValue("$genius", (object?)entry.GeniusUrl ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$engine", (object?)entry.Engine ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$model", (object?)entry.Model ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$status", entry.Status);
+            cmd.Parameters.AddWithValue("$at", entry.UpdatedAt);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// 아직 의미가 없는 곡(백필 대상). 이미 시도해 본 곡은 제외한다 —
+    /// 실패·자료없음도 행이 남으므로 백필을 다시 눌러도 같은 곡을 무한히 재시도하지 않는다.
+    /// </summary>
+    public IReadOnlyList<(string Key, string Title, string Artist)> SongsWithoutMeaning(int limit)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT l.key, l.title, l.artist FROM lyrics l
+                LEFT JOIN meanings m ON m.key = l.key
+                WHERE m.key IS NULL
+                ORDER BY l.updated_at DESC
+                LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
+            using var reader = cmd.ExecuteReader();
+            var rows = new List<(string, string, string)>();
+            while (reader.Read()) rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            return rows;
+        }
+    }
+
+    /// <summary>대시보드 타일용 — 의미가 붙은 곡 수 / 전체 / 자료 없음.</summary>
+    public (int WithMeaning, int NoSource, int Failed) MeaningStats()
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                  SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status = 'no-source' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)
+                FROM meanings;
+                """;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read()) return (0, 0, 0);
+            return (
+                reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+                reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+                reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
         }
     }
 

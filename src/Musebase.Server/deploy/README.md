@@ -28,6 +28,11 @@ MUSEBASE_DB=/var/lib/musebase/lyrics.db
 # MUSEBASE_LOG_LOOKUPS=0             # 조회 기록을 남기지 않으려면
 # MUSEBASE_LOOKUP_RETENTION_DAYS=90  # 조회 기록 보존 기간(기본 90일)
 # MUSEBASE_YIELD_WINDOW_SECONDS=30   # 번역 양보 판정 창(0이면 끔) — 아래 참고
+# --- 곡의 의미(선택) — 11절 참고 ---
+# MUSEBASE_MEANING_ENGINE=gemini     # gemini | openrouter | none(기본)
+# MUSEBASE_GEMINI_API_KEY=...
+# MUSEBASE_GENIUS_TOKEN=...
+# MUSEBASE_LASTFM_KEY=...
 EOF
 sudo chmod 600 /etc/musebase/server.env     # 토큰 파일은 절대 저장소에 커밋하지 않는다
 ```
@@ -163,7 +168,51 @@ Spotify Connect처럼 **PC에서 재생하고 폰에서 조작**하면 두 기�
 두 앱 모두 **저장 즉시 반영**되며(재시작 불필요), 서버에 못 붙으면 조용히 기존 동작
 (로컬 캐시 → 제공자 검색)으로 강등된다.
 
+## 11. 곡의 의미 (선택)
+
+곡이 무엇에 대한 노래인지 한 문단으로 만들어 관리자 화면과 `/v1/meaning`에 실어 준다.
+**키를 넣지 않으면 통째로 꺼지고** 곡 상세에 Musixmatch·Genius 링크만 남는다(가사 기능엔 영향 없음).
+
+### 키 발급
+
+| 키 | 어디서 | 비고 |
+|---|---|---|
+| `MUSEBASE_GEMINI_API_KEY` | <https://aistudio.google.com/apikey> | 기존 GCP 프로젝트에 결제를 연결하면 무료 크레딧이 그대로 적용된다. 무료 티어만으로도 보유 곡 전체를 하루에 채울 수 있다 |
+| `MUSEBASE_GENIUS_TOKEN` | <https://genius.com/api-clients> → New API Client → **Generate Access Token** | 무료. OAuth 사용자 플로우 불필요 |
+| `MUSEBASE_LASTFM_KEY` | <https://www.last.fm/api/account/create> | 선택. Genius에 설명이 없는 곡을 메워 준다 |
+
+Wikipedia는 키가 필요 없고 기본으로 켜져 있다(`MUSEBASE_MEANING_WIKIPEDIA=0`으로 끔).
+
+```
+MUSEBASE_MEANING_ENGINE=gemini              # gemini | openrouter | none(기본)
+MUSEBASE_MEANING_LANG=ko
+MUSEBASE_GEMINI_API_KEY=...
+MUSEBASE_GEMINI_MODEL=gemini-2.5-flash-lite # 생략 가능
+MUSEBASE_GENIUS_TOKEN=...
+MUSEBASE_LASTFM_KEY=...
+MUSEBASE_MEANING_BACKFILL_LIMIT=50          # 일괄 생성 1회 처리량
+```
+
+### 모델을 바꿔 보고 싶다면
+
+`MUSEBASE_MEANING_ENGINE=openrouter` + `MUSEBASE_OPENROUTER_API_KEY`로 바꾸고
+`MUSEBASE_OPENROUTER_MODEL`에 모델 문자열만 넣으면 된다(`anthropic/claude-opus-5`,
+`google/gemini-2.5-flash` …). 같은 곡을 [다시 생성]으로 만들어 문장을 비교할 수 있다.
+대량 백필은 무료 티어가 있는 Gemini 쪽이 낫다.
+
+### 쓰는 법
+
+- 곡 상세 → **[의미 가져오기]** (다시 누르면 재생성)
+- 대시보드 → **[의미 일괄 생성]** — 아직 안 해 본 곡을 상한까지 처리
+- **생성은 사람이 누를 때만 일어난다.** 자동 생성은 두지 않았다 — 쿼타·비용이 예측 가능해야 하고
+  실패가 조용히 쌓이면 안 되기 때문이다.
+
+> **출처 표기 의무**: Wikipedia 본문은 CC BY-SA, Genius·Last.fm도 링크 표기를 요구한다.
+> 관리자 화면과 `/v1/meaning`의 `attribution`이 이를 담고 있으므로, 요약을 보여 주는 화면은
+> 출처를 함께 표시해야 한다.
+
 ## 업데이트
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
-따로 있으므로 배포로 지워지지 않는다.
+따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
+(현재 2 = `lyrics` + `lookups` + `meanings`).

@@ -20,7 +20,8 @@ public static class AdminPages
         </form>
         """);
 
-    public static string Dashboard(DashboardModel m, DateTimeOffset nowUtc, TimeZoneInfo tz)
+    public static string Dashboard(
+        DashboardModel m, DateTimeOffset nowUtc, TimeZoneInfo tz, string? notice = null)
     {
         var last = m.Recent.Count > 0 ? m.Recent[0] : null;
 
@@ -36,7 +37,12 @@ public static class AdminPages
                 $"{m.Week.Hits}/{m.Week.Total} · 느슨한 매치 {m.Week.Cleaned}"),
             Tile("보관 중인 가사",
                 $"{m.Stats.Songs}곡",
-                $"번역 {m.Stats.WithTranslation}곡 · DB {Bytes(m.DatabaseSizeBytes)}"));
+                $"번역 {m.Stats.WithTranslation}곡 · DB {Bytes(m.DatabaseSizeBytes)}"),
+            Tile("곡의 의미",
+                $"{m.Meanings.Ok}곡",
+                m.Meanings.Enabled
+                    ? $"자료 없음 {m.Meanings.NoSource} · 실패 {m.Meanings.Failed} · 남은 {m.Meanings.Pending}"
+                    : "엔진 미구성"));
 
         var recent = Table(
             ["시각", "곡", "아티스트", "결과", "기기"],
@@ -104,10 +110,22 @@ public static class AdminPages
         var diagnostics = string.Join("", m.Diagnostics.Select(d =>
             $"<tr><td class=\"nowrap\">{Esc(d.Name)}</td><td>{Esc(d.Value)}</td></tr>"));
 
+        var backfill = !m.Meanings.Enabled || m.Meanings.Pending == 0
+            ? ""
+            : $"""
+              <form method="post" action="/admin/meanings/backfill" class="inline">
+                <input type="hidden" name="csrf" value="{Esc(m.Csrf)}">
+                <button type="submit">의미 일괄 생성 ({m.Meanings.Pending}곡)</button>
+              </form>
+              <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다.</span>
+              """;
+
         return Layout("대시보드", $"""
+            {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
             <div class="tiles">{tiles}</div>
             <p class="meta">각 기기의 <b>로컬 캐시에 없는 곡만</b> 서버로 옵니다 —
             같은 곡을 반복 재생해도 조회 수는 늘지 않습니다(로컬 캐시 → 서버 → 제공자 검색 순).</p>
+            {backfill}
 
             <h2>최근 조회</h2>{recent}
             <h2>미스 상위 (7일) — 서버에 없어 각 기기가 직접 찾은 곡</h2>{misses}
@@ -152,7 +170,8 @@ public static class AdminPages
 
     public static string SongPage(
         LyricsEntry entry, IReadOnlyList<DisplayLine> lines, IReadOnlyList<string> langs,
-        string? selectedLang, bool showTags, string csrf, TimeZoneInfo tz, string? notice = null)
+        string? selectedLang, bool showTags, string csrf, TimeZoneInfo tz, string? notice = null,
+        MeaningEntry? meaning = null, bool meaningEnabled = false)
     {
         var key = entry.Key ?? "";
         var langLinks = langs.Count == 0
@@ -184,11 +203,7 @@ public static class AdminPages
               · <a href="/admin/song?key={Url(key)}&lang={Url(selectedLang)}&tags={(showTags ? 0 : 1)}">
                   타임태그 {(showTags ? "숨기기" : "보기")}</a>
               · <a href="/admin/raw?key={Url(key)}">원문(.lrc)</a></p>
-            <p class="meta">곡의 배경·의미:
-              <a href="{Esc(MeaningLinks.MusixmatchSearch(entry.Title, entry.Artist))}"
-                 target="_blank" rel="noopener noreferrer">Musixmatch</a>
-              · <a href="{Esc(MeaningLinks.GeniusSearch(entry.Title, entry.Artist))}"
-                 target="_blank" rel="noopener noreferrer">Genius</a></p>
+            {MeaningCard(entry, meaning, csrf, meaningEnabled)}
             {body}
 
             <h2>편집</h2>
@@ -210,6 +225,63 @@ public static class AdminPages
               <span class="meta">삭제하면 다음에 어느 기기든 재생할 때 다시 검색해 새로 채웁니다.</span>
             </form>
             """, "search");
+    }
+
+    /// <summary>
+    /// 가사 위에 붙는 "이 곡의 의미" 카드. 의미가 없으면 외부 링크와 생성 버튼만 보인다.
+    ///
+    /// <b>출처 표기는 의무다</b> — Wikipedia 본문은 CC BY-SA고 Genius·Last.fm도 링크 표기를
+    /// 요구하므로 요약과 항상 함께 렌더한다.
+    /// </summary>
+    private static string MeaningCard(
+        LyricsEntry entry, MeaningEntry? meaning, string csrf, bool enabled)
+    {
+        var key = entry.Key ?? "";
+        var geniusUrl = MeaningLinks.Genius(entry.Title, entry.Artist, meaning?.GeniusUrl);
+
+        var links = $"""
+            <a href="{Esc(MeaningLinks.MusixmatchSearch(entry.Title, entry.Artist))}"
+               target="_blank" rel="noopener noreferrer">Musixmatch</a>
+            · <a href="{Esc(geniusUrl)}" target="_blank" rel="noopener noreferrer">Genius</a>
+            """;
+
+        var button = !enabled
+            ? "<span class=\"meta\">의미 엔진이 구성되지 않았습니다.</span>"
+            : $"""
+              <form method="post" action="/admin/song/meaning" class="inline">
+                <input type="hidden" name="key" value="{Esc(key)}">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">{(meaning is null ? "의미 가져오기" : "다시 생성")}</button>
+              </form>
+              """;
+
+        var bodyHtml = meaning?.Status switch
+        {
+            MeaningEntry.StatusOk => $"<p>{Esc(meaning.Summary)}</p>",
+            MeaningEntry.StatusNoSource =>
+                "<p class=\"meta\">외부 자료를 찾지 못했습니다 — 위 링크에서 직접 확인해 보세요.</p>",
+            MeaningEntry.StatusFailed =>
+                "<p class=\"meta\">생성에 실패했습니다(키·쿼타·네트워크).</p>",
+            _ => "<p class=\"meta\">아직 만들지 않았습니다.</p>",
+        };
+
+        var attribution = MeaningMapper.Attribution(meaning?.Sources);
+        var credit = attribution.Count == 0
+            ? ""
+            : "<p class=\"meta\">출처: " + string.Join(" · ", attribution.Select(a =>
+                  string.IsNullOrWhiteSpace(a.Url)
+                      ? Esc(a.Name)
+                      : $"<a href=\"{Esc(a.Url)}\" target=\"_blank\" rel=\"noopener noreferrer\">{Esc(a.Name)}</a>"))
+              + (attribution.Any(a => a.Name == "Wikipedia") ? " (CC BY-SA)" : "")
+              + $" · {Esc(meaning?.Engine ?? "-")}/{Esc(meaning?.Model ?? "-")}</p>";
+
+        return $"""
+            <h2>이 곡의 의미</h2>
+            {bodyHtml}
+            {credit}
+            <p class="meta">{links}</p>
+            {button}
+            """;
     }
 
     // ---- 조각 ----

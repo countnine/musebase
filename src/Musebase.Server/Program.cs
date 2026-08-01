@@ -55,7 +55,12 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", LogLevel.Warning);
 var app = builder.Build();
 using var store = new LyricsStore(dbPath);
 var admin = AdminOptions.FromEnvironment(token!);
-app.MapAdmin(store, admin);
+
+// 곡의 의미 — 키가 없으면 서비스가 꺼진 상태로 만들어지고 아무 데도 영향을 주지 않는다.
+var meaningOptions = MeaningOptions.FromEnvironment();
+var meanings = meaningOptions.BuildService();
+
+app.MapAdmin(store, admin, meanings, meaningOptions);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -152,6 +157,23 @@ app.MapPut("/v1/lyrics", async (HttpRequest request) =>
 
 app.MapGet("/v1/stats", (HttpRequest request) =>
     !Authorized(request) ? Unauthorized() : Results.Ok(store.Stats()));
+
+// 곡의 의미 — 앱은 조회만 한다. 생성은 관리자 화면에서만 일어난다(쿼타·비용을 사람이 통제).
+app.MapGet("/v1/meaning", (HttpRequest request, string? title, string? artist) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
+
+    var found = store.GetMeaning(title!, artist ?? "");
+    if (found is null || found.Status != MeaningEntry.StatusOk) return Results.NotFound();
+
+    // 원문 전체(sources)는 무겁고 앱에 필요 없다 — 출처 표기만 계산해 싣는다.
+    return Results.Ok(found with
+    {
+        Sources = "",
+        Attribution = MeaningMapper.Attribution(found.Sources),
+    });
+});
 
 app.Run();
 return 0;

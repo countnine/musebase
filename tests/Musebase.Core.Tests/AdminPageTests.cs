@@ -228,15 +228,58 @@ public class AdminPageTests
     [Fact]
     public void 조회_기록이_비면_안내행이_렌더된다()
     {
-        var model = new DashboardModel(
-            new ServerStats(0, 0, null), 0, new HitRate(0, 0, 0), new HitRate(0, 0, 0),
-            [], [], [], [], [], [], [], [],
-            new ServerHealth(TimeSpan.FromHours(1), 0, 0, 90), []);
-
-        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
 
         Assert.Contains("아직 조회가 없습니다", html);
         Assert.Contains("colspan", html);
         Assert.DoesNotContain("<script", html);   // JS를 쓰지 않는다(CSP를 강하게 잠글 수 있는 근거)
     }
+
+    // ---- 곡의 의미 ----
+
+    [Fact]
+    public void 의미_엔진이_없으면_일괄_생성_버튼이_뜨지_않는다()
+    {
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(0, 0, 0, Pending: 30, Enabled: false),
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("엔진 미구성", html);
+        Assert.DoesNotContain("/admin/meanings/backfill", html);
+    }
+
+    [Fact]
+    public void 처리할_곡이_있으면_일괄_생성_버튼에_곡_수가_보인다()
+    {
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(5, 1, 0, Pending: 30, Enabled: true),
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("/admin/meanings/backfill", html);
+        Assert.Contains("의미 일괄 생성 (30곡)", html);
+    }
+
+    [Fact]
+    public void 처리할_곡이_없으면_버튼을_숨긴다()
+    {
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(5, 1, 0, Pending: 0, Enabled: true),
+        };
+
+        Assert.DoesNotContain("/admin/meanings/backfill",
+            AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
+    }
+
+    private static DashboardModel EmptyDashboard() => new(
+        new ServerStats(0, 0, null), 0, new HitRate(0, 0, 0), new HitRate(0, 0, 0),
+        [], [], [], [], [], [], [], [],
+        new ServerHealth(TimeSpan.FromHours(1), 0, 0, 90), [],
+        new MeaningSummary(0, 0, 0, 0, false), "csrf-token");
 }

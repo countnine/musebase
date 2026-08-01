@@ -29,6 +29,7 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | GET | `/v1/lyrics?title=&artist=` | 가사 1건 조회. 히트 `200 LyricsEntry`, 미스 `404` |
 | PUT | `/v1/lyrics` | 가사 1건 업서트. 본문 `LyricsEntry`(요청 필드만) |
 | GET | `/v1/stats` | 곡 수·최근 갱신(검증·디버깅용) |
+| GET | `/v1/meaning?title=&artist=` | 곡의 의미 1건. 히트 `200 MeaningEntry`, 없으면 `404` |
 
 요청 본문 상한은 256KB, `Content-Type: application/json`이 아니면 `415`.
 
@@ -128,6 +129,35 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 
 만료(TTL)는 두지 않는다. 삭제 API도 없다 — 한 기기의 "틀린 가사" 판정이 모든 기기의 캐시를
 지우지 않도록, 억제는 로컬에만 남긴다. (사람이 확인하고 지우는 경로는 관리자 UI에만 있다. 아래 참고.)
+
+## 곡의 의미 (`GET /v1/meaning`)
+
+곡이 무엇에 대한 노래인지 한 문단으로 알려 준다. 서버가 외부 자료(Genius·Last.fm·Wikipedia)를
+모아 요약해 저장해 둔 것을 읽기만 한다 — **클라이언트는 생성하지 않는다.** 생성은 관리자 화면에서
+사람이 눌러야 일어난다(쿼타·비용을 사람이 통제한다).
+
+키 정규화 규칙은 가사와 **완전히 같다**(정확 키 → 느슨한 키). 가사가 맞는 곡은 의미도 맞는다.
+
+| 필드 | 형 | 설명 |
+|---|---|---|
+| `key` | string | 가사와 같은 키 |
+| `title` / `artist` | string | 저장된 표기 |
+| `summary` | string | **본문** — 대상 언어 한 문단 |
+| `lang` | string | 요약 언어(`ko` 등) |
+| `geniusUrl` | string? | 정확한 Genius 곡 페이지(있으면) |
+| `engine` / `model` | string? | 생성에 쓴 엔진·모델 |
+| `attribution` | `[{name, url}]` | **출처 목록 — 표시 의무가 있다(아래)** |
+| `updatedAt` | string | ISO-8601 UTC |
+
+의미가 없거나 만들다 실패한 곡은 `404`다 — 앱은 그냥 이 영역을 감추면 된다.
+원문(`sources`)은 무겁고 앱에 필요 없어 응답에서 비운다.
+
+> ⚠️ **출처 표기는 선택이 아니다.** Wikipedia 본문은 CC BY-SA이고 Genius·Last.fm도 링크 표기를
+> 요구한다. `summary`를 보여 주는 화면은 `attribution`의 이름·링크를 함께 렌더해야 하며,
+> 목록에 Wikipedia가 있으면 CC BY-SA 표기도 함께 붙인다.
+
+**Musixmatch는 이 API에 없다.** 사이트의 "Meaning" 섹션은 공개 API로 노출되지 않고(meaning
+엔드포인트가 없다) 크롤링은 약관 위반이라, 사람이 직접 읽으러 가는 **링크로만** 제공한다.
 
 ## 관리자 UI (`/admin/*`) — 계약 밖
 

@@ -45,7 +45,12 @@ public sealed record DashboardModel(
     IReadOnlyList<SongRow> WithoutTranslation,
     IReadOnlyList<SongRow> DuplicateCandidates,
     ServerHealth Health,
-    IReadOnlyList<(string Name, string Value)> Diagnostics);
+    IReadOnlyList<(string Name, string Value)> Diagnostics,
+    MeaningSummary Meanings,
+    string Csrf);
+
+/// <summary>대시보드의 "곡의 의미" 타일 — 만든 것 / 자료 없음 / 실패 + 아직 안 해 본 곡 수.</summary>
+public sealed record MeaningSummary(int Ok, int NoSource, int Failed, int Pending, bool Enabled);
 
 /// <summary>서버 상태(작은 인스턴스라 실제로 쓸모 있다).</summary>
 public sealed record ServerHealth(TimeSpan Uptime, long WorkingSetBytes, long DiskFreeBytes, int RetentionDays);
