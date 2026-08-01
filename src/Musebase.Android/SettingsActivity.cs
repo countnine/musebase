@@ -102,6 +102,7 @@ public sealed class SettingsActivity : Activity
     private LinearLayout? _translationSection;
     private LinearLayout? _overlaySection;
     private LinearLayout? _adMuteSection;
+    private LinearLayout? _aboutSection;
 
     // 광고 뮤트 입력.
     private CheckBox? _adMuteCheck;
@@ -141,6 +142,7 @@ public sealed class SettingsActivity : Activity
         _translationSection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
         _overlaySection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
         _adMuteSection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
+        _aboutSection = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
         root.AddView(BuildTabBar());
 
         // ---- 재생 소스(어느 앱의 재생을 따라갈지) ----
@@ -439,6 +441,10 @@ public sealed class SettingsActivity : Activity
         sections.AddView(_overlaySection);
         sections.AddView(_adMuteSection);
 
+        // ---- 정보(Windows 설정 [정보] 탭과 같은 내용) ----
+        BuildAboutSection(_aboutSection);
+        sections.AddView(_aboutSection);
+
         var scroll = new ScrollView(this) { FillViewport = true };
         scroll.AddView(sections, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
@@ -566,23 +572,116 @@ public sealed class SettingsActivity : Activity
                 0, ViewGroup.LayoutParams.WrapContent, 1f));
         }
 
-        AddTab("재생 소스", 0);
+        AddTab("소스", 0);
         AddTab("번역", 1);
         AddTab("오버레이", 2);
-        AddTab("광고 뮤트", 3);
+        AddTab("광고", 3);
+        AddTab("정보", 4);
         return bar;
     }
 
     private void SelectTab(int index)
     {
-        if (_sourceSection is null || _translationSection is null
-            || _overlaySection is null || _adMuteSection is null) return;
+        if (_sourceSection is null || _translationSection is null || _overlaySection is null
+            || _adMuteSection is null || _aboutSection is null) return;
         _sourceSection.Visibility = index == 0 ? ViewStates.Visible : ViewStates.Gone;
         _translationSection.Visibility = index == 1 ? ViewStates.Visible : ViewStates.Gone;
         _overlaySection.Visibility = index == 2 ? ViewStates.Visible : ViewStates.Gone;
         _adMuteSection.Visibility = index == 3 ? ViewStates.Visible : ViewStates.Gone;
+        _aboutSection.Visibility = index == 4 ? ViewStates.Visible : ViewStates.Gone;
         for (var i = 0; i < _tabButtons.Count; i++)
             _tabButtons[i].Alpha = i == index ? 1f : 0.55f; // 선택된 탭을 진하게
+    }
+
+    /// <summary>
+    /// [정보] 탭 — Windows 설정 [정보] 탭과 같은 내용(앱 이름·버전·출처·라이선스·링크)에
+    /// 안드로이드에서만 의미 있는 항목(패키지·OS·기기)을 더한다. 버전은 하드코딩하지 않고
+    /// <c>PackageManager</c>에서 읽어 릴리스마다 손댈 곳이 없게 한다.
+    /// </summary>
+    private void BuildAboutSection(LinearLayout section)
+    {
+        var (versionName, versionCode) = AppVersion();
+
+        section.AddView(Label("Musebase for Android", topPad: 40));
+
+        var version = new TextView(this) { Text = $"버전 {versionName} (빌드 {versionCode})" };
+        version.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 14f);
+        version.SetPadding(0, 8, 0, 0);
+        section.AddView(version);
+
+        section.AddView(Note("formerly LyricsX", topPad: 2));
+        section.AddView(Note(
+            "재생 중인 곡의 싱크 가사와 번역을 다른 앱 위에 겹쳐 보여주는 가사 오버레이입니다.",
+            topPad: 20));
+
+        section.AddView(Note("라이선스: MPL-2.0", topPad: 24));
+        section.AddView(Note("ddddxxx의 LyricsX·LyricsKit(MPL-2.0)에서 포팅했습니다.", topPad: 2));
+
+        LinkRow("GitHub 저장소", "https://github.com/countnine/musebase");
+        LinkRow("홈페이지", "https://countnine.github.io/musebase-home/");
+        LinkRow("최신 릴리스 · 업데이트", "https://github.com/countnine/musebase/releases");
+        LinkRow("라이선스 (MPL-2.0)", "https://github.com/countnine/musebase/blob/master/LICENSE");
+
+        // 문제를 알릴 때 필요한 값들 — 눌러서 통째로 복사할 수 있게 한다.
+        var diagnostics =
+            $"패키지: {PackageName}\n"
+            + $"Android {Build.VERSION.Release} (API {(int)Build.VERSION.SdkInt})\n"
+            + $"기기: {Build.Manufacturer} {Build.Model}";
+        var diagnosticsView = Note(diagnostics + "\n\n(탭하면 복사)", topPad: 28);
+        diagnosticsView.Clickable = true;
+        diagnosticsView.Click += (_, _) =>
+        {
+            // Android.Text.ClipboardManager(구형)와 이름이 겹쳐 정규화된 이름을 쓴다.
+            if (GetSystemService(ClipboardService) is global::Android.Content.ClipboardManager clipboard)
+            {
+                clipboard.PrimaryClip = ClipData.NewPlainText(
+                    "Musebase", $"Musebase for Android {versionName} ({versionCode})\n{diagnostics}");
+                Toast.MakeText(this, "복사했습니다", ToastLength.Short)?.Show();
+            }
+        };
+        section.AddView(diagnosticsView);
+
+        void LinkRow(string text, string url)
+        {
+            var view = new TextView(this) { Text = text };
+            view.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 14f);
+            view.SetPadding(0, 20, 0, 0);
+            view.SetTextColor(global::Android.Graphics.Color.Argb(0xFF, 0x64, 0xB5, 0xF6));
+            view.PaintFlags |= global::Android.Graphics.PaintFlags.UnderlineText;
+            view.Clickable = true;
+            view.Click += (_, _) =>
+            {
+                try
+                {
+                    StartActivity(new Intent(Intent.ActionView, global::Android.Net.Uri.Parse(url))
+                        .AddFlags(ActivityFlags.NewTask));
+                }
+                catch (Exception e)
+                {
+                    global::Android.Util.Log.Warn("Musebase", $"link: {e.Message}");
+                }
+            };
+            section.AddView(view);
+        }
+    }
+
+    /// <summary>설치된 패키지에서 표시용 버전과 빌드 번호를 읽는다.</summary>
+    private (string Name, long Code) AppVersion()
+    {
+        try
+        {
+            var info = PackageManager?.GetPackageInfo(PackageName!, 0);
+            if (info is null) return ("?", 0);
+            var code = OperatingSystem.IsAndroidVersionAtLeast(28)
+                ? info.LongVersionCode
+                : info.VersionCode;
+            return (info.VersionName ?? "?", code);
+        }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Warn("Musebase", $"version: {e.Message}");
+            return ("?", 0);
+        }
     }
 
     /// <summary>"라벨 — 현재값" + 슬라이더 한 줄. 값이 바뀌면 라벨이 즉시 갱신된다.</summary>
@@ -807,6 +906,15 @@ public sealed class SettingsActivity : Activity
         var tv = new TextView(this) { Text = text };
         tv.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 14f);
         tv.SetPadding(0, topPad, 0, 8);
+        return tv;
+    }
+
+    /// <summary>본문보다 작고 흐린 보조 설명 줄(다른 탭의 안내 문구와 같은 크기).</summary>
+    private TextView Note(string text, int topPad)
+    {
+        var tv = new TextView(this) { Text = text, Alpha = 0.75f };
+        tv.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        tv.SetPadding(0, topPad, 0, 0);
         return tv;
     }
 }

@@ -78,6 +78,40 @@ public class TranslationSharingTests
         }
     }
 
+    /// <summary>
+    /// 재생 소스는 길이·앨범 같은 메타데이터를 뒤늦게 채워 넣으며 같은 곡을 다시 통지한다
+    /// (TrackInfo는 record라 그 필드까지 같아야 같은 값이다). 그때마다 검색을 다시 돌리면
+    /// 가사 서버에 같은 요청이 두 번 나간다 — 실제 서버 로그에서 1~8초 간격 중복으로 확인됐다.
+    /// </summary>
+    [Fact]
+    public async Task 길이만_늦게_채워진_같은_곡은_서버에_다시_묻지_않는다()
+    {
+        var remote = new FakeRemoteCache(null); // 미스 → 제공자 검색으로 흘러간다(빈손)
+        using var coordinator = NewCoordinator(remote, out var source);
+        coordinator.Start();
+        await remote.WaitForLookupAsync();
+
+        source.RaiseTrack(new TrackInfo("Song", "Artist", "", TimeSpan.FromMinutes(3), "TestPlayer.exe"));
+        source.RaiseTrack(new TrackInfo("Song", "Artist", "Some Album", TimeSpan.FromMinutes(3), "TestPlayer.exe"));
+        await Task.Delay(150);
+
+        Assert.Equal(1, remote.Lookups);
+    }
+
+    [Fact]
+    public async Task 곡이_실제로_바뀌면_다시_묻는다()
+    {
+        var remote = new FakeRemoteCache(null);
+        using var coordinator = NewCoordinator(remote, out var source);
+        coordinator.Start();
+        await remote.WaitForLookupAsync();
+
+        source.RaiseTrack(new TrackInfo("Other Song", "Artist", "", null, "TestPlayer.exe"));
+        await Task.Delay(150);
+
+        Assert.Equal(2, remote.Lookups);
+    }
+
     // ---- 배선 ----
 
     private static LyricsCoordinator NewCoordinator(

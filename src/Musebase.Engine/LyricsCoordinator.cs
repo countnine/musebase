@@ -31,6 +31,9 @@ public sealed class LyricsCoordinator : IDisposable
     private CancellationTokenSource? _searchCts;
     private int _lastLineIndex = int.MinValue;
 
+    // 마지막으로 검색 파이프라인을 돌린 곡("제목|아티스트"). 같은 곡이 다시 통지되면 건너뛴다.
+    private string? _searchedTrackKey;
+
     // 텔레메트리 발화 제어: playback_source는 같은 트랙 반복 발화 방지, translation은 곡당 1회
     private string? _lastPlaybackSourceKey;
     private bool _translationReported;
@@ -172,6 +175,18 @@ public sealed class LyricsCoordinator : IDisposable
 
     private async void OnTrackChanged(TrackInfo? track)
     {
+        // 제목·아티스트가 그대로면 다시 검색하지 않는다. 재생 소스는 길이·앨범 같은 메타데이터를
+        // 뒤늦게 채워 넣으며 트랙 변경을 한 번 더 통지하는데(TrackInfo는 record라 그 필드까지
+        // 같아야 같은 값이다), 그때마다 파이프라인을 다시 돌리면 **가사 서버·제공자에 같은 요청이
+        // 두 번** 나간다(실측: 안드로이드에서 1~8초 간격 중복 조회). 표시 상태는 갱신해 준다.
+        var trackKey = track is null ? null : LyricsCacheStore.MakeKey(track.Title, track.Artist);
+        if (trackKey is not null && trackKey == _searchedTrackKey)
+        {
+            EmitState(); // 길이·앨범 등 바뀐 메타데이터는 반영
+            return;
+        }
+        _searchedTrackKey = trackKey;
+
         _searchCts?.Cancel();
         CurrentLyrics = null;
         _lastLineIndex = int.MinValue;

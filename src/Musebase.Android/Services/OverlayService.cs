@@ -91,8 +91,8 @@ public sealed class OverlayService : Service
 
     private bool _moveMode;              // 이동 모드(밴드가 터치를 받는 동안만 true)
     private bool _bubbleMode;            // 버블 모드(설정에서 켬)
-    private bool _bandExpanded = true;   // 버블 모드에서 밴드를 펼쳐 두었는지(사용자가 버블 탭으로 정한다)
-    private bool _expandedBeforeMove;    // 이동 모드가 강제로 펼치기 전의 상태(끝나면 되돌린다)
+    private bool _bandExpanded = true;   // 사용자가 오버레이를 켜 두었는지(버블 탭으로만 바뀐다)
+    private bool _peeking;               // 새 줄이 나와 잠깐 보여 주는 중(켬/끔과 별개)
     private bool _bandPositionPending;   // 저장된 위치를 아직 적용하지 못했다(뷰 크기 확정 전)
     private int _screenWidth, _screenHeight;
 
@@ -352,7 +352,7 @@ public sealed class OverlayService : Service
     /// <summary>
     /// 버블 하나에 세 가지를 싣는다.
     /// ① 테두리 링 색 = 가사 상태(검색 중 회전 / 찾음 밝게 / 못 찾음 회색),
-    /// ② 링 굵기·이중선 = 오버레이가 지금 보이는지,
+    /// ② 링 줄 수 = 사용자가 오버레이를 **켜 두었는지**(지금 그려지고 있는지가 아니다),
     /// ③ 우상단 점 = 번역 예외(한도·실패=주황, API 꺼짐=회색). 정상이면 점 없음.
     /// 안쪽 채움은 상태를 나타내지 않고 **오버레이 배경 설정**을 따른다 — 상태를 채움으로
     /// 알리면 버블이 불투명해져 뒤의 화면을 가린다.
@@ -380,9 +380,12 @@ public sealed class OverlayService : Service
             _ => null,
         };
 
+        // 사용자가 버블을 눌러 켜 둔 상태. 밴드 모드(버블 없음)에서는 항상 켜져 있는 셈이다.
+        var overlayOn = !_bubbleMode || _bandExpanded;
+
         _bubbleBackground.SetStatus(
             state,
-            _bandVisible,
+            overlayOn,
             AndroidSettings.ParseColor(settings?.OverlayTextColor, Color.White),
             AndroidSettings.ParseColor(settings?.OverlayKaraokeColor, KaraokeTextView.DefaultFillColor),
             BubbleFillColor(settings),
@@ -393,12 +396,13 @@ public sealed class OverlayService : Service
         {
             // 곡이 없을 때만 살짝 흐리게 — 그 외에는 상태를 또렷하게 읽히도록 완전 불투명.
             _bubbleView.Alpha = state == BubbleLyricsState.Missing && !_isPlaying ? 0.8f : 1f;
-            _bubbleView.ContentDescription = state switch
+            var lyrics = state switch
             {
                 BubbleLyricsState.Searching => "가사 찾는 중",
-                BubbleLyricsState.Found => _bandVisible ? "가사 표시 중" : "가사 있음 — 탭하면 표시",
+                BubbleLyricsState.Found => _bandVisible ? "가사 표시 중" : "가사 있음",
                 _ => "가사 없음",
             };
+            _bubbleView.ContentDescription = $"{lyrics} · 오버레이 {(overlayOn ? "켬" : "끔")}";
         }
     }
 
@@ -922,9 +926,9 @@ public sealed class OverlayService : Service
         _moveMode = on;
         if (on)
         {
-            _bandLp.Flags = WindowManagerFlags.NotFocusable; // NotTouchable 해제 = 드래그 가능
-            _expandedBeforeMove = _bandExpanded;             // 이동이 끝나면 사용자가 정한 상태로 되돌린다
-            _bandExpanded = true;                            // 버블 모드여도 옮기려면 보여야 한다
+            // NotTouchable 해제 = 드래그 가능. 이동 중에는 UpdateVisibility가 _moveMode만 보고
+            // 밴드를 띄우므로, 사용자의 켬/끔(_bandExpanded)은 건드리지 않는다.
+            _bandLp.Flags = WindowManagerFlags.NotFocusable;
             CancelPeek();
             // 재생 중이 아니면 빈 카드가 되어 잡을 곳이 없으므로 안내 문구를 넣어 준다.
             if (!_hasLine) _lineView?.SetLine("드래그해서 위치를 잡으세요", null, 0);
@@ -933,7 +937,6 @@ public sealed class OverlayService : Service
         {
             _bandLp.Flags = WindowManagerFlags.NotFocusable | WindowManagerFlags.NotTouchable;
             SavePosition(_overlayView, _bandLp, isBubble: false);
-            if (_bubbleMode) _bandExpanded = _expandedBeforeMove;
             _coordinator?.RefreshCurrentLine(); // 안내 문구 → 실제 가사로 복귀
         }
 
@@ -947,18 +950,21 @@ public sealed class OverlayService : Service
 
     // ---- peek(접힌 상태에서 잠깐 보여 주기) ----
 
+    /// <summary>
+    /// 접혀 있을 때 새 줄이 나오면 잠깐 보여 준다. **사용자의 켬/끔(<c>_bandExpanded</c>)은 건드리지
+    /// 않는다** — 여기서 그 값을 흔들면 버블의 "켜 둠" 표기가 3초마다 깜빡인다.
+    /// </summary>
     private void PeekIfCollapsed()
     {
         if (!_bubbleMode || _bandExpanded || _moveMode) return;
         if (!(MusebaseApp.Instance?.Settings.OverlayPeekOnNewLine ?? true)) return;
         CancelPeek();
-        _bandExpanded = true;
+        _peeking = true;
         UpdateVisibility();
         _peekCollapse = new Java.Lang.Runnable(() =>
         {
-            _bandExpanded = false;
+            _peeking = false;
             UpdateVisibility();
-            UpdateBubbleAppearance();
             _peekCollapse = null;
         });
         _handler.PostDelayed(_peekCollapse, PeekMs);
@@ -966,6 +972,7 @@ public sealed class OverlayService : Service
 
     private void CancelPeek()
     {
+        _peeking = false;
         if (_peekCollapse is null) return;
         _handler.RemoveCallbacks(_peekCollapse);
         _peekCollapse = null;
@@ -1066,10 +1073,11 @@ public sealed class OverlayService : Service
     private void UpdateVisibility()
     {
         var show = _overlayView is not null
-            && (_moveMode || (_hasLine && _isPlaying && (!_bubbleMode || _bandExpanded)));
-        // 버블의 "표시 중" 표기는 _bandExpanded가 아니라 **실제로 보이는지**를 따라야 한다
-        // (펼쳐 뒀어도 일시정지·무가사면 밴드는 보이지 않는다).
+            && (_moveMode || (_hasLine && _isPlaying && (!_bubbleMode || _bandExpanded || _peeking)));
         _bandVisible = show;
+        // 버블의 두 줄 표기는 **사용자가 켜 둔 상태**(_bandExpanded)를 따른다 — 실제 표시 여부가
+        // 아니다. 가사가 없는 구간이나 일시정지에는 밴드가 잠깐 사라지는데, 그때 한 줄로 돌아가면
+        // "내가 꺼진 건가?" 싶어 버블을 또 누르게 된다. 켜 둔 상태와 지금 그려지고 있는지는 별개다.
         UpdateBubbleAppearance();
 
         if (_overlayView is null) return;
