@@ -26,7 +26,8 @@ public class MeaningLinksTests
     public void 공백과_특수문자는_URL로_이스케이프된다()
     {
         var url = MeaningLinks.MusixmatchSearch("Don't Delete The Kisses", "Wolf Alice");
-        Assert.StartsWith("https://www.musixmatch.com/search/", url);
+        // 경로형(/search/{검색어})은 실측에서 403이다 — 쿼리 형식이어야 한다.
+        Assert.StartsWith("https://www.musixmatch.com/search?query=", url);
         Assert.DoesNotContain(" ", url);
         Assert.Contains("%20", url);
         Assert.Contains("%27", url); // 작은따옴표

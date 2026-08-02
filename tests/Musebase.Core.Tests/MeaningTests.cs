@@ -229,6 +229,28 @@ public class MeaningTests
         Assert.True(GeniusSource.Matches("Wonderwall", "Oasis", "Wonderwall", ""));
     }
 
+    [Fact]
+    public void 스니펫의_HTML과_앰퍼샌드를_이해한다()
+    {
+        // 실측: 위키피디아 스니펫은 "Belle &amp; Sebastian"과 <span class="searchmatch">를
+        // 그대로 담아 온다. 처리하지 않으면 "amp"가 글자로 섞여 아티스트가 영영 안 맞는다.
+        WikipediaSource.SearchHit[] hits =
+        [
+            new("The Boy with the Arab Strap",
+                "the third studio album by Scottish indie pop band <span class=\"searchmatch\">Belle &amp; Sebastian</span>"),
+        ];
+
+        Assert.Equal("The Boy with the Arab Strap",
+            WikipediaSource.PickPage(hits, "The Boy with the Arab Strap", "Belle and Sebastian"));
+    }
+
+    [Fact]
+    public void 앰퍼샌드와_and는_같은_말로_본다()
+    {
+        Assert.Equal(MeaningText.Normalize("Belle & Sebastian"), MeaningText.Normalize("Belle and Sebastian"));
+        Assert.Equal("belleandsebastian", MeaningText.Normalize("Belle &amp; Sebastian"));
+    }
+
     // ---- 아티스트 표기 정리 ----
 
     [Theory]

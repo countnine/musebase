@@ -21,8 +21,13 @@ public static class MeaningLinks
         return a.Length == 0 ? t : $"{a} {t}";
     }
 
+    /// <summary>
+    /// 반드시 <c>?query=</c> 형식이어야 한다. 경로형(<c>/search/{검색어}</c>)은 실측에서
+    /// <b>403</b>을 준다 — 계획 단계에서는 Cloudflare 때문에 형식을 미리 확인할 수 없어
+    /// 경로형으로 넣어 뒀다가, 배포 후 실제로 눌러 보고 잡았다.
+    /// </summary>
     public static string MusixmatchSearch(string title, string artist) =>
-        "https://www.musixmatch.com/search/" + Uri.EscapeDataString(Query(title, artist));
+        "https://www.musixmatch.com/search?query=" + Uri.EscapeDataString(Query(title, artist));
 
     public static string GeniusSearch(string title, string artist) =>
         "https://genius.com/search?q=" + Uri.EscapeDataString(Query(title, artist));
