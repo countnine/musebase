@@ -56,8 +56,10 @@ public static class AdminEndpoints
         this WebApplication app, LyricsStore store, AdminOptions options,
         Musebase.Core.Meaning.SongMeaningService meanings, MeaningOptions meaningOptions)
     {
-        // JS가 없으므로 스크립트를 통째로 막는다(인라인 스타일만 허용).
-        const string Csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'";
+        // 스크립트는 딱 하나(제출 스피너)뿐이라 'unsafe-inline' 대신 **그 해시만** 허용한다 —
+        // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
+        var Csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+                + $"script-src {AdminHtml.ScriptCsp}";
 
         IResult Html(string html) =>
             Results.Text(html, "text/html; charset=utf-8");
@@ -170,7 +172,10 @@ public static class AdminEndpoints
             return Html(AdminPages.SongPage(
                 entry, AdminLrc.ToDisplayLines(entry.Lrc, selected), langs, selected, showTags,
                 AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), options.TimeZone, notice,
-                store.GetMeaningByKey(entry.Key ?? ""), meanings.IsEnabled));
+                store.GetMeaningByKey(entry.Key ?? ""), meanings.IsEnabled,
+                meaningOptions.SelectableSources()
+                    .Select(s => (s.Id, MeaningOptions.SourceLabel(s.Id), s.Default))
+                    .ToList()));
         });
 
         app.MapGet("/admin/raw", (HttpRequest req, string? key) =>
@@ -227,7 +232,9 @@ public static class AdminEndpoints
             var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
             if (entry is null) return Results.Redirect("/admin/search");
 
-            var notice = await GenerateMeaningAsync(entry.Key ?? key, entry.Title, entry.Artist);
+            // 화면에서 고른 자료원(체크박스). 하나도 안 고르면 설정값으로 만든다.
+            var picked = form["src"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).ToList();
+            var notice = await GenerateMeaningAsync(entry.Key ?? key, entry.Title, entry.Artist, picked);
             return Results.Redirect(
                 $"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
         });
@@ -271,10 +278,11 @@ public static class AdminEndpoints
         });
 
         // 단건 생성 후 사람에게 보여 줄 한 줄.
-        async Task<string> GenerateMeaningAsync(string key, string title, string artist)
+        async Task<string> GenerateMeaningAsync(
+            string key, string title, string artist, IReadOnlyList<string>? only = null)
         {
             if (!meanings.IsEnabled) return "의미 엔진이 구성되지 않았습니다(키를 확인하세요).";
-            var status = await GenerateStatusAsync(key, title, artist);
+            var status = await GenerateStatusAsync(key, title, artist, only);
             return status switch
             {
                 Musebase.Core.Meaning.SongMeaning.Ok => "의미를 만들었습니다.",
@@ -322,9 +330,12 @@ public static class AdminEndpoints
         // 결과를 저장하고 status만 돌려준다. 실패·자료없음도 행으로 남겨 백필이 같은 곡을
         // 무한히 재시도하지 않게 한다 — 단 **일시적 실패는 예외다.** 쿼타 초과를 행으로
         // 남기면 한도가 회복된 뒤에도 그 곡은 영영 건너뛰어진다.
-        async Task<string> GenerateStatusAsync(string key, string title, string artist)
+        async Task<string> GenerateStatusAsync(
+            string key, string title, string artist, IReadOnlyList<string>? only = null)
         {
-            var result = await meanings.BuildAsync(title, artist, meaningOptions.Lang);
+            // 소스를 골라 왔으면 이번 한 번만 그 조합으로 만든다(설정은 그대로 둔다).
+            var service = only is { Count: > 0 } ? meaningOptions.BuildService(only) : meanings;
+            var result = await service.BuildAsync(title, artist, meaningOptions.Lang);
             if (result.Status == Musebase.Core.Meaning.SongMeaning.Retry) return result.Status;
 
             // 곡 페이지 주소는 의미 소스와 별개다 — Musixmatch를 자료로 쓰지 않아도 링크는 정확해야 한다.

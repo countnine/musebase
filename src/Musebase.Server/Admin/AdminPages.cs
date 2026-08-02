@@ -109,7 +109,7 @@ public static class AdminPages
         var backfill = !m.Meanings.Enabled || m.Meanings.Pending == 0
             ? ""
             : $"""
-              <form method="post" action="/admin/meanings/backfill" class="inline">
+              <form method="post" action="/admin/meanings/backfill" class="inline" data-busy>
                 <input type="hidden" name="csrf" value="{Esc(m.Csrf)}">
                 <button type="submit">의미 일괄 생성 ({m.Meanings.Pending}곡)</button>
               </form>
@@ -246,7 +246,8 @@ public static class AdminPages
     public static string SongPage(
         LyricsEntry entry, IReadOnlyList<DisplayLine> lines, IReadOnlyList<string> langs,
         string? selectedLang, bool showTags, string csrf, TimeZoneInfo tz, string? notice = null,
-        MeaningEntry? meaning = null, bool meaningEnabled = false)
+        MeaningEntry? meaning = null, bool meaningEnabled = false,
+        IReadOnlyList<(string Id, string Label, bool Checked)>? meaningSources = null)
     {
         var key = entry.Key ?? "";
         var langLinks = langs.Count == 0
@@ -278,7 +279,7 @@ public static class AdminPages
               · <a href="/admin/song?key={Url(key)}&lang={Url(selectedLang)}&tags={(showTags ? 0 : 1)}">
                   타임태그 {(showTags ? "숨기기" : "보기")}</a>
               · <a href="/admin/raw?key={Url(key)}">원문(.lrc)</a></p>
-            {MeaningCard(entry, meaning, csrf, meaningEnabled)}
+            {MeaningCard(entry, meaning, csrf, meaningEnabled, meaningSources ?? [])}
             {body}
 
             <h2>편집</h2>
@@ -309,7 +310,8 @@ public static class AdminPages
     /// 요구하므로 요약과 항상 함께 렌더한다.
     /// </summary>
     private static string MeaningCard(
-        LyricsEntry entry, MeaningEntry? meaning, string csrf, bool enabled)
+        LyricsEntry entry, MeaningEntry? meaning, string csrf, bool enabled,
+        IReadOnlyList<(string Id, string Label, bool Checked)> sources)
     {
         var key = entry.Key ?? "";
         var geniusUrl = MeaningLinks.Genius(entry.Title, entry.Artist, meaning?.GeniusUrl);
@@ -320,13 +322,22 @@ public static class AdminPages
             · <a href="{Esc(geniusUrl)}" target="_blank" rel="noopener noreferrer">Genius</a>
             """;
 
+        // 어떤 자료로 만들지 그 자리에서 고른다 — 한 곡으로 소스를 바꿔 가며 시험해 볼 수 있다.
+        var picker = sources.Count == 0 ? "" : $"""
+            <span class="srcpick">{string.Concat(sources.Select(s => $"""
+              <label><input type="checkbox" name="src" value="{Esc(s.Id)}"{(s.Checked ? " checked" : "")}> {Esc(s.Label)}</label>
+              """))}</span>
+            """;
+
+        // data-busy: 제출하면 버튼이 잠기고 스피너가 돈다(외부 API를 여러 번 부르므로 수 초 걸린다).
         var button = !enabled
             ? "<span class=\"meta\">의미 엔진이 구성되지 않았습니다.</span>"
             : $"""
-              <form method="post" action="/admin/song/meaning" class="inline">
+              <form method="post" action="/admin/song/meaning" class="inline" data-busy>
                 <input type="hidden" name="key" value="{Esc(key)}">
                 <input type="hidden" name="csrf" value="{Esc(csrf)}">
                 <button type="submit">{(meaning is null ? "의미 가져오기" : "다시 생성")}</button>
+                {picker}
               </form>
               """;
 

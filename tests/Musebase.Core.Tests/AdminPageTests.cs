@@ -232,7 +232,43 @@ public class AdminPageTests
 
         Assert.Contains("아직 조회가 없습니다", html);
         Assert.Contains("colspan", html);
-        Assert.DoesNotContain("<script", html);   // JS를 쓰지 않는다(CSP를 강하게 잠글 수 있는 근거)
+    }
+
+    [Fact]
+    public void 스크립트는_제출_스피너_하나뿐이다()
+    {
+        // 예전에는 JS가 한 줄도 없었다. 지금은 제출 스피너 하나가 있고, 그 대가로 CSP를 느슨하게
+        // 하지 않기 위해 **해시로 고정**한다 — 스크립트가 늘거나 바뀌면 이 테스트가 먼저 걸린다.
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        var scripts = html.Split("<script").Length - 1;
+        Assert.Equal(1, scripts);
+        Assert.Contains($"<script>{AdminHtml.BusyScript}</script>", html);
+    }
+
+    [Fact]
+    public void CSP는_그_스크립트의_해시만_허용한다()
+    {
+        Assert.StartsWith("'sha256-", AdminHtml.ScriptCsp);
+        Assert.DoesNotContain("unsafe-inline", AdminHtml.ScriptCsp);
+
+        // 스크립트를 고치면 해시도 따라 바뀌어야 한다(상수로 박아 두면 조용히 안 돈다).
+        var expected = Convert.ToBase64String(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(AdminHtml.BusyScript)));
+        Assert.Equal($"'sha256-{expected}'", AdminHtml.ScriptCsp);
+    }
+
+    [Fact]
+    public void 생성_폼은_스피너_표시_대상이다()
+    {
+        // data-busy가 없으면 눌러도 아무 반응이 없어 사람이 다시 누른다(같은 곡을 두 번 만든다).
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(0, 0, 0, Pending: 3, Enabled: true),
+        };
+
+        Assert.Contains("data-busy", AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
     }
 
     // ---- 곡의 의미 ----

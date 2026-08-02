@@ -90,14 +90,47 @@ public sealed record MeaningOptions(
     /// <summary>Musixmatch 곡 페이지 주소를 찾아 주는 클라이언트(키가 없으면 꺼진 상태로 동작).</summary>
     public MusixmatchApi MusixmatchApi() => new(MusixmatchKey ?? "");
 
+    /// <summary>화면에 보여 줄 소스 이름.</summary>
+    public static string SourceLabel(string id) => id switch
+    {
+        "genius" => "Genius",
+        "lastfm" => "Last.fm",
+        "wikipedia" => "Wikipedia",
+        "musixmatch" => "Musixmatch (AI 분석)",
+        _ => id,
+    };
+
+    /// <summary>
+    /// **키가 있어 실제로 쓸 수 있는** 소스들 — 곡 상세의 체크박스 목록이 된다.
+    /// 쓸 수 없는 소스를 체크박스로 보여 주면 눌러도 아무 일이 안 일어나 사람을 헷갈리게 한다.
+    /// 두 번째 값은 "설정상 기본으로 켜져 있는가"다(체크 상태).
+    /// </summary>
+    public IReadOnlyList<(string Id, bool Default)> SelectableSources()
+    {
+        var all = new (string Id, bool Available)[]
+        {
+            ("genius", !string.IsNullOrWhiteSpace(GeniusToken)),
+            ("lastfm", !string.IsNullOrWhiteSpace(LastFmKey)),
+            ("wikipedia", true),
+            ("musixmatch", !string.IsNullOrWhiteSpace(MusixmatchKey)),
+        };
+        return all.Where(s => s.Available)
+                  .Select(s => (s.Id, Sources.Contains(s.Id, StringComparer.Ordinal)))
+                  .ToList();
+    }
+
     /// <summary>
     /// 고른 소스 중 **키까지 있는 것만** 골라 서비스를 만든다.
     /// 하나도 남지 않으면 소스가 비어 기능이 꺼진 상태가 된다.
     /// </summary>
-    public SongMeaningService BuildService()
+    /// <param name="only">
+    /// 이번 한 번만 쓸 소스 목록(곡 상세에서 체크박스로 고른 경우). 비우면 설정값을 쓴다.
+    /// 설정에 없는 소스도 **키만 있으면** 여기서 켤 수 있다 — 한 곡으로 시험해 보라고 둔 문이다.
+    /// </param>
+    public SongMeaningService BuildService(IReadOnlyList<string>? only = null)
     {
         var sources = new List<ISongMeaningSource>();
-        foreach (var id in Sources)
+        foreach (var id in only is { Count: > 0 } ? only : Sources)
         {
             switch (id)
             {
