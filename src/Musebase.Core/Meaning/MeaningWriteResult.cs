@@ -24,9 +24,14 @@ public sealed record MeaningWriteResult(string? Text, bool Retryable)
     public static MeaningWriteResult Written(string text) => new(text, false);
 
     /// <summary>
-    /// 429는 쿼타, 5xx는 상대 서버 문제 — 둘 다 기다리면 풀린다.
+    /// 429는 쿼타, 5xx는 상대 서버 문제, 402는 잔액 부족 — 셋 다 시간이나 충전으로 풀린다.
+    /// 402를 영구 실패로 굳히면 백필 도중 잔액이 떨어졌을 때 남은 곡이 전부 "의미 없음"으로
+    /// 박제된다(429에서 고친 것과 같은 병이다).
     /// 나머지 4xx(키 오류·잘못된 요청)는 다시 불러도 같은 답이 오므로 영구 실패다.
     /// </summary>
     public static MeaningWriteResult FromStatus(HttpStatusCode code) =>
-        code == HttpStatusCode.TooManyRequests || (int)code >= 500 ? Transient : Failed;
+        code is HttpStatusCode.TooManyRequests or HttpStatusCode.PaymentRequired
+        || (int)code >= 500
+            ? Transient
+            : Failed;
 }

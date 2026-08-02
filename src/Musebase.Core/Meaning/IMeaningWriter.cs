@@ -35,6 +35,13 @@ public static class MeaningPrompt
     public const int MaxSourceChars = 6000;
 
     /// <summary>
+    /// 출력 상한. 3~5문장이면 충분하고, 넉넉히 잡아도 이 정도다.
+    /// **반드시 요청에 실어야 한다** — 상한을 안 보내면 공급자가 모델 최대치를 예약하려 들어
+    /// 잔액이 적은 계정에서 402로 거절당한다(OpenRouter 실측). 비용 폭주 방지이기도 하다.
+    /// </summary>
+    public const int MaxOutputTokens = 1200;
+
+    /// <summary>
     /// 마지막 문장이 이 프롬프트의 핵심이다 — 자료가 부족할 때 모델이 지어내지 않고
     /// "부족하다"고 쓰게 만든다. 곡 해설은 그럴듯한 창작이 특히 쉬운 영역이다.
     /// </summary>

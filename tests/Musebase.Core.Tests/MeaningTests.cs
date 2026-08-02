@@ -321,6 +321,7 @@ public class MeaningTests
     [InlineData(HttpStatusCode.TooManyRequests, true)]   // 쿼타 — 기다리면 풀린다
     [InlineData(HttpStatusCode.ServiceUnavailable, true)]
     [InlineData(HttpStatusCode.InternalServerError, true)]
+    [InlineData(HttpStatusCode.PaymentRequired, true)]   // 잔액 — 충전하면 풀린다
     [InlineData(HttpStatusCode.Unauthorized, false)]     // 키가 틀렸다 — 다시 불러도 같다
     [InlineData(HttpStatusCode.BadRequest, false)]
     public void 다시_시도할_가치가_있는_응답만_retryable이다(HttpStatusCode code, bool retryable)
@@ -413,6 +414,30 @@ public class MeaningTests
             .WriteAsync("X", "Y", [new MeaningSource("Genius", null, "about a breakup")], "ko");
 
         Assert.Equal("이 곡은 이별을 다룬다.", result.Text);
+    }
+
+    [Fact]
+    public async Task 출력_상한을_반드시_요청에_싣는다()
+    {
+        // 상한을 안 보내면 공급자가 모델 최대치를 예약하려 들어 잔액 적은 계정에서 402가 난다.
+        string? geminiBody = null, openRouterBody = null;
+        var gemini = new StubHandler(req =>
+        {
+            geminiBody = req.Content!.ReadAsStringAsync().Result;
+            return Json("""{"candidates":[{"content":{"parts":[{"text":"요약"}]}}]}""");
+        });
+        var openRouter = new StubHandler(req =>
+        {
+            openRouterBody = req.Content!.ReadAsStringAsync().Result;
+            return Json("""{"choices":[{"message":{"content":"요약"}}]}""");
+        });
+        var sources = new[] { new MeaningSource("Genius", null, "text") };
+
+        await new GeminiMeaningWriter("k", null, gemini.Client).WriteAsync("T", "A", sources, "ko");
+        await new OpenRouterMeaningWriter("k", null, openRouter.Client).WriteAsync("T", "A", sources, "ko");
+
+        Assert.Contains($"\"maxOutputTokens\":{MeaningPrompt.MaxOutputTokens}", geminiBody);
+        Assert.Contains($"\"max_tokens\":{MeaningPrompt.MaxOutputTokens}", openRouterBody);
     }
 
     [Fact]

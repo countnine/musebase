@@ -104,6 +104,14 @@ public sealed class OpenRouterMeaningWriter : IMeaningWriter
     {
         public string Model { get; init; } = "";
         public ChatMessage[] Messages { get; init; } = [];
+
+        /// <summary>
+        /// 반드시 보낸다. 비워 두면 OpenRouter가 모델 최대치(실측 65,535)를 예약하려 들고,
+        /// 잔액이 그만큼을 감당 못 하면 <b>402</b>로 거절한다 — 정작 우리가 쓰는 건 몇백 토큰이다.
+        /// 상한을 두면 폭주 비용도 함께 막힌다.
+        /// </summary>
+        [property: JsonPropertyName("max_tokens")]
+        public int MaxTokens { get; init; } = MeaningPrompt.MaxOutputTokens;
     }
 
     private sealed record ChatMessage

@@ -62,6 +62,10 @@ public sealed class GeminiMeaningWriter : IMeaningWriter
             var payload = new GeminiRequest
             {
                 Contents = [new GeminiContent { Parts = [new GeminiPart { Text = prompt }] }],
+                GenerationConfig = new GeminiGenerationConfig
+                {
+                    MaxOutputTokens = MeaningPrompt.MaxOutputTokens,
+                },
             };
 
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/{Model}:generateContent")
@@ -101,6 +105,13 @@ public sealed class GeminiMeaningWriter : IMeaningWriter
     private sealed record GeminiRequest
     {
         public GeminiContent[] Contents { get; init; } = [];
+        public GeminiGenerationConfig? GenerationConfig { get; init; }
+    }
+
+    /// <summary>출력 상한만 쓴다(<see cref="MeaningPrompt.MaxOutputTokens"/> 참고).</summary>
+    private sealed record GeminiGenerationConfig
+    {
+        public int MaxOutputTokens { get; init; }
     }
 
     private sealed record GeminiContent
