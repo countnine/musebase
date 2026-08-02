@@ -23,6 +23,13 @@ public sealed record SongMeaning(
     /// </summary>
     public const string Retry = "retry";
 
+    /// <summary>
+    /// 자료는 찾았지만 그것만으로는 곡의 의미를 말할 수 없었다. 문단은 남기되(사람이 판단할 수
+    /// 있게) **"의미 있음"으로 세지 않는다** — 글자가 있다는 이유로 세면 통계가 부풀고,
+    /// 앱에는 "파악하기 어렵다"는 문장이 곡 해설이라며 뜬다.
+    /// </summary>
+    public const string Insufficient = "insufficient";
+
     public string? GeniusUrl =>
         Sources.FirstOrDefault(s => s.Name == "Genius")?.Url;
 }
@@ -64,7 +71,14 @@ public sealed class SongMeaningService
 
         var written = await _writer.WriteAsync(title, artist, collected, targetLang, ct).ConfigureAwait(false);
         if (written.Text is not null)
-            return new SongMeaning(SongMeaning.Ok, written.Text, collected, _writer.EngineId, _writer.Model);
+        {
+            // "자료가 부족하다"는 답도 정상 동작이지만 의미는 아니다 — 갈라서 기록한다.
+            var verdict = MeaningVerdict.IsInsufficient(written.Text)
+                ? SongMeaning.Insufficient
+                : SongMeaning.Ok;
+            return new SongMeaning(
+                verdict, MeaningVerdict.Strip(written.Text), collected, _writer.EngineId, _writer.Model);
+        }
 
         // 쿼타·네트워크처럼 시간이 풀어 줄 실패는 `failed`로 굳히지 않는다.
         var status = written.Retryable ? SongMeaning.Retry : SongMeaning.Failed;

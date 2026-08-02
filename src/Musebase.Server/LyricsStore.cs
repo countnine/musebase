@@ -110,6 +110,43 @@ public sealed class LyricsStore : IDisposable
             Execute("ALTER TABLE meanings ADD COLUMN musixmatch_url TEXT;");
             Execute("PRAGMA user_version = 3;");
         }
+
+        if (version < 4)
+        {
+            // "자료가 부족해 파악하기 어렵다"는 답도 글자가 있다는 이유로 ok로 저장돼 있었다.
+            // 이미 쌓인 것까지 다시 갈라 준다 — 안 그러면 통계가 계속 부풀어 있고, 앱에는
+            // 그 문장이 곡 해설이라며 뜬다. 판정은 생성 때와 **같은 함수**를 쓴다.
+            ReclassifyInsufficient();
+            Execute("PRAGMA user_version = 4;");
+        }
+    }
+
+    /// <summary>테스트에서 마이그레이션을 다시 돌려 보기 위한 것. 운영 경로에서는 쓰지 않는다.</summary>
+    public void SetUserVersionForTest(int version)
+    {
+        lock (_lock) Execute($"PRAGMA user_version = {version};");
+    }
+
+    /// <summary>이미 저장된 `ok` 행 중 "자료 부족" 고백을 골라 상태를 고친다.</summary>
+    private void ReclassifyInsufficient()
+    {
+        var targets = new List<string>();
+        using (var read = _conn.CreateCommand())
+        {
+            read.CommandText = "SELECT key, summary FROM meanings WHERE status = 'ok' AND summary IS NOT NULL;";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+                if (Musebase.Core.Meaning.MeaningVerdict.IsInsufficient(reader.GetString(1)))
+                    targets.Add(reader.GetString(0));
+        }
+
+        foreach (var key in targets)
+        {
+            using var update = _conn.CreateCommand();
+            update.CommandText = "UPDATE meanings SET status = 'insufficient' WHERE key = $k;";
+            update.Parameters.AddWithValue("$k", key);
+            update.ExecuteNonQuery();
+        }
     }
 
     // ---- 키 계산 (클라이언트와 같은 코드를 쓴다) ----
@@ -458,8 +495,8 @@ public sealed class LyricsStore : IDisposable
         }
     }
 
-    /// <summary>대시보드 타일용 — 의미가 붙은 곡 수 / 전체 / 자료 없음.</summary>
-    public (int WithMeaning, int NoSource, int Failed) MeaningStats()
+    /// <summary>대시보드 타일용. `자료 부족`은 글자는 있지만 의미가 아니므로 따로 센다.</summary>
+    public (int WithMeaning, int NoSource, int Failed, int Insufficient) MeaningStats()
     {
         lock (_lock)
         {
@@ -468,15 +505,14 @@ public sealed class LyricsStore : IDisposable
                 SELECT
                   SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END),
                   SUM(CASE WHEN status = 'no-source' THEN 1 ELSE 0 END),
-                  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)
+                  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status = 'insufficient' THEN 1 ELSE 0 END)
                 FROM meanings;
                 """;
             using var reader = cmd.ExecuteReader();
-            if (!reader.Read()) return (0, 0, 0);
-            return (
-                reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
-                reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
-                reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
+            if (!reader.Read()) return (0, 0, 0, 0);
+            int At(int i) => reader.IsDBNull(i) ? 0 : reader.GetInt32(i);
+            return (At(0), At(1), At(2), At(3));
         }
     }
 

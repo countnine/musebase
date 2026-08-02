@@ -77,6 +77,8 @@ public sealed record MeaningEntry
     public const string StatusOk = "ok";
     public const string StatusNoSource = "no-source";
     public const string StatusFailed = "failed";
+    /// <summary>자료는 있었지만 그것만으로는 의미를 말할 수 없었다 — 문단은 남되 의미로 세지 않는다.</summary>
+    public const string StatusInsufficient = "insufficient";
 }
 
 /// <summary>출처 한 건 — 이름과 원문 주소.</summary>

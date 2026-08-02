@@ -41,7 +41,8 @@ public static class AdminPages
             Tile("곡의 의미",
                 $"{m.Meanings.Ok}곡",
                 m.Meanings.Enabled
-                    ? $"자료 없음 {m.Meanings.NoSource} · 실패 {m.Meanings.Failed} · 남은 {m.Meanings.Pending}"
+                    ? $"자료 부족 {m.Meanings.Insufficient} · 자료 없음 {m.Meanings.NoSource}"
+                      + $" · 실패 {m.Meanings.Failed} · 남은 {m.Meanings.Pending}"
                     : "엔진 미구성"));
 
         // 무엇에 근거해 만들어지는지는 화면에서 보여야 한다 — 설정에만 있으면 나중에 아무도 모른다.
@@ -344,6 +345,10 @@ public static class AdminPages
         var bodyHtml = meaning?.Status switch
         {
             MeaningEntry.StatusOk => $"<p>{Esc(meaning.Summary)}</p>",
+            // 문단은 보여 준다(사람이 판단할 수 있게) — 다만 의미가 아니라는 것을 앞에 밝힌다.
+            MeaningEntry.StatusInsufficient =>
+                "<p class=\"warn\">자료 부족 — 모은 자료만으로는 곡의 의미를 판단하지 못했습니다.</p>"
+                + $"<p class=\"meta\">{Esc(meaning.Summary)}</p>",
             MeaningEntry.StatusNoSource =>
                 "<p class=\"meta\">외부 자료를 찾지 못했습니다 — 위 링크에서 직접 확인해 보세요.</p>",
             MeaningEntry.StatusFailed =>
@@ -414,6 +419,7 @@ public static class AdminPages
     private static string MeaningCell(string? status) => status switch
     {
         MeaningEntry.StatusOk => "<span class=\"ok\">있음</span>",
+        MeaningEntry.StatusInsufficient => "<span class=\"warn\">자료 부족</span>",
         MeaningEntry.StatusNoSource => "<span class=\"meta\">자료 없음</span>",
         MeaningEntry.StatusFailed => "<span class=\"bad\">실패</span>",
         _ => "<span class=\"meta\">-</span>",

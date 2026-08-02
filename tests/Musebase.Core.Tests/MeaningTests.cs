@@ -363,6 +363,59 @@ public class MeaningTests
             .WriteAsync("T", "A", sources, "ko")).Retryable);
     }
 
+    // ---- "자료 부족"은 의미가 아니다 ----
+
+    [Fact]
+    public async Task 표식이_붙으면_자료부족으로_기록하고_표식은_지운다()
+    {
+        var service = new SongMeaningService(
+            [new FixedSource("Genius", "설명")],
+            new FixedWriter($"{MeaningVerdict.Marker} 자료에는 앨범 정보뿐이다."));
+
+        var result = await service.BuildAsync("T", "A", "ko");
+
+        Assert.Equal(SongMeaning.Insufficient, result.Status);
+        Assert.Equal("자료에는 앨범 정보뿐이다.", result.Summary); // 표식은 화면에 나가지 않는다
+    }
+
+    [Fact]
+    public async Task 곡_이야기를_하면_의미로_기록한다()
+    {
+        var service = new SongMeaningService(
+            [new FixedSource("Genius", "설명")],
+            new FixedWriter("이 곡은 성장의 불안을 다룬다."));
+
+        Assert.Equal(SongMeaning.Ok, (await service.BuildAsync("T", "A", "ko")).Status);
+    }
+
+    [Theory]
+    // 실측으로 나온 문장(Arab Strap) — 글자는 있지만 곡 이야기가 아니다.
+    [InlineData("제시된 자료만으로는 이 곡이 무엇에 대한 노래인지 파악하기 어렵다.")]
+    [InlineData("자료가 부족해 의미를 말하기 어렵습니다.")]
+    [InlineData("주어진 정보에는 이 곡에 대한 설명이 포함되어 있지 않다.")]
+    [InlineData("")]
+    public void 표식이_없어도_자료를_두고_하는_말은_걸러낸다(string text)
+    {
+        Assert.True(MeaningVerdict.IsInsufficient(text));
+    }
+
+    [Theory]
+    // 진짜 의미. "어렵다"·"없다" 같은 낱말이 있어도 곡 이야기면 통과해야 한다.
+    [InlineData("이 곡은 성장의 불안과 상실을 다룬다. 가사는 어린 시절의 기억을 되짚는다.")]
+    [InlineData("사랑을 잃은 뒤의 공허를 노래한다. 화자는 답을 알 수 없는 질문을 반복한다.")]
+    [InlineData("전쟁으로 가족을 잃은 사람의 이야기이며, 돌아갈 집이 없다는 심상이 반복된다.")]
+    public void 진짜_의미는_자료부족으로_보지_않는다(string text)
+    {
+        Assert.False(MeaningVerdict.IsInsufficient(text));
+    }
+
+    [Fact]
+    public void 프롬프트는_부족하면_표식을_쓰라고_지시한다()
+    {
+        var prompt = MeaningPrompt.Build("T", "A", [new MeaningSource("Genius", null, "x")], "ko");
+        Assert.Contains(MeaningVerdict.Marker, prompt);
+    }
+
     [Fact]
     public void 프롬프트는_지어내지_말라고_못을_박는다()
     {
@@ -506,6 +559,17 @@ public class MeaningTests
             Calls++;
             return Task.FromResult(MeaningWriteResult.Written("생성된 한국어 문단"));
         }
+    }
+
+    /// <summary>정해진 문단을 돌려주는 엔진.</summary>
+    private sealed class FixedWriter(string text) : IMeaningWriter
+    {
+        public string EngineId => "gemini";
+        public string Model => "test-model";
+        public Task<MeaningWriteResult> WriteAsync(
+            string title, string artist, IReadOnlyList<MeaningSource> sources,
+            string targetLang, CancellationToken ct = default) =>
+            Task.FromResult(MeaningWriteResult.Written(text));
     }
 
     /// <summary>정해진 실패를 돌려주는 엔진(영구 실패 / 일시적 실패를 갈라 보기 위한 것).</summary>

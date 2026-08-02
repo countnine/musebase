@@ -158,10 +158,11 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.Single(remaining);
         Assert.Equal("Go!", remaining[0].Title);
 
-        var (ok, none, failed) = store.MeaningStats();
+        var (ok, none, failed, insufficient) = store.MeaningStats();
         Assert.Equal(0, ok);
         Assert.Equal(1, none);
         Assert.Equal(0, failed);
+        Assert.Equal(0, insufficient);
     }
 
     // ---- 관리자 화면이 기대는 조회 ----
@@ -206,6 +207,57 @@ public class LyricsStoreMergeTests : IDisposable
 
         Assert.Empty(store.Search(null, meaning: LyricsStore.MeaningFilterOk));
         Assert.Single(store.Search(null, meaning: LyricsStore.MeaningFilterNone));
+    }
+
+    [Fact]
+    public void 자료부족은_의미_있음에서_빠진다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "kids|mgmt", Title = "Kids", Artist = "MGMT", Lang = "ko", Sources = "[]",
+            Summary = "제시된 자료만으로는 파악하기 어렵다.",
+            Status = MeaningEntry.StatusInsufficient, UpdatedAt = "2026-08-02T00:00:00Z",
+        });
+
+        Assert.Empty(store.Search(null, meaning: LyricsStore.MeaningFilterOk));
+        Assert.Single(store.Search(null, meaning: LyricsStore.MeaningFilterNone));
+
+        var (ok, _, _, insufficient) = store.MeaningStats();
+        Assert.Equal(0, ok);
+        Assert.Equal(1, insufficient);
+    }
+
+    [Fact]
+    public void 이미_ok로_저장된_자료부족_행을_다시_갈라_준다()
+    {
+        // 이 판정이 생기기 전에 쌓인 행들 — 그대로 두면 통계가 부풀고 앱에 그 문장이 뜬다.
+        using (var store = NewStore())
+        {
+            store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+            store.Upsert(Entry("Go!", "M83", Plain), "윈도우PC", out _);
+
+            foreach (var (key, title, artist, summary) in new[]
+            {
+                ("kids|mgmt", "Kids", "MGMT", "제시된 자료만으로는 이 곡이 무엇에 대한 노래인지 파악하기 어렵다."),
+                ("go!|m83", "Go!", "M83", "이 곡은 질주하는 청춘의 감각을 다룬다."),
+            })
+            {
+                store.UpsertMeaning(new MeaningEntry
+                {
+                    Key = key, Title = title, Artist = artist, Lang = "ko", Sources = "[]",
+                    Summary = summary, Status = MeaningEntry.StatusOk, UpdatedAt = "2026-08-02T00:00:00Z",
+                });
+            }
+
+            // 마이그레이션이 다시 돌도록 되돌린다.
+            store.SetUserVersionForTest(3);
+        }
+
+        using var reopened = NewStore(); // 여는 순간 마이그레이션이 돈다
+        Assert.Equal(MeaningEntry.StatusInsufficient, reopened.GetMeaningByKey("kids|mgmt")!.Status);
+        Assert.Equal(MeaningEntry.StatusOk, reopened.GetMeaningByKey("go!|m83")!.Status);
     }
 
     [Fact]

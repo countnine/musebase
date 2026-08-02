@@ -164,6 +164,7 @@ app.MapGet("/v1/meaning", (HttpRequest request, string? title, string? artist) =
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
 
+    // `insufficient`도 404다 — 문단은 있지만 "파악하기 어렵다"는 고백이라 곡 해설로 띄우면 안 된다.
     var found = store.GetMeaning(title!, artist ?? "");
     if (found is null || found.Status != MeaningEntry.StatusOk) return Results.NotFound();
 

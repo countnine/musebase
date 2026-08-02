@@ -291,8 +291,10 @@ public static class AdminEndpoints
                 if (status == Musebase.Core.Meaning.SongMeaning.Retry) { stopped = true; break; }
 
                 done++;
+                // 자료 부족은 "자료 없음"과 같은 칸에 센다 — 둘 다 "의미를 만들지 못함"이다.
                 if (status == Musebase.Core.Meaning.SongMeaning.Ok) ok++;
-                else if (status == Musebase.Core.Meaning.SongMeaning.NoSource) none++;
+                else if (status is Musebase.Core.Meaning.SongMeaning.NoSource
+                                or Musebase.Core.Meaning.SongMeaning.Insufficient) none++;
                 else failed++;
             }
 
@@ -313,6 +315,8 @@ public static class AdminEndpoints
             {
                 Musebase.Core.Meaning.SongMeaning.Ok => "의미를 만들었습니다.",
                 Musebase.Core.Meaning.SongMeaning.NoSource => "외부 자료를 찾지 못했습니다.",
+                Musebase.Core.Meaning.SongMeaning.Insufficient =>
+                    "자료가 부족해 의미를 판단하지 못했습니다 — 자료원을 바꿔 다시 시도해 보세요.",
                 Musebase.Core.Meaning.SongMeaning.Retry =>
                     "일시적인 오류입니다(쿼타·네트워크). 저장하지 않았으니 잠시 후 다시 시도하세요.",
                 _ => "생성에 실패했습니다(키를 확인하세요).",
@@ -347,10 +351,10 @@ public static class AdminEndpoints
 
         MeaningSummary MeaningSummaryOf()
         {
-            var (ok, none, failed) = store.MeaningStats();
+            var (ok, none, failed, insufficient) = store.MeaningStats();
             // "아직 안 해 본 곡"은 백필 버튼이 실제로 처리할 대상 수다(상한까지만 센다).
             var pending = store.SongsWithoutMeaning(meaningOptions.BackfillLimit).Count;
-            return new MeaningSummary(ok, none, failed, pending, meanings.IsEnabled);
+            return new MeaningSummary(ok, none, failed, pending, meanings.IsEnabled, insufficient);
         }
 
         // 결과를 저장하고 status만 돌려준다. 실패·자료없음도 행으로 남겨 백필이 같은 곡을
