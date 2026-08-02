@@ -247,6 +247,20 @@ public class AdminPageTests
     }
 
     [Fact]
+    public void 제출은_히스토리를_늘리지_않는다()
+    {
+        // 평범한 폼 제출은 [검색 → 곡 → 곡(생성 후)]을 만들어 뒤로 가기가 "생성 전의 같은 곡"으로
+        // 간다. fetch로 보내고 location.replace로 지금 칸을 덮어써야 한 번에 그 앞 화면으로 간다.
+        Assert.Contains("fetch(", AdminHtml.BusyScript);
+        Assert.Contains("location.replace", AdminHtml.BusyScript);
+        Assert.DoesNotContain("history.pushState", AdminHtml.BusyScript);
+
+        // fetch가 없는 브라우저에서는 평소대로 제출돼야 한다.
+        Assert.Contains("if(!window.fetch", AdminHtml.BusyScript);
+        Assert.Contains("f.submit()", AdminHtml.BusyScript);
+    }
+
+    [Fact]
     public void CSP는_그_스크립트의_해시만_허용한다()
     {
         Assert.StartsWith("'sha256-", AdminHtml.ScriptCsp);

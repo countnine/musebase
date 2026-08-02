@@ -49,6 +49,17 @@ public static class AdminEndpoints
     private const string CookieName = "musebase_admin";
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
+    /// <summary>303 See Other — 이 프레임워크에 기본 헬퍼가 없어 직접 만든다.</summary>
+    private sealed class SeeOtherResult(string location) : IResult
+    {
+        public Task ExecuteAsync(HttpContext context)
+        {
+            context.Response.StatusCode = StatusCodes.Status303SeeOther;
+            context.Response.Headers.Location = location;
+            return Task.CompletedTask;
+        }
+    }
+
     /// <summary>`/admin/list`가 한 번에 보여 주는 최대 행 수 — 넘으면 화면에 그렇게 밝힌다.</summary>
     private const int FullRows = 200;
 
@@ -58,11 +69,18 @@ public static class AdminEndpoints
     {
         // 스크립트는 딱 하나(제출 스피너)뿐이라 'unsafe-inline' 대신 **그 해시만** 허용한다 —
         // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
+        // connect-src가 필요한 이유: 그 스크립트가 폼을 fetch로 보낸다. 기본값 'none'이면
+        // 조용히 막혀 버튼만 잠긴 채 아무 일도 일어나지 않는다. 대상은 같은 출처뿐이다.
         var Csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+                + "connect-src 'self'; "
                 + $"script-src {AdminHtml.ScriptCsp}";
 
         IResult Html(string html) =>
             Results.Text(html, "text/html; charset=utf-8");
+
+        // POST 뒤에는 303이 맞다 — 302는 "다음 요청의 메서드"를 규정하지 않아 브라우저마다 다르다.
+        // 303은 반드시 GET으로 가라는 뜻이라 새로고침이 POST를 되풀이하지 않는다.
+        static IResult SeeOther(string location) => new SeeOtherResult(location);
 
         string? Cookie(HttpRequest req) => req.Cookies.TryGetValue(CookieName, out var v) ? v : null;
 
@@ -86,7 +104,15 @@ public static class AdminEndpoints
         app.Use(async (context, next) =>
         {
             if (context.Request.Path.StartsWithSegments("/admin"))
+            {
                 context.Response.Headers["Content-Security-Policy"] = Csp;
+
+                // **뒤로 가기로 낡은 화면이 되살아나면 안 된다.** 캐시 지시가 없으면 브라우저가
+                // 뒤로 가기를 캐시에서 그리는데, 방금 만든 의미나 방금 고친 가사가 사라진 것처럼
+                // 보인다 — 사람은 작업이 실패한 줄 알고 다시 누른다. 관리자 화면은 전부 지금
+                // 상태를 봐야 하는 화면이므로 저장하지 않는다.
+                context.Response.Headers.CacheControl = "no-store";
+            }
             await next();
         });
 
@@ -104,7 +130,7 @@ public static class AdminEndpoints
             if (!TokenMatches(form["token"].ToString(), options.Token))
                 return Html(AdminPages.Login("토큰이 맞지 않습니다."));
             SetCookie(res);
-            return Results.Redirect("/admin");
+            return SeeOther("/admin");
         });
 
         // ---- 대시보드 ----
@@ -116,7 +142,7 @@ public static class AdminEndpoints
             {
                 if (!TokenMatches(token!, options.Token)) return Html(AdminPages.Login("토큰이 맞지 않습니다."));
                 SetCookie(res);
-                return Results.Redirect("/admin");
+                return SeeOther("/admin");
             }
             if (!LoggedIn(req)) return Html(AdminPages.Login());
 
@@ -130,7 +156,7 @@ public static class AdminEndpoints
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login());
             if (view is null || !AdminPages.ListViews.TryGetValue(view, out var heading))
-                return Results.Redirect("/admin");
+                return SeeOther("/admin");
 
             var now = DateTimeOffset.UtcNow;
             var model = BuildDashboard(req, now, FullRows);
@@ -160,7 +186,7 @@ public static class AdminEndpoints
         app.MapGet("/admin/song", (HttpRequest req, string? key, string? lang, string? tags, string? notice) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login());
-            if (string.IsNullOrWhiteSpace(key)) return Results.Redirect("/admin/search");
+            if (string.IsNullOrWhiteSpace(key)) return SeeOther("/admin/search");
 
             var entry = store.GetByKey(key!);
             if (entry is null) return Html(AdminPages.SearchPage(key, Array.Empty<SongRow>(), options.TimeZone));
@@ -197,12 +223,12 @@ public static class AdminEndpoints
             var key = form["key"].ToString();
             var lrc = form["lrc"].ToString();
             var existing = store.GetByKey(key);
-            if (existing is null || string.IsNullOrWhiteSpace(lrc)) return Results.Redirect("/admin/search");
+            if (existing is null || string.IsNullOrWhiteSpace(lrc)) return SeeOther("/admin/search");
 
             // origin=user로 저장 → 병합 정책이 각 기기의 자동 검색 결과로부터 이 편집본을 보호한다.
             store.Upsert(existing with { Lrc = lrc, Origin = LyricsEntry.OriginUser, Service = "사용자 편집" },
                 updatedBy: "admin", out _);
-            return Results.Redirect($"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString("저장했습니다.")}");
+            return SeeOther($"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString("저장했습니다.")}");
         });
 
         app.MapPost("/admin/song/delete", async (HttpRequest req) =>
@@ -214,7 +240,7 @@ public static class AdminEndpoints
 
             var key = form["key"].ToString();
             if (!string.IsNullOrWhiteSpace(key)) store.Delete(key);
-            return Results.Redirect("/admin/search");
+            return SeeOther("/admin/search");
         });
 
         // ---- 곡의 의미 ----
@@ -230,12 +256,12 @@ public static class AdminEndpoints
 
             var key = form["key"].ToString();
             var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
-            if (entry is null) return Results.Redirect("/admin/search");
+            if (entry is null) return SeeOther("/admin/search");
 
             // 화면에서 고른 자료원(체크박스). 하나도 안 고르면 설정값으로 만든다.
             var picked = form["src"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).ToList();
             var notice = await GenerateMeaningAsync(entry.Key ?? key, entry.Title, entry.Artist, picked);
-            return Results.Redirect(
+            return SeeOther(
                 $"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
         });
 
@@ -247,7 +273,7 @@ public static class AdminEndpoints
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
             if (!meanings.IsEnabled)
-                return Results.Redirect($"/admin?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
+                return SeeOther($"/admin?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
 
             var targets = store.SongsWithoutMeaning(meaningOptions.BackfillLimit);
             int ok = 0, none = 0, failed = 0, done = 0;
@@ -274,7 +300,7 @@ public static class AdminEndpoints
                 ? $"{done}곡 처리 후 중단 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}. "
                   + "쿼타·네트워크 문제로 보입니다. 남은 곡은 손대지 않았으니 잠시 후 다시 눌러 주세요."
                 : $"{targets.Count}곡 처리 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}";
-            return Results.Redirect($"/admin?notice={Uri.EscapeDataString(summary)}");
+            return SeeOther($"/admin?notice={Uri.EscapeDataString(summary)}");
         });
 
         // 단건 생성 후 사람에게 보여 줄 한 줄.

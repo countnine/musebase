@@ -40,19 +40,33 @@ public static class AdminHtml
     public static string Url(string? s) => Uri.EscapeDataString(s ?? "");
 
     /// <summary>
-    /// 이 페이지들의 <b>유일한</b> 스크립트. 의미 생성은 외부 API를 여러 번 부르므로 수 초가 걸리는데,
-    /// 눌러도 아무 반응이 없으면 사람이 다시 누른다(그러면 같은 곡을 두 번 만든다).
-    /// 그래서 제출 직후 버튼을 잠그고 스피너를 돌린다.
+    /// 이 페이지들의 <b>유일한</b> 스크립트. 두 가지를 한다.
+    ///
+    /// ① <b>스피너.</b> 의미 생성은 외부 API를 여러 번 부르므로 수 초가 걸리는데, 눌러도 아무 반응이
+    ///    없으면 사람이 다시 누른다(그러면 같은 곡을 두 번 만든다).
+    /// ② <b>히스토리를 늘리지 않는다.</b> 평범한 폼 제출은 [검색 → 곡 → 곡(생성 후)] 세 칸을 만들어,
+    ///    뒤로 가기가 <b>생성 전의 같은 곡</b>으로 간다. 사람이 원하는 곳은 그 곡에 들어오기 전 화면이다.
+    ///    그래서 <c>fetch</c>로 보내고(제출 자체가 히스토리를 만들지 않는다) 결과 주소로
+    ///    <c>location.replace</c>한다 — 지금 칸을 덮어써서 [검색 → 곡(생성 후)]만 남는다.
+    ///    서버가 할 수 없는 일이라(HTTP에는 히스토리를 지우는 방법이 없다) 여기서 한다.
     ///
     /// CSP는 계속 잠가 둔다 — <c>'unsafe-inline'</c>이 아니라 <b>이 문자열의 해시</b>만 허용하므로
     /// 다른 스크립트는 여전히 한 줄도 실행되지 않는다(<see cref="ScriptCsp"/>).
-    /// 비활성화는 <c>setTimeout</c>으로 미룬다 — 제출 전에 버튼을 끄면 폼이 전송되지 않는 브라우저가 있다.
+    ///
+    /// <c>fetch</c>가 없으면 평소대로 제출한다(그때는 버튼 잠금을 <c>setTimeout</c>으로 미룬다 —
+    /// 제출 전에 끄면 폼이 전송되지 않는 브라우저가 있다). 리다이렉트가 아니면(예: CSRF 실패)
+    /// 같은 자리를 다시 읽어 실제 상태를 보여 준다.
     /// </summary>
     public const string BusyScript =
         "document.addEventListener('submit',function(e){" +
         "var f=e.target;if(!f.hasAttribute('data-busy'))return;" +
-        "var b=f.querySelector('button[type=submit]');if(!b)return;" +
-        "setTimeout(function(){b.disabled=true;b.classList.add('busy')},0);},true);";
+        "var b=f.querySelector('button[type=submit]');" +
+        "var busy=function(){if(b){b.disabled=true;b.classList.add('busy');}};" +
+        "if(!window.fetch||!window.FormData){setTimeout(busy,0);return;}" +
+        "e.preventDefault();busy();" +
+        "fetch(f.action,{method:'POST',body:new FormData(f),credentials:'same-origin'})" +
+        ".then(function(r){location.replace(r.redirected?r.url:location.href);})" +
+        ".catch(function(){f.submit();});},true);";
 
     /// <summary>`script-src`에 넣을 해시 토큰. 스크립트를 고치면 자동으로 따라간다.</summary>
     public static string ScriptCsp { get; } =
