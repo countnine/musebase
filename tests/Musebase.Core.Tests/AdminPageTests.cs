@@ -327,6 +327,72 @@ public class AdminPageTests
             AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
     }
 
+    // ---- 로그인 ----
+
+    [Fact]
+    public void 비밀번호를_정하면_아이디_칸이_먼저_나온다()
+    {
+        var html = AdminPages.Login(passwordEnabled: true);
+
+        Assert.Contains("name=\"user\"", html);
+        Assert.Contains("name=\"password\"", html);
+        // 토큰은 사라지지 않는다 — 비밀번호를 잊었을 때의 비상구다.
+        Assert.Contains("name=\"token\"", html);
+        Assert.Contains("토큰으로 들어가기", html);
+    }
+
+    [Fact]
+    public void 비밀번호가_없으면_토큰_화면_그대로다()
+    {
+        var html = AdminPages.Login();
+
+        Assert.Contains("name=\"token\"", html);
+        Assert.DoesNotContain("name=\"password\"", html);
+    }
+
+    [Fact]
+    public void 비밀번호는_해시로_검증된다()
+    {
+        var stored = AdminPassword.Hash("여기는비밀번호");
+
+        Assert.StartsWith("pbkdf2$", stored);
+        Assert.DoesNotContain("여기는비밀번호", stored);   // 평문이 남지 않는다
+        Assert.True(AdminPassword.Verify("여기는비밀번호", stored));
+        Assert.False(AdminPassword.Verify("여기는비밀번회", stored));
+    }
+
+    [Fact]
+    public void 소금이_매번_달라_같은_비밀번호도_다른_해시가_된다()
+    {
+        Assert.NotEqual(AdminPassword.Hash("같은값"), AdminPassword.Hash("같은값"));
+    }
+
+    [Fact]
+    public void 평문_설정도_받아_주되_그대로_비교한다()
+    {
+        // 개인 서버의 편의 — 해시를 만들기 귀찮을 때. 문서에서는 해시를 권한다.
+        Assert.True(AdminPassword.Verify("평문암호", "평문암호"));
+        Assert.False(AdminPassword.Verify("다른암호", "평문암호"));
+    }
+
+    [Fact]
+    public void 비밀번호를_안_정했으면_무엇을_넣어도_통과하지_못한다()
+    {
+        // 설정이 비었을 때 빈 비밀번호로 들어가지는 사고를 막는다.
+        Assert.False(AdminPassword.Verify("", null));
+        Assert.False(AdminPassword.Verify("아무거나", null));
+        Assert.False(AdminPassword.Verify("아무거나", "   "));
+        Assert.False(AdminPassword.Verify("", ""));
+    }
+
+    [Fact]
+    public void 해시가_깨져_있으면_통과시키지_않는다()
+    {
+        Assert.False(AdminPassword.Verify("x", "pbkdf2$210000$짧은소금"));
+        Assert.False(AdminPassword.Verify("x", "pbkdf2$abc$c2FsdA==$aGFzaA=="));
+        Assert.False(AdminPassword.Verify("x", "pbkdf2$210000$!!!$!!!"));
+    }
+
     // ---- 대시보드 구성 ----
 
     [Fact]

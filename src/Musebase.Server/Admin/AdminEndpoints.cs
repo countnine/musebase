@@ -9,12 +9,21 @@ public sealed record AdminOptions(
     IReadOnlyDictionary<string, string> DeviceLabels,
     bool LogLookups,
     int RetentionDays,
-    int YieldWindowSeconds)
+    int YieldWindowSeconds,
+    string User = "admin",
+    string? Password = null)
 {
+    /// <summary>비밀번호를 정해 뒀는가 — 로그인 화면이 어떤 칸을 보여 줄지 가른다.</summary>
+    public bool HasPassword => !string.IsNullOrWhiteSpace(Password);
+
     /// <summary>
     /// `MUSEBASE_ADMIN_TOKEN`(없으면 `MUSEBASE_TOKEN`), `MUSEBASE_TZ`(기본 Asia/Seoul),
     /// `MUSEBASE_DEVICES`, `MUSEBASE_LOG_LOOKUPS`, `MUSEBASE_LOOKUP_RETENTION_DAYS`,
-    /// `MUSEBASE_YIELD_WINDOW_SECONDS`(0이면 번역 양보 힌트를 주지 않는다).
+    /// `MUSEBASE_YIELD_WINDOW_SECONDS`(0이면 번역 양보 힌트를 주지 않는다),
+    /// `MUSEBASE_ADMIN_USER`(기본 admin), `MUSEBASE_ADMIN_PASSWORD`(해시 또는 평문).
+    ///
+    /// 비밀번호를 정해도 <b>토큰 로그인은 계속 살려 둔다</b> — 비밀번호를 잊거나 해시를 잘못 넣으면
+    /// 들어갈 길이 없어지기 때문이다. 토큰은 어차피 앱이 API에 쓰는 값이라 새 비밀이 늘지도 않는다.
     /// </summary>
     public static AdminOptions FromEnvironment(string apiToken)
     {
@@ -35,7 +44,9 @@ public sealed record AdminOptions(
             DeviceLabels: DeviceLabel.ParseLabels(Environment.GetEnvironmentVariable("MUSEBASE_DEVICES")),
             LogLookups: Environment.GetEnvironmentVariable("MUSEBASE_LOG_LOOKUPS") != "0",
             RetentionDays: retention,
-            YieldWindowSeconds: yieldWindow);
+            YieldWindowSeconds: yieldWindow,
+            User: Environment.GetEnvironmentVariable("MUSEBASE_ADMIN_USER") is { Length: > 0 } u ? u : "admin",
+            Password: Environment.GetEnvironmentVariable("MUSEBASE_ADMIN_PASSWORD"));
     }
 }
 
@@ -121,14 +132,31 @@ public static class AdminEndpoints
         app.MapGet("/admin/logout", (HttpResponse res) =>
         {
             res.Cookies.Delete(CookieName, new CookieOptions { Path = "/admin" });
-            return Html(AdminPages.Login("로그아웃했습니다."));
+            return Html(AdminPages.Login("로그아웃했습니다.", options.HasPassword));
         });
 
         app.MapPost("/admin/login", async (HttpRequest req, HttpResponse res) =>
         {
             var form = await req.ReadFormAsync();
-            if (!TokenMatches(form["token"].ToString(), options.Token))
-                return Html(AdminPages.Login("토큰이 맞지 않습니다."));
+
+            var token = form["token"].ToString();
+            var user = form["user"].ToString();
+            var password = form["password"].ToString();
+
+            var ok = token.Length > 0
+                ? TokenMatches(token, options.Token)
+                : string.Equals(user.Trim(), options.User, StringComparison.Ordinal)
+                  && AdminPassword.Verify(password, options.Password);
+
+            if (!ok)
+            {
+                // 온라인 추측을 느리게 만든다. 테일넷 안이라 위험은 낮지만 값이 싸다.
+                await Task.Delay(700);
+                return Html(AdminPages.Login(
+                    token.Length > 0 ? "토큰이 맞지 않습니다." : "아이디 또는 비밀번호가 맞지 않습니다.",
+                    options.HasPassword));
+            }
+
             SetCookie(res);
             return SeeOther("/admin");
         });
@@ -140,11 +168,11 @@ public static class AdminEndpoints
             // ?token=…로 들어오면 쿠키를 굽고 주소창을 정리한다(토큰이 히스토리·로그에 남지 않도록).
             if (!string.IsNullOrEmpty(token))
             {
-                if (!TokenMatches(token!, options.Token)) return Html(AdminPages.Login("토큰이 맞지 않습니다."));
+                if (!TokenMatches(token!, options.Token)) return Html(AdminPages.Login("토큰이 맞지 않습니다.", options.HasPassword));
                 SetCookie(res);
                 return SeeOther("/admin");
             }
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
 
             var now = DateTimeOffset.UtcNow;
             return Html(AdminPages.Dashboard(
@@ -154,7 +182,7 @@ public static class AdminEndpoints
         // 대시보드의 한 섹션을 전부 보여 준다. 섹션마다 라우트를 파지 않고 ?view= 하나로 받는다.
         app.MapGet("/admin/list", (HttpRequest req, string? view) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             if (view is null || !AdminPages.ListViews.TryGetValue(view, out var heading))
                 return SeeOther("/admin");
 
@@ -177,7 +205,7 @@ public static class AdminEndpoints
 
         app.MapGet("/admin/search", (HttpRequest req, string? q, string? meaning) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var filter = string.IsNullOrWhiteSpace(meaning) ? null : meaning;
             return Html(AdminPages.SearchPage(
                 q, store.Search(q, limit: 200, meaning: filter), options.TimeZone, filter));
@@ -185,7 +213,7 @@ public static class AdminEndpoints
 
         app.MapGet("/admin/song", (HttpRequest req, string? key, string? lang, string? tags, string? notice) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             if (string.IsNullOrWhiteSpace(key)) return SeeOther("/admin/search");
 
             var entry = store.GetByKey(key!);
@@ -206,7 +234,7 @@ public static class AdminEndpoints
 
         app.MapGet("/admin/raw", (HttpRequest req, string? key) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key!);
             return entry is null ? Results.NotFound() : Results.Text(entry.Lrc, "text/plain; charset=utf-8");
         });
@@ -215,7 +243,7 @@ public static class AdminEndpoints
 
         app.MapPost("/admin/song/edit", async (HttpRequest req) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var form = await req.ReadFormAsync();
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
@@ -233,7 +261,7 @@ public static class AdminEndpoints
 
         app.MapPost("/admin/song/delete", async (HttpRequest req) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var form = await req.ReadFormAsync();
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
@@ -249,7 +277,7 @@ public static class AdminEndpoints
 
         app.MapPost("/admin/song/meaning", async (HttpRequest req) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var form = await req.ReadFormAsync();
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
@@ -267,7 +295,7 @@ public static class AdminEndpoints
 
         app.MapPost("/admin/meanings/backfill", async (HttpRequest req) =>
         {
-            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var form = await req.ReadFormAsync();
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);

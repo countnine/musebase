@@ -8,17 +8,43 @@ namespace Musebase.Server;
 /// </summary>
 public static class AdminPages
 {
-    /// <summary>토큰 입력 폼(쿠키가 없을 때).</summary>
-    public static string Login(string? error = null) => Layout("로그인", $"""
+    /// <summary>
+    /// 로그인 폼(쿠키가 없을 때).
+    ///
+    /// 비밀번호를 정해 뒀으면 아이디·비밀번호를 먼저 보여 준다 — 기기마다 긴 토큰을 주소창에
+    /// 붙여 넣는 것이 이 화면의 가장 큰 불편이었다. 토큰 입력은 <b>비상구로 남겨 둔다</b>
+    /// (비밀번호를 잊거나 해시를 잘못 넣어도 들어갈 수 있어야 한다).
+    /// </summary>
+    public static string Login(string? error = null, bool passwordEnabled = false) => Layout("로그인", $"""
+        {(error is null ? "" : $"<p class=\"bad\">{Esc(error)}</p>")}
+        {(passwordEnabled ? $"""
+        <h2>로그인</h2>
+        <form class="inline" method="post" action="/admin/login">
+          <input type="text" name="user" autofocus placeholder="아이디" autocomplete="username" style="min-width:9rem">
+          <input type="password" name="password" placeholder="비밀번호" autocomplete="current-password" style="min-width:12rem">
+          <button type="submit">로그인</button>
+        </form>
+        <details>
+          <summary>토큰으로 들어가기</summary>
+          <p class="meta">비밀번호를 잊었을 때 쓰는 비상구입니다 —
+          서버의 <code>/etc/musebase/server.env</code>에 있는 <code>MUSEBASE_TOKEN</code> 값입니다.</p>
+          {TokenForm}
+        </details>
+        """ : $"""
         <h2>관리자 토큰</h2>
         <p class="meta">서버의 <code>/etc/musebase/server.env</code>에 있는 토큰을 넣으세요.
         (<code>/admin?token=…</code>로 열어도 됩니다 — 주소창은 자동으로 정리됩니다.)</p>
-        {(error is null ? "" : $"<p class=\"bad\">{Esc(error)}</p>")}
+        <p class="meta">아이디·비밀번호로 들어오려면 <code>MUSEBASE_ADMIN_PASSWORD</code>를 설정하세요.</p>
+        {TokenForm}
+        """)}
+        """);
+
+    private const string TokenForm = """
         <form class="inline" method="post" action="/admin/login">
-          <input type="password" name="token" autofocus placeholder="토큰" style="min-width:20rem">
+          <input type="password" name="token" placeholder="토큰" autocomplete="off" style="min-width:20rem">
           <button type="submit">열기</button>
         </form>
-        """);
+        """;
 
     public static string Dashboard(
         DashboardModel m, DateTimeOffset nowUtc, TimeZoneInfo tz, string? notice = null)

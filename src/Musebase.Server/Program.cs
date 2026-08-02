@@ -11,10 +11,24 @@ using Musebase.Server;
 //   MUSEBASE_DB     선택 — SQLite 경로(기본 ./lyrics.db)
 // CLI:
 //   --import <translations.db>   기존 클라이언트 캐시를 흡수하고 종료(시드용)
+//   --hash-password <비밀번호>    MUSEBASE_ADMIN_PASSWORD에 넣을 해시를 찍고 종료
 
 const int MaxBodyBytes = 256 * 1024;
 // 양보 힌트에 실어 보내는 재조회 간격. 클라이언트는 이 값을 자기 상한으로 clamp한다.
 const int YieldRetryAfterMs = 3000;
+
+// --hash-password: 설정 파일에 평문을 두지 않아도 되도록 해시를 만들어 준다.
+var hashIndex = Array.IndexOf(args, "--hash-password");
+if (hashIndex >= 0)
+{
+    if (hashIndex + 1 >= args.Length)
+    {
+        Console.Error.WriteLine("사용법: Musebase.Server --hash-password <비밀번호>");
+        return 2;
+    }
+    Console.WriteLine(AdminPassword.Hash(args[hashIndex + 1]));
+    return 0;
+}
 
 var dbPath = Environment.GetEnvironmentVariable("MUSEBASE_DB") ?? "lyrics.db";
 
