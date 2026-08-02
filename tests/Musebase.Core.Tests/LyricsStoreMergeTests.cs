@@ -164,6 +164,80 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.Equal(0, failed);
     }
 
+    // ---- 관리자 화면이 기대는 조회 ----
+
+    [Fact]
+    public void 의미_필터가_상태별로_갈라_준다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+        store.Upsert(Entry("Go!", "M83", Plain), "윈도우PC", out _);
+
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "kids|mgmt", Title = "Kids", Artist = "MGMT", Lang = "ko", Sources = "[]",
+            Summary = "성장의 불안에 대한 곡이다.",
+            Status = MeaningEntry.StatusOk, UpdatedAt = "2026-08-01T00:00:00Z",
+        });
+
+        Assert.Equal(2, store.Search(null).Count);
+
+        var withMeaning = store.Search(null, meaning: LyricsStore.MeaningFilterOk);
+        Assert.Single(withMeaning);
+        Assert.Equal("Kids", withMeaning[0].Title);
+        Assert.Equal(MeaningEntry.StatusOk, withMeaning[0].MeaningStatus);
+
+        var without = store.Search(null, meaning: LyricsStore.MeaningFilterNone);
+        Assert.Single(without);
+        Assert.Equal("Go!", without[0].Title);
+        Assert.Null(without[0].MeaningStatus);
+    }
+
+    [Fact]
+    public void 자료를_못_찾은_곡은_의미_있음에_들지_않는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "kids|mgmt", Title = "Kids", Artist = "MGMT", Lang = "ko", Sources = "[]",
+            Status = MeaningEntry.StatusNoSource, UpdatedAt = "2026-08-01T00:00:00Z",
+        });
+
+        Assert.Empty(store.Search(null, meaning: LyricsStore.MeaningFilterOk));
+        Assert.Single(store.Search(null, meaning: LyricsStore.MeaningFilterNone));
+    }
+
+    [Fact]
+    public void 미스로_기록된_조회도_나중에_올라온_가사를_찾아낸다()
+    {
+        using var store = NewStore();
+        store.LogLookup("Kids", "MGMT", LyricsEntry.MatchMiss, null, "안드로이드", null);
+
+        // 그때는 없었다.
+        Assert.Null(store.RecentLookups(10)[0].Key);
+
+        // 나중에 (표기가 조금 다른 채로) 올라왔다.
+        store.Upsert(Entry("Kids", "MGMT — Oracular Spectacular", Plain), "윈도우PC", out _);
+
+        var row = store.RecentLookups(10)[0];
+        Assert.NotNull(row.Key);                                   // 이제 곡으로 갈 수 있다
+        Assert.Equal(LyricsEntry.MatchMiss, row.Result);           // 기록 자체는 바꾸지 않는다
+    }
+
+    [Fact]
+    public void 미스_상위도_지금_서버에_있으면_키를_붙인다()
+    {
+        using var store = NewStore();
+        store.LogLookup("Kids", "MGMT", LyricsEntry.MatchMiss, null, "안드로이드", null);
+        store.LogLookup("Go!", "M83", LyricsEntry.MatchMiss, null, "안드로이드", null);
+        store.Upsert(Entry("Kids", "MGMT", Plain), "윈도우PC", out _);
+
+        var misses = store.TopMisses("2000-01-01T00:00:00Z");
+        Assert.Equal("kids|mgmt", misses.Single(m => m.Title == "Kids").Key);
+        Assert.Null(misses.Single(m => m.Title == "Go!").Key);     // 정말 없는 곡은 그대로 null
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

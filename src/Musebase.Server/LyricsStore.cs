@@ -103,6 +103,13 @@ public sealed class LyricsStore : IDisposable
                 """);
             Execute("PRAGMA user_version = 2;");
         }
+
+        if (version < 3)
+        {
+            // 곡 페이지 주소는 공식 API로 확인한 것만 저장한다(규칙으로 만든 주소는 다른 곡으로 간다).
+            Execute("ALTER TABLE meanings ADD COLUMN musixmatch_url TEXT;");
+            Execute("PRAGMA user_version = 3;");
+        }
     }
 
     // ---- 키 계산 (클라이언트와 같은 코드를 쓴다) ----
@@ -368,7 +375,8 @@ public sealed class LyricsStore : IDisposable
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = """
-            SELECT key, title, artist, summary, lang, sources, genius_url, engine, model, status, updated_at
+            SELECT key, title, artist, summary, lang, sources, genius_url, engine, model, status,
+                   updated_at, musixmatch_url
             FROM meanings WHERE key = $k LIMIT 1;
             """;
         cmd.Parameters.AddWithValue("$k", key);
@@ -388,6 +396,7 @@ public sealed class LyricsStore : IDisposable
             Model = reader.IsDBNull(8) ? null : reader.GetString(8),
             Status = reader.GetString(9),
             UpdatedAt = reader.GetString(10),
+            MusixmatchUrl = reader.IsDBNull(11) ? null : reader.GetString(11),
         };
     }
 
@@ -399,13 +408,15 @@ public sealed class LyricsStore : IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 INSERT INTO meanings (key, title, artist, summary, lang, sources, genius_url,
-                                      engine, model, status, updated_at)
+                                      engine, model, status, updated_at, musixmatch_url)
                 VALUES ($key, $title, $artist, $summary, $lang, $sources, $genius,
-                        $engine, $model, $status, $at)
+                        $engine, $model, $status, $at, $mxm)
                 ON CONFLICT(key) DO UPDATE SET
                     title = $title, artist = $artist, summary = $summary, lang = $lang,
                     sources = $sources, genius_url = $genius, engine = $engine, model = $model,
-                    status = $status, updated_at = $at;
+                    status = $status, updated_at = $at,
+                    -- 이번에 못 찾았다고 지난번에 확인한 주소를 지우지 않는다.
+                    musixmatch_url = COALESCE($mxm, musixmatch_url);
                 """;
             cmd.Parameters.AddWithValue("$key", entry.Key);
             cmd.Parameters.AddWithValue("$title", entry.Title);
@@ -418,6 +429,7 @@ public sealed class LyricsStore : IDisposable
             cmd.Parameters.AddWithValue("$model", (object?)entry.Model ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$status", entry.Status);
             cmd.Parameters.AddWithValue("$at", entry.UpdatedAt);
+            cmd.Parameters.AddWithValue("$mxm", (object?)entry.MusixmatchUrl ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
     }
@@ -618,7 +630,13 @@ public sealed class LyricsStore : IDisposable
         return new HitRate(exact, cleaned, miss);
     }
 
-    /// <summary>최근 조회 기록(최신순).</summary>
+    /// <summary>
+    /// 최근 조회 기록(최신순).
+    ///
+    /// 미스였던 행은 <c>key</c>가 비어 있지만 <b>그 뒤에 곡이 올라왔을 수 있다.</b>
+    /// 그래서 표시 시점에 다시 찾아 키를 채운다 — 화면에서 곡으로 넘어갈 수 있게 하기 위한 것이고,
+    /// <c>result</c>는 그대로 둔다(그때 미스였던 것은 사실이므로 기록을 바꾸면 안 된다).
+    /// </summary>
     public IReadOnlyList<LookupRow> RecentLookups(int limit = 50)
     {
         var rows = new List<LookupRow>();
@@ -634,9 +652,14 @@ public sealed class LyricsStore : IDisposable
                 rows.Add(new LookupRow(
                     reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                     reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5)));
+
+            for (var i = 0; i < rows.Count; i++)
+                if (string.IsNullOrEmpty(rows[i].Key))
+                    rows[i] = rows[i] with { Key = Locate(rows[i].Title, rows[i].Artist)?.Key };
         }
         return rows;
     }
+
 
     /// <summary>기간 내 미스 상위 — 서버에 없는 곡(=채울 후보).</summary>
     public IReadOnlyList<MissRow> TopMisses(string sinceUtc, int limit = 50)
@@ -658,6 +681,10 @@ public sealed class LyricsStore : IDisposable
                 rows.Add(new MissRow(
                     reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
                     reader.GetString(3), reader.GetInt32(4)));
+
+            // 미스로 기록됐어도 지금은 서버에 있을 수 있다 — 있으면 바로 열어 볼 수 있게 키를 붙인다.
+            for (var i = 0; i < rows.Count; i++)
+                rows[i] = rows[i] with { Key = Locate(rows[i].Title, rows[i].Artist)?.Key };
         }
         return rows;
     }
@@ -731,22 +758,46 @@ public sealed class LyricsStore : IDisposable
         "key, loose_key, title, artist, service, origin, langs, line_count, has_inline, revision, updated_at, updated_by";
 
     /// <summary>
+    /// 목록 조회는 의미 상태를 항상 함께 읽는다 — 검색 결과에 "의미" 열을 보여 주기 위해서다.
+    /// <c>meanings.key</c>는 저장할 때 <see cref="Locate"/>가 정한 키(=<c>lyrics.key</c>)라
+    /// 별도 해석 없이 그대로 조인하면 된다.
+    /// </summary>
+    private const string SongSelect =
+        "SELECT l.key, l.loose_key, l.title, l.artist, l.service, l.origin, l.langs, l.line_count, "
+        + "l.has_inline, l.revision, l.updated_at, l.updated_by, m.status "
+        + "FROM lyrics l LEFT JOIN meanings m ON m.key = l.key";
+
+    /// <summary>검색 화면의 의미 필터.</summary>
+    public const string MeaningFilterOk = "ok";
+    public const string MeaningFilterNone = "none";
+
+    private static string MeaningWhere(string? filter) => filter switch
+    {
+        MeaningFilterOk => " m.status = 'ok' ",
+        MeaningFilterNone => " (m.status IS NULL OR m.status <> 'ok') ",
+        _ => "",
+    };
+
+    /// <summary>
     /// 제목·아티스트 부분 일치 검색(대소문자 무시). 질의가 비면 최근 갱신순 목록.
     /// 곡 수가 수백 규모라 LIKE 풀스캔으로 충분하다(`%…%`는 어차피 인덱스를 못 탄다).
     /// </summary>
-    public IReadOnlyList<SongRow> Search(string? query, int limit = 100, int offset = 0)
+    public IReadOnlyList<SongRow> Search(
+        string? query, int limit = 100, int offset = 0, string? meaning = null)
     {
         var like = AdminQuery.ToLikePattern(query);
+        var conditions = new List<string>();
+        if (like is not null)
+            conditions.Add(@" (lower(l.title) LIKE $like ESCAPE '\' OR lower(l.artist) LIKE $like ESCAPE '\') ");
+        if (MeaningWhere(meaning) is { Length: > 0 } meaningWhere) conditions.Add(meaningWhere);
+
+        var where = conditions.Count == 0 ? "" : " WHERE " + string.Join(" AND ", conditions);
+
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = like is null
-                ? $"SELECT {SongColumns} FROM lyrics ORDER BY updated_at DESC LIMIT $limit OFFSET $offset;"
-                : $"""
-                   SELECT {SongColumns} FROM lyrics
-                   WHERE lower(title) LIKE $like ESCAPE '\' OR lower(artist) LIKE $like ESCAPE '\'
-                   ORDER BY updated_at DESC LIMIT $limit OFFSET $offset;
-                   """;
+            cmd.CommandText =
+                $"{SongSelect}{where} ORDER BY l.updated_at DESC LIMIT $limit OFFSET $offset;";
             if (like is not null) cmd.Parameters.AddWithValue("$like", like);
             cmd.Parameters.AddWithValue("$limit", limit);
             cmd.Parameters.AddWithValue("$offset", offset);
@@ -760,7 +811,7 @@ public sealed class LyricsStore : IDisposable
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = $"SELECT {SongColumns} FROM lyrics ORDER BY updated_at DESC LIMIT $limit;";
+            cmd.CommandText = $"{SongSelect} ORDER BY l.updated_at DESC LIMIT $limit;";
             cmd.Parameters.AddWithValue("$limit", limit);
             return ReadSongs(cmd);
         }
@@ -772,7 +823,7 @@ public sealed class LyricsStore : IDisposable
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = $"SELECT {SongColumns} FROM lyrics WHERE langs = '' ORDER BY updated_at DESC LIMIT $limit;";
+            cmd.CommandText = $"{SongSelect} WHERE l.langs = '' ORDER BY l.updated_at DESC LIMIT $limit;";
             cmd.Parameters.AddWithValue("$limit", limit);
             return ReadSongs(cmd);
         }
@@ -788,9 +839,9 @@ public sealed class LyricsStore : IDisposable
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = $"""
-                SELECT {SongColumns} FROM lyrics
-                WHERE loose_key IN (SELECT loose_key FROM lyrics GROUP BY loose_key HAVING COUNT(*) > 1)
-                ORDER BY loose_key, updated_at DESC LIMIT $limit;
+                {SongSelect}
+                WHERE l.loose_key IN (SELECT loose_key FROM lyrics GROUP BY loose_key HAVING COUNT(*) > 1)
+                ORDER BY l.loose_key, l.updated_at DESC LIMIT $limit;
                 """;
             cmd.Parameters.AddWithValue("$limit", limit);
             return ReadSongs(cmd);
@@ -809,7 +860,8 @@ public sealed class LyricsStore : IDisposable
                 reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5),
                 langs.Length == 0 ? Array.Empty<string>() : langs.Split(','),
                 reader.GetInt32(7), reader.GetInt32(8) != 0, reader.GetInt32(9),
-                reader.GetString(10), reader.IsDBNull(11) ? null : reader.GetString(11)));
+                reader.GetString(10), reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12)));
         }
         return rows;
     }

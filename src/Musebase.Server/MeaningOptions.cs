@@ -16,17 +16,30 @@ public sealed record MeaningOptions(
     string? OpenRouterModel,
     string? GeniusToken,
     string? LastFmKey,
-    bool UseWikipedia,
+    string? MusixmatchKey,
+    IReadOnlyList<string> Sources,
     int BackfillLimit,
     int BackfillDelayMs)
 {
     /// <summary>
+    /// 소스 id. <b>기본값에 musixmatch는 없다</b> — 그 자료는 사람이 쓴 해설이 아니라
+    /// 기계가 가사를 분석한 결과라(<see cref="MusixmatchMeaningSource"/> 참고) 켤지 말지를
+    /// 운영자가 직접 정해야 한다.
+    /// </summary>
+    public static readonly string[] DefaultSources = ["genius", "lastfm", "wikipedia"];
+
+    /// <summary>
     /// `MUSEBASE_MEANING_ENGINE`(gemini|openrouter|none, 기본 none),
     /// `MUSEBASE_MEANING_LANG`(기본 ko), `MUSEBASE_GEMINI_API_KEY` / `MUSEBASE_GEMINI_MODEL`,
     /// `MUSEBASE_OPENROUTER_API_KEY` / `MUSEBASE_OPENROUTER_MODEL`,
-    /// `MUSEBASE_GENIUS_TOKEN`, `MUSEBASE_LASTFM_KEY`, `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔),
+    /// `MUSEBASE_GENIUS_TOKEN`, `MUSEBASE_LASTFM_KEY`, `MUSEBASE_MUSIXMATCH_KEY`,
+    /// `MUSEBASE_MEANING_SOURCES`(쉼표 구분, 기본 `genius,lastfm,wikipedia`),
+    /// `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔 — 예전 변수, 아래 설명),
     /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50),
     /// `MUSEBASE_MEANING_BACKFILL_DELAY_MS`(기본 0 — 아래 설명).
+    ///
+    /// `MUSEBASE_MEANING_WIKIPEDIA=0`은 소스 목록이 생기기 전부터 쓰던 변수라 계속 받아 준다 —
+    /// 목록을 직접 지정하지 않은 경우에만 기본값에서 위키피디아를 뺀다(직접 지정이 항상 이긴다).
     ///
     /// 백필 간격이 기본 0인 이유: 유료 티어는 분당 한도가 넉넉해 일부러 느리게 돌 이유가 없고,
     /// 429가 나더라도 백필이 그 자리에서 멈추고 **아무것도 저장하지 않으므로** 망가지지 않는다.
@@ -42,6 +55,8 @@ public sealed record MeaningOptions(
         var delay = int.TryParse(Env("MUSEBASE_MEANING_BACKFILL_DELAY_MS"), out var d)
             ? Math.Clamp(d, 0, 60_000) : 0;
 
+        var sources = ParseSources(Env("MUSEBASE_MEANING_SOURCES"), Env("MUSEBASE_MEANING_WIKIPEDIA"));
+
         return new MeaningOptions(
             Engine: Env("MUSEBASE_MEANING_ENGINE") ?? MeaningWriterRegistry.None,
             Lang: Env("MUSEBASE_MEANING_LANG") ?? "ko",
@@ -51,18 +66,51 @@ public sealed record MeaningOptions(
             OpenRouterModel: Env("MUSEBASE_OPENROUTER_MODEL"),
             GeniusToken: Env("MUSEBASE_GENIUS_TOKEN"),
             LastFmKey: Env("MUSEBASE_LASTFM_KEY"),
-            UseWikipedia: Env("MUSEBASE_MEANING_WIKIPEDIA") != "0",
+            MusixmatchKey: Env("MUSEBASE_MUSIXMATCH_KEY"),
+            Sources: sources,
             BackfillLimit: limit,
             BackfillDelayMs: delay);
     }
 
-    /// <summary>구성된 소스만 골라 서비스를 만든다. 키가 하나도 없으면 소스가 비어 꺼진 상태가 된다.</summary>
+    /// <summary>설정 문자열 → 소스 id 목록. 알 수 없는 이름은 무시한다(오타로 서버가 죽지 않게).</summary>
+    public static IReadOnlyList<string> ParseSources(string? configured, string? legacyWikipedia)
+    {
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(s => s.ToLowerInvariant())
+                .Where(s => DefaultSources.Contains(s) || s == "musixmatch")
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+        return legacyWikipedia == "0"
+            ? DefaultSources.Where(s => s != "wikipedia").ToList()
+            : DefaultSources.ToList();
+    }
+
+    /// <summary>Musixmatch 곡 페이지 주소를 찾아 주는 클라이언트(키가 없으면 꺼진 상태로 동작).</summary>
+    public MusixmatchApi MusixmatchApi() => new(MusixmatchKey ?? "");
+
+    /// <summary>
+    /// 고른 소스 중 **키까지 있는 것만** 골라 서비스를 만든다.
+    /// 하나도 남지 않으면 소스가 비어 기능이 꺼진 상태가 된다.
+    /// </summary>
     public SongMeaningService BuildService()
     {
         var sources = new List<ISongMeaningSource>();
-        if (!string.IsNullOrWhiteSpace(GeniusToken)) sources.Add(new GeniusSource(GeniusToken!));
-        if (!string.IsNullOrWhiteSpace(LastFmKey)) sources.Add(new LastFmSource(LastFmKey!));
-        if (UseWikipedia) sources.Add(new WikipediaSource());
+        foreach (var id in Sources)
+        {
+            switch (id)
+            {
+                case "genius" when !string.IsNullOrWhiteSpace(GeniusToken):
+                    sources.Add(new GeniusSource(GeniusToken!)); break;
+                case "lastfm" when !string.IsNullOrWhiteSpace(LastFmKey):
+                    sources.Add(new LastFmSource(LastFmKey!)); break;
+                case "wikipedia":
+                    sources.Add(new WikipediaSource()); break;
+                case "musixmatch" when !string.IsNullOrWhiteSpace(MusixmatchKey):
+                    sources.Add(new MusixmatchMeaningSource(MusixmatchApi())); break;
+            }
+        }
 
         var writer = MeaningWriterRegistry.Build(Engine, new MeaningWriterOptions
         {

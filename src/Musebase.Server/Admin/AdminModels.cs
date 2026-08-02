@@ -4,7 +4,9 @@ namespace Musebase.Server;
 public sealed record LookupRow(string At, string Title, string Artist, string Result, string? Key, string Device);
 
 /// <summary>미스 상위 1건 — 서버에 없어서 각 기기가 직접 검색해야 했던 곡.</summary>
-public sealed record MissRow(string Title, string Artist, int Count, string LastAt, int Devices);
+/// <param name="Key">그 뒤에 곡이 올라왔으면 그 키(없으면 null) — 화면에서 가사로 넘어가기 위한 것.</param>
+public sealed record MissRow(
+    string Title, string Artist, int Count, string LastAt, int Devices, string? Key = null);
 
 /// <summary>기기별 활동.</summary>
 public sealed record DeviceRow(string Device, int Lookups, int Hits, string LastAt);
@@ -13,9 +15,11 @@ public sealed record DeviceRow(string Device, int Lookups, int Hits, string Last
 public sealed record DailyRow(string Day, int Hits, int Misses);
 
 /// <summary>곡 목록 1행(LRC 본문 제외 — 목록은 가볍게).</summary>
+/// <param name="MeaningStatus">`ok` | `no-source` | `failed`, 아직 해 본 적 없으면 null.</param>
 public sealed record SongRow(
     string Key, string LooseKey, string Title, string Artist, string? Service, string Origin,
-    string[] Langs, int LineCount, bool HasInlineTimeTags, int Revision, string UpdatedAt, string? UpdatedBy);
+    string[] Langs, int LineCount, bool HasInlineTimeTags, int Revision, string UpdatedAt, string? UpdatedBy,
+    string? MeaningStatus = null);
 
 /// <summary>기간 내 조회 결과 집계.</summary>
 public sealed record HitRate(int Exact, int Cleaned, int Miss)
@@ -47,6 +51,8 @@ public sealed record DashboardModel(
     ServerHealth Health,
     IReadOnlyList<(string Name, string Value)> Diagnostics,
     MeaningSummary Meanings,
+    /// <summary>지금 켜져 있는 의미 자료원 이름 — 무엇에 근거해 만들어지는지 화면에 드러낸다.</summary>
+    IReadOnlyList<string> MeaningSources,
     string Csrf);
 
 /// <summary>대시보드의 "곡의 의미" 타일 — 만든 것 / 자료 없음 / 실패 + 아직 안 해 본 곡 수.</summary>

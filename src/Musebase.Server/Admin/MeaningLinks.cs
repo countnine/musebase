@@ -35,4 +35,12 @@ public static class MeaningLinks
     /// <summary>수집으로 알아낸 정확한 Genius 곡 페이지가 있으면 그것을, 없으면 검색 링크를 준다.</summary>
     public static string Genius(string title, string artist, string? knownUrl) =>
         string.IsNullOrWhiteSpace(knownUrl) ? GeniusSearch(title, artist) : knownUrl!;
+
+    /// <summary>
+    /// 공식 API로 <b>확인한</b> 곡 페이지가 있으면 그것을, 없으면 검색 링크를 준다.
+    /// 주소를 규칙으로 만들어 보내지 않는다 — 실측에서 <c>/lyrics/Pearl-Jam/Even-Flow</c>가
+    /// 오류 없이 <c>/lyrics/Pearl-Jam/Alive</c>(다른 곡!)로 넘어갔다.
+    /// </summary>
+    public static string Musixmatch(string title, string artist, string? knownUrl) =>
+        string.IsNullOrWhiteSpace(knownUrl) ? MusixmatchSearch(title, artist) : knownUrl!;
 }

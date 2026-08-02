@@ -96,33 +96,11 @@ public sealed class GeniusSource : ISongMeaningSource
     }
 
     /// <summary>
-    /// 이 검색 결과가 정말 그 곡인지 확인한다(순수 함수 — 테스트 대상).
-    ///
-    /// Genius 검색은 <b>무엇을 넣든 무언가를 돌려준다.</b> 실측에서 음악이 아닌 유튜브 제목
-    /// ("해외에서 화제라는 한국의 지하철 문화")으로 검색했더니 전혀 무관한 <c>119 REMIX</c>가
-    /// 첫 히트로 나왔고, 확인 없이 받았으면 그 곡의 해설이 이 트랙의 "의미"로 붙었을 것이다.
-    /// <b>엉뚱한 근거는 자료가 없는 것보다 나쁘다</b> — 위키피디아 문서 선택과 같은 원칙이라,
-    /// 제목 일치를 필수로 두고 아티스트를 아는 경우 확인까지 요구한다.
+    /// 이 검색 결과가 정말 그 곡인지 확인한다. 판정 기준은 검색 기반 소스가 모두 공유한다
+    /// (<see cref="MeaningMatch.IsSameSong"/> — 그쪽에 이유를 적어 뒀다).
     /// </summary>
-    internal static bool Matches(string? hitTitle, string? hitArtists, string title, string artist)
-    {
-        var wanted = MeaningText.Normalize(title);
-        var got = MeaningText.Normalize(hitTitle ?? "");
-        if (wanted.Length == 0 || got.Length == 0) return false;
-
-        // 제목은 어느 쪽이 담아도 인정한다 — "(Remix)"·"(Live)" 같은 꼬리표가 흔하다.
-        if (!got.Contains(wanted, StringComparison.Ordinal)
-            && !wanted.Contains(got, StringComparison.Ordinal)) return false;
-
-        var names = ArtistNames.All(artist)
-            .Select(MeaningText.Normalize)
-            .Where(n => n.Length >= 3)
-            .ToList();
-        if (names.Count == 0) return true; // 아티스트를 모르면 제목만으로 받아들인다
-
-        var haystack = MeaningText.Normalize(hitArtists ?? "");
-        return names.Any(n => haystack.Contains(n, StringComparison.Ordinal));
-    }
+    internal static bool Matches(string? hitTitle, string? hitArtists, string title, string artist) =>
+        MeaningMatch.IsSameSong(hitTitle, hitArtists, title, artist);
 
     private static IEnumerable<string> Terms(string title, string artist)
     {

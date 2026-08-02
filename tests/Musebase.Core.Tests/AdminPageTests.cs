@@ -277,9 +277,103 @@ public class AdminPageTests
             AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
     }
 
+    // ---- 대시보드 구성 ----
+
+    [Fact]
+    public void 대시보드는_최근_올라온_가사를_맨_위에_둔다()
+    {
+        // 가사 서버의 정체성은 "무슨 가사가 들어와 있는가"다 — 조회 통계보다 앞에 온다.
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        var uploads = html.IndexOf("최근 올라온 가사", StringComparison.Ordinal);
+        var lookups = html.IndexOf("최근 조회", StringComparison.Ordinal);
+
+        Assert.True(uploads > 0 && lookups > 0);
+        Assert.True(uploads < lookups, "최근 올라온 가사가 최근 조회보다 위여야 한다");
+    }
+
+    [Fact]
+    public void 각_섹션에_전체_보기_링크가_있다()
+    {
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("/admin/search\">전체 보기", html);   // 최근 올라온 가사 = 질의 없는 검색 화면
+        foreach (var view in AdminPages.ListViews.Keys)
+            Assert.Contains($"/admin/list?view={view}", html);
+    }
+
+    [Fact]
+    public void 켜져_있는_의미_자료원을_화면에_보여_준다()
+    {
+        // 무엇에 근거해 만들어지는지가 설정에만 있으면 나중에 아무도 모른다.
+        var model = EmptyDashboard() with { MeaningSources = ["Genius", "Musixmatch (AI 분석)"] };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("의미 자료:", html);
+        Assert.Contains("Musixmatch (AI 분석)", html);
+    }
+
+    // ---- 미스 행에서 곡으로 ----
+
+    [Fact]
+    public void 미스여도_지금_서버에_있으면_가사로_가는_링크가_생긴다()
+    {
+        var model = EmptyDashboard() with
+        {
+            TopMisses = [new MissRow("Kids", "MGMT", 3, "2026-08-01T00:00:00Z", 2, "kids|mgmt")],
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("/admin/song?key=kids%7Cmgmt", html);
+        Assert.Contains("가사 보기", html);
+    }
+
+    [Fact]
+    public void 정말_없는_곡은_검색으로만_보낸다()
+    {
+        var model = EmptyDashboard() with
+        {
+            TopMisses = [new MissRow("Kids", "MGMT", 3, "2026-08-01T00:00:00Z", 2)],
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.DoesNotContain("가사 보기", html);
+        Assert.Contains("/admin/search?q=Kids", html);
+    }
+
+    // ---- 검색 화면의 의미 필터 ----
+
+    [Fact]
+    public void 검색_결과에_의미_열이_있다()
+    {
+        var withMeaning = Song("Kids", MeaningEntry.StatusOk);
+        var without = Song("Go!", null);
+
+        var html = AdminPages.SearchPage(null, [withMeaning, without], Kst);
+
+        Assert.Contains("<th>의미</th>", html);
+        Assert.Contains("있음", html);
+    }
+
+    [Fact]
+    public void 고른_필터가_폼에_남아_있다()
+    {
+        var html = AdminPages.SearchPage(null, [], Kst, LyricsStore.MeaningFilterOk);
+
+        Assert.Contains($"value=\"{LyricsStore.MeaningFilterOk}\" selected", html);
+        Assert.Contains("의미 있음", html);
+    }
+
+    private static SongRow Song(string title, string? meaning) =>
+        new("k-" + title, "k", title, "아티스트", "LRCLIB", "provider",
+            ["ko"], 10, false, 1, "2026-07-29T00:00:00Z", "거실PC", meaning);
+
     private static DashboardModel EmptyDashboard() => new(
         new ServerStats(0, 0, null), 0, new HitRate(0, 0, 0), new HitRate(0, 0, 0),
         [], [], [], [], [], [], [], [],
         new ServerHealth(TimeSpan.FromHours(1), 0, 0, 90), [],
-        new MeaningSummary(0, 0, 0, 0, false), "csrf-token");
+        new MeaningSummary(0, 0, 0, 0, false), [], "csrf-token");
 }

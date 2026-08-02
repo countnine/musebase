@@ -44,6 +44,11 @@ public static class AdminPages
                     ? $"자료 없음 {m.Meanings.NoSource} · 실패 {m.Meanings.Failed} · 남은 {m.Meanings.Pending}"
                     : "엔진 미구성"));
 
+        // 무엇에 근거해 만들어지는지는 화면에서 보여야 한다 — 설정에만 있으면 나중에 아무도 모른다.
+        var sourceLine = m.MeaningSources.Count == 0
+            ? ""
+            : $"<p class=\"meta\">의미 자료: {Esc(string.Join(" · ", m.MeaningSources))}</p>";
+
         var recent = Table(
             ["시각", "곡", "아티스트", "결과", "기기"],
             m.Recent.Select(r => $"""
@@ -56,11 +61,7 @@ public static class AdminPages
 
         var misses = Table(
             ["곡", "아티스트", "횟수", "기기 수", "마지막", ""],
-            m.TopMisses.Select(r => $"""
-                <tr><td>{Esc(r.Title)}</td><td>{Esc(r.Artist)}</td><td>{r.Count}</td><td>{r.Devices}</td>
-                <td class="nowrap">{Esc(AdminTime.ToLocal(r.LastAt, tz))}</td>
-                <td><a href="/admin/search?q={Url(r.Title)}">검색</a></td></tr>
-                """),
+            m.TopMisses.Select(MissRowHtml(tz)),
             "미스 없음 — 요청한 곡이 전부 서버에 있었습니다.");
 
         var devices = Table(
@@ -84,18 +85,13 @@ public static class AdminPages
                     """;
             }));
 
-        var uploads = Table(
-            ["곡", "아티스트", "출처", "줄", "번역", "올린 기기", "갱신"],
-            m.RecentUploads.Select(SongRowHtml(tz)));
+        var uploads = Table(SongHeaders, m.RecentUploads.Select(SongRowHtml(tz)),
+            "아직 올라온 가사가 없습니다.");
 
-        var noTranslation = Table(
-            ["곡", "아티스트", "출처", "줄", "번역", "올린 기기", "갱신"],
-            m.WithoutTranslation.Select(SongRowHtml(tz)),
+        var noTranslation = Table(SongHeaders, m.WithoutTranslation.Select(SongRowHtml(tz)),
             "모든 곡에 번역이 있습니다.");
 
-        var duplicates = Table(
-            ["곡", "아티스트", "출처", "줄", "번역", "올린 기기", "갱신"],
-            m.DuplicateCandidates.Select(SongRowHtml(tz)),
+        var duplicates = Table(SongHeaders, m.DuplicateCandidates.Select(SongRowHtml(tz)),
             "표기 차이로 갈린 곡이 없습니다 — 키 정규화가 잘 먹고 있습니다.");
 
         var cleaned = Table(
@@ -123,18 +119,19 @@ public static class AdminPages
         return Layout("대시보드", $"""
             {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
             <div class="tiles">{tiles}</div>
+            {sourceLine}
             <p class="meta">각 기기의 <b>로컬 캐시에 없는 곡만</b> 서버로 옵니다 —
             같은 곡을 반복 재생해도 조회 수는 늘지 않습니다(로컬 캐시 → 서버 → 제공자 검색 순).</p>
             {backfill}
 
-            <h2>최근 조회</h2>{recent}
-            <h2>미스 상위 (7일) — 서버에 없어 각 기기가 직접 찾은 곡</h2>{misses}
+            <h2>최근 올라온 가사{More("/admin/search")}</h2>{uploads}
+            <h2>최근 조회{More("/admin/list?view=lookups")}</h2>{recent}
+            <h2>미스 상위 (7일) — 서버에 없어 각 기기가 직접 찾은 곡{More("/admin/list?view=misses")}</h2>{misses}
+            <h2>번역 없는 곡 — 일괄 사전번역 대상{More("/admin/list?view=untranslated")}</h2>{noTranslation}
             <h2>기기별 (7일)</h2>{devices}
             <h2>일별 (7일)</h2>{daily}
-            <h2>최근 올라온 가사</h2>{uploads}
-            <h2>번역 없는 곡 — 일괄 사전번역 대상</h2>{noTranslation}
-            <h2>표기 차이로 갈린 곡 후보 (같은 느슨한 키)</h2>{duplicates}
-            <h2>느슨한 키로 맞은 조회 (7일)</h2>{cleaned}
+            <h2>표기 차이로 갈린 곡 후보 (같은 느슨한 키){More("/admin/list?view=duplicates")}</h2>{duplicates}
+            <h2>느슨한 키로 맞은 조회 (7일){More("/admin/list?view=cleaned")}</h2>{cleaned}
 
             <details>
               <summary>진단 — 현재 요청 헤더 · 서버 상태</summary>
@@ -151,22 +148,100 @@ public static class AdminPages
             """, "home");
     }
 
-    public static string SearchPage(string? query, IReadOnlyList<SongRow> results, TimeZoneInfo tz)
+    public static string SearchPage(
+        string? query, IReadOnlyList<SongRow> results, TimeZoneInfo tz, string? meaning = null)
     {
-        var table = Table(
-            ["곡", "아티스트", "출처", "줄", "번역", "올린 기기", "갱신"],
-            results.Select(SongRowHtml(tz)),
-            string.IsNullOrWhiteSpace(query) ? "저장된 가사가 없습니다." : "검색 결과가 없습니다.");
+        var empty = (string.IsNullOrWhiteSpace(query), meaning) switch
+        {
+            (true, LyricsStore.MeaningFilterOk) => "의미가 만들어진 곡이 아직 없습니다.",
+            (true, LyricsStore.MeaningFilterNone) => "모든 곡에 의미가 있습니다.",
+            (true, _) => "저장된 가사가 없습니다.",
+            _ => "검색 결과가 없습니다.",
+        };
+        var table = Table(SongHeaders, results.Select(SongRowHtml(tz)), empty);
+
+        string Option(string value, string label) =>
+            $"<option value=\"{Esc(value)}\"{(meaning == value ? " selected" : "")}>{Esc(label)}</option>";
+
+        var filterLabel = meaning switch
+        {
+            LyricsStore.MeaningFilterOk => " · 의미 있음",
+            LyricsStore.MeaningFilterNone => " · 의미 아직 없음",
+            _ => "",
+        };
 
         return Layout("가사 검색", $"""
             <form class="inline" method="get" action="/admin/search">
               <input type="text" name="q" value="{Esc(query)}" placeholder="제목 또는 아티스트" autofocus>
+              <select name="meaning">
+                {Option("", "의미: 전체")}
+                {Option(LyricsStore.MeaningFilterOk, "의미: 있음")}
+                {Option(LyricsStore.MeaningFilterNone, "의미: 아직 없음")}
+              </select>
               <button type="submit">검색</button>
             </form>
-            <p class="meta">{(string.IsNullOrWhiteSpace(query) ? "최근 갱신순" : $"\"{Esc(query)}\" 검색")} · {results.Count}건</p>
+            <p class="meta">{(string.IsNullOrWhiteSpace(query) ? "최근 갱신순" : $"\"{Esc(query)}\" 검색")}{filterLabel} · {results.Count}건</p>
             {table}
             """, "search");
     }
+
+    /// <summary>
+    /// 대시보드의 한 섹션을 전부 보여 주는 페이지. 섹션마다 라우트를 파지 않고
+    /// <c>?view=</c> 하나로 처리한다 — 표를 만드는 방법은 대시보드와 완전히 같다.
+    /// </summary>
+    public static string ListPage(string heading, string tableHtml, int count, string? note = null) =>
+        Layout(heading, $"""
+            <h2>{Esc(heading)}</h2>
+            <p class="meta">{count}건{(note is null ? "" : $" · {Esc(note)}")}</p>
+            {tableHtml}
+            <p class="meta"><a href="/admin">← 대시보드</a></p>
+            """, "home");
+
+    /// <summary>`/admin/list?view=` 가 받는 값과 화면 제목. 여기 없는 값은 거절한다.</summary>
+    public static readonly IReadOnlyDictionary<string, string> ListViews =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["lookups"] = "최근 조회",
+            ["misses"] = "미스 상위 (7일)",
+            ["untranslated"] = "번역 없는 곡",
+            ["duplicates"] = "표기 차이로 갈린 곡 후보",
+            ["cleaned"] = "느슨한 키로 맞은 조회 (7일)",
+        };
+
+    /// <summary>`/admin/list` 의 표 — 뷰마다 열이 달라 여기서 만든다.</summary>
+    public static string ListTable(
+        string view, DashboardModel m, TimeZoneInfo tz) => view switch
+    {
+        "lookups" => Table(
+            ["시각", "곡", "아티스트", "결과", "기기"],
+            m.Recent.Select(r => $"""
+                <tr><td class="nowrap">{Esc(AdminTime.ToLocal(r.At, tz))}</td>
+                <td>{SongLink(r.Key, r.Title)}</td><td>{Esc(r.Artist)}</td>
+                <td class="{ResultClass(r.Result)}">{Esc(ResultText(r.Result))}</td>
+                <td>{Esc(r.Device)}</td></tr>
+                """),
+            "아직 조회가 없습니다."),
+
+        "misses" => Table(
+            ["곡", "아티스트", "횟수", "기기 수", "마지막", ""],
+            m.TopMisses.Select(MissRowHtml(tz)),
+            "미스 없음 — 요청한 곡이 전부 서버에 있었습니다."),
+
+        "untranslated" => Table(SongHeaders, m.WithoutTranslation.Select(SongRowHtml(tz)),
+            "모든 곡에 번역이 있습니다."),
+
+        "duplicates" => Table(SongHeaders, m.DuplicateCandidates.Select(SongRowHtml(tz)),
+            "표기 차이로 갈린 곡이 없습니다."),
+
+        _ => Table(
+            ["시각", "요청한 곡", "요청한 아티스트", "맞은 곡", "기기"],
+            m.CleanedMatches.Select(r => $"""
+                <tr><td class="nowrap">{Esc(AdminTime.ToLocal(r.At, tz))}</td>
+                <td>{Esc(r.Title)}</td><td>{Esc(r.Artist)}</td>
+                <td>{SongLink(r.Key, r.Key ?? "")}</td><td>{Esc(r.Device)}</td></tr>
+                """),
+            "느슨한 매치가 아직 없습니다."),
+    };
 
     public static string SongPage(
         LyricsEntry entry, IReadOnlyList<DisplayLine> lines, IReadOnlyList<string> langs,
@@ -239,9 +314,9 @@ public static class AdminPages
         var key = entry.Key ?? "";
         var geniusUrl = MeaningLinks.Genius(entry.Title, entry.Artist, meaning?.GeniusUrl);
 
+        var musixmatchUrl = MeaningLinks.Musixmatch(entry.Title, entry.Artist, meaning?.MusixmatchUrl);
         var links = $"""
-            <a href="{Esc(MeaningLinks.MusixmatchSearch(entry.Title, entry.Artist))}"
-               target="_blank" rel="noopener noreferrer">Musixmatch</a>
+            <a href="{Esc(musixmatchUrl)}" target="_blank" rel="noopener noreferrer">Musixmatch</a>
             · <a href="{Esc(geniusUrl)}" target="_blank" rel="noopener noreferrer">Genius</a>
             """;
 
@@ -286,16 +361,52 @@ public static class AdminPages
 
     // ---- 조각 ----
 
+    /// <summary>곡 목록 표의 열 이름 — 표를 만드는 곳이 여럿이라 한 군데서 정한다.</summary>
+    private static readonly string[] SongHeaders =
+        ["곡", "아티스트", "출처", "줄", "번역", "의미", "올린 기기", "갱신"];
+
     private static Func<SongRow, string> SongRowHtml(TimeZoneInfo tz) => r => $"""
         <tr><td>{SongLink(r.Key, r.Title)}</td><td>{Esc(r.Artist)}</td><td>{Esc(r.Service ?? "-")}</td>
         <td>{r.LineCount}{(r.HasInlineTimeTags ? " ●" : "")}</td>
         <td>{Esc(r.Langs.Length == 0 ? "-" : string.Join(",", r.Langs))}</td>
+        <td class="nowrap">{MeaningCell(r.MeaningStatus)}</td>
         <td>{Esc(r.UpdatedBy ?? "-")}</td>
         <td class="nowrap">{Esc(AdminTime.ToLocal(r.UpdatedAt, tz))}</td></tr>
         """;
 
     private static string SongLink(string? key, string text) =>
         string.IsNullOrEmpty(key) ? Esc(text) : $"<a href=\"/admin/song?key={Url(key)}\">{Esc(text)}</a>";
+
+    /// <summary>
+    /// 미스 행 한 줄. 그때는 없었어도 <b>지금은 서버에 있을 수 있어</b>, 있으면 곡으로 바로 간다
+    /// (없으면 예전처럼 검색으로 보낸다).
+    /// </summary>
+    private static Func<MissRow, string> MissRowHtml(TimeZoneInfo tz) => r =>
+    {
+        var action = string.IsNullOrEmpty(r.Key)
+            ? $"<a href=\"/admin/search?q={Url(r.Title)}\">검색</a>"
+            : $"<a href=\"/admin/song?key={Url(r.Key)}\">가사 보기</a>";
+        return $"""
+            <tr><td>{SongLink(r.Key, r.Title)}</td><td>{Esc(r.Artist)}</td><td>{r.Count}</td><td>{r.Devices}</td>
+            <td class="nowrap">{Esc(AdminTime.ToLocal(r.LastAt, tz))}</td>
+            <td class="nowrap">{action}</td></tr>
+            """;
+    };
+
+    /// <summary>대시보드의 각 목록이 보여 주는 행 수 — 나머지는 "전체 보기"로 넘긴다.</summary>
+    public const int DashboardRows = 10;
+
+    /// <summary>섹션 제목 옆의 "전체 보기" 링크.</summary>
+    private static string More(string href) =>
+        $"<span class=\"meta\"> · <a href=\"{href}\">전체 보기 →</a></span>";
+
+    private static string MeaningCell(string? status) => status switch
+    {
+        MeaningEntry.StatusOk => "<span class=\"ok\">있음</span>",
+        MeaningEntry.StatusNoSource => "<span class=\"meta\">자료 없음</span>",
+        MeaningEntry.StatusFailed => "<span class=\"bad\">실패</span>",
+        _ => "<span class=\"meta\">-</span>",
+    };
 
     private static string ResultText(string result) => result switch
     {

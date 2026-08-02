@@ -114,7 +114,7 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
     {
         try
         {
-            store.LogLookup(title!, artist ?? "", found?.Match ?? "miss", found?.Key,
+            store.LogLookup(title!, artist ?? "", found?.Match ?? LyricsEntry.MatchMiss, found?.Key,
                 device, request.Headers.UserAgent.ToString());
         }
         catch (Exception e) { app.Logger.LogWarning("조회 기록 실패: {Message}", e.Message); }

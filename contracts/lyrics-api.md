@@ -145,6 +145,7 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | `summary` | string | **본문** — 대상 언어 한 문단 |
 | `lang` | string | 요약 언어(`ko` 등) |
 | `geniusUrl` | string? | 정확한 Genius 곡 페이지(있으면) |
+| `musixmatchUrl` | string? | **공식 API로 확인한** Musixmatch 곡 페이지(있으면) — 아래 주의 |
 | `engine` / `model` | string? | 생성에 쓴 엔진·모델 |
 | `attribution` | `[{name, url}]` | **출처 목록 — 표시 의무가 있다(아래)** |
 | `updatedAt` | string | ISO-8601 UTC |
@@ -156,8 +157,16 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 > 요구한다. `summary`를 보여 주는 화면은 `attribution`의 이름·링크를 함께 렌더해야 하며,
 > 목록에 Wikipedia가 있으면 CC BY-SA 표기도 함께 붙인다.
 
-**Musixmatch는 이 API에 없다.** 사이트의 "Meaning" 섹션은 공개 API로 노출되지 않고(meaning
-엔드포인트가 없다) 크롤링은 약관 위반이라, 사람이 직접 읽으러 가는 **링크로만** 제공한다.
+### Musixmatch 주소를 직접 만들지 말 것
+
+`musixmatchUrl`은 **공식 API가 알려 준 주소만** 담는다. 클라이언트가 제목·아티스트로 주소를
+조립해서는 안 된다 — 실측에서 `/lyrics/Pearl-Jam/Even-Flow`가 오류 없이 200을 주면서 조용히
+`/lyrics/Pearl-Jam/Alive`(**다른 곡**)로 넘어갔다. 값이 없으면 링크를 감추거나
+검색(`https://www.musixmatch.com/search?query=…` — 경로형은 403이다)으로 보낸다.
+
+Musixmatch의 "Meaning" 섹션 자체는 공개 API에 엔드포인트가 없다. 서버는 이를 **선택적** 자료원으로만
+다루며 기본은 꺼져 있다(사람이 쓴 해설이 아니라 기계 분석 결과다 — ADR-0007). 켜져 있으면
+`attribution`에 `Musixmatch (AI 분석)`이라는 이름으로 나타나므로, 화면은 그 이름을 그대로 보여 준다.
 
 ## 관리자 UI (`/admin/*`) — 계약 밖
 

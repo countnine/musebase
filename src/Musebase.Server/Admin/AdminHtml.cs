@@ -76,7 +76,7 @@ public static class AdminHtml
             .bar{background:#222;height:.55rem;border-radius:.3rem;overflow:hidden;min-width:6rem}
             .bar>span{display:block;height:100%;background:var(--accent)}
             form.inline{display:flex;gap:.5rem;margin:.5rem 0 1rem;flex-wrap:wrap}
-            input[type=text],input[type=password],textarea{background:#0e0e0e;color:var(--text);
+            input[type=text],input[type=password],textarea,select{background:#0e0e0e;color:var(--text);
                  border:1px solid var(--line);border-radius:.35rem;padding:.4rem .55rem;font:inherit}
             input[type=text]{min-width:18rem}
             textarea{width:100%;min-height:22rem;font-family:ui-monospace,Consolas,monospace;font-size:.82rem}

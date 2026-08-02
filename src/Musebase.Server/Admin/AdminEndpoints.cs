@@ -49,6 +49,9 @@ public static class AdminEndpoints
     private const string CookieName = "musebase_admin";
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
+    /// <summary>`/admin/list`가 한 번에 보여 주는 최대 행 수 — 넘으면 화면에 그렇게 밝힌다.</summary>
+    private const int FullRows = 200;
+
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
         Musebase.Core.Meaning.SongMeaningService meanings, MeaningOptions meaningOptions)
@@ -116,35 +119,41 @@ public static class AdminEndpoints
             if (!LoggedIn(req)) return Html(AdminPages.Login());
 
             var now = DateTimeOffset.UtcNow;
-            var todayStart = AdminTime.TodayStartUtc(now, options.TimeZone);
-            var weekStart = AdminTime.DaysAgoUtc(now, 7);
+            return Html(AdminPages.Dashboard(
+                BuildDashboard(req, now, AdminPages.DashboardRows), now, options.TimeZone, notice));
+        });
 
-            var model = new DashboardModel(
-                Stats: store.Stats(),
-                DatabaseSizeBytes: store.DatabaseSizeBytes(),
-                Today: store.HitRateSince(todayStart),
-                Week: store.HitRateSince(weekStart),
-                Recent: store.RecentLookups(50),
-                TopMisses: store.TopMisses(weekStart),
-                Devices: store.DeviceActivity(weekStart),
-                Daily: store.DailyHitRate(weekStart),
-                CleanedMatches: store.CleanedMatches(weekStart, 30),
-                RecentUploads: store.RecentUploads(20),
-                WithoutTranslation: store.WithoutTranslation(100),
-                DuplicateCandidates: store.DuplicateCandidates(),
-                Health: Health(options.RetentionDays),
-                Diagnostics: Diagnostics(req, options),
-                Meanings: MeaningSummaryOf(),
-                Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""));
+        // 대시보드의 한 섹션을 전부 보여 준다. 섹션마다 라우트를 파지 않고 ?view= 하나로 받는다.
+        app.MapGet("/admin/list", (HttpRequest req, string? view) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            if (view is null || !AdminPages.ListViews.TryGetValue(view, out var heading))
+                return Results.Redirect("/admin");
 
-            return Html(AdminPages.Dashboard(model, now, options.TimeZone, notice));
+            var now = DateTimeOffset.UtcNow;
+            var model = BuildDashboard(req, now, FullRows);
+            var table = AdminPages.ListTable(view, model, options.TimeZone);
+            var count = view switch
+            {
+                "lookups" => model.Recent.Count,
+                "misses" => model.TopMisses.Count,
+                "untranslated" => model.WithoutTranslation.Count,
+                "duplicates" => model.DuplicateCandidates.Count,
+                _ => model.CleanedMatches.Count,
+            };
+            var note = count < FullRows ? null : $"최대 {FullRows}건까지 보여 줍니다";
+            return Html(AdminPages.ListPage(heading, table, count, note));
         });
 
         // ---- 검색·열람 ----
 
-        app.MapGet("/admin/search", (HttpRequest req, string? q) =>
-            !LoggedIn(req) ? Html(AdminPages.Login())
-                : Html(AdminPages.SearchPage(q, store.Search(q, limit: 200), options.TimeZone)));
+        app.MapGet("/admin/search", (HttpRequest req, string? q, string? meaning) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login());
+            var filter = string.IsNullOrWhiteSpace(meaning) ? null : meaning;
+            return Html(AdminPages.SearchPage(
+                q, store.Search(q, limit: 200, meaning: filter), options.TimeZone, filter));
+        });
 
         app.MapGet("/admin/song", (HttpRequest req, string? key, string? lang, string? tags, string? notice) =>
         {
@@ -276,6 +285,32 @@ public static class AdminEndpoints
             };
         }
 
+        // 대시보드와 `/admin/list`가 같은 모델을 쓴다 — 행 수만 다르다.
+        DashboardModel BuildDashboard(HttpRequest req, DateTimeOffset now, int rows)
+        {
+            var todayStart = AdminTime.TodayStartUtc(now, options.TimeZone);
+            var weekStart = AdminTime.DaysAgoUtc(now, 7);
+
+            return new DashboardModel(
+                Stats: store.Stats(),
+                DatabaseSizeBytes: store.DatabaseSizeBytes(),
+                Today: store.HitRateSince(todayStart),
+                Week: store.HitRateSince(weekStart),
+                Recent: store.RecentLookups(rows),
+                TopMisses: store.TopMisses(weekStart, rows),
+                Devices: store.DeviceActivity(weekStart),
+                Daily: store.DailyHitRate(weekStart),
+                CleanedMatches: store.CleanedMatches(weekStart, rows),
+                RecentUploads: store.RecentUploads(rows),
+                WithoutTranslation: store.WithoutTranslation(rows),
+                DuplicateCandidates: store.DuplicateCandidates(rows),
+                Health: Health(options.RetentionDays),
+                Diagnostics: Diagnostics(req, options),
+                Meanings: MeaningSummaryOf(),
+                MeaningSources: meanings.SourceNames,
+                Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""));
+        }
+
         MeaningSummary MeaningSummaryOf()
         {
             var (ok, none, failed) = store.MeaningStats();
@@ -290,8 +325,14 @@ public static class AdminEndpoints
         async Task<string> GenerateStatusAsync(string key, string title, string artist)
         {
             var result = await meanings.BuildAsync(title, artist, meaningOptions.Lang);
-            if (result.Status != Musebase.Core.Meaning.SongMeaning.Retry)
-                store.UpsertMeaning(MeaningMapper.ToEntry(key, title, artist, meaningOptions.Lang, result));
+            if (result.Status == Musebase.Core.Meaning.SongMeaning.Retry) return result.Status;
+
+            // 곡 페이지 주소는 의미 소스와 별개다 — Musixmatch를 자료로 쓰지 않아도 링크는 정확해야 한다.
+            var musixmatch = await meaningOptions.MusixmatchApi().FindAsync(title, artist);
+
+            store.UpsertMeaning(
+                MeaningMapper.ToEntry(key, title, artist, meaningOptions.Lang, result)
+                with { MusixmatchUrl = musixmatch?.ShareUrl });
             return result.Status;
         }
     }

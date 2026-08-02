@@ -180,6 +180,7 @@ Spotify Connect처럼 **PC에서 재생하고 폰에서 조작**하면 두 기�
 | `MUSEBASE_GEMINI_API_KEY` | <https://aistudio.google.com/apikey> | 요금은 아래 "무료로 쓰려면" 참고 |
 | `MUSEBASE_GENIUS_TOKEN` | <https://genius.com/api-clients> → New API Client → **Generate Access Token** | 무료. OAuth 사용자 플로우 불필요 |
 | `MUSEBASE_LASTFM_KEY` | <https://www.last.fm/api/account/create> | 선택. Genius에 설명이 없는 곡을 메워 준다 |
+| `MUSEBASE_MUSIXMATCH_KEY` | <https://developer.musixmatch.com> | 선택. **곡 페이지 링크를 정확히** 만드는 데 쓴다(아래) |
 
 Wikipedia는 키가 필요 없고 기본으로 켜져 있다(`MUSEBASE_MEANING_WIKIPEDIA=0`으로 끔).
 
@@ -190,9 +191,32 @@ MUSEBASE_GEMINI_API_KEY=...
 MUSEBASE_GEMINI_MODEL=gemini-2.5-flash-lite # 생략 가능
 MUSEBASE_GENIUS_TOKEN=...
 MUSEBASE_LASTFM_KEY=...
+MUSEBASE_MUSIXMATCH_KEY=...                 # 선택 — 곡 페이지 링크 정확도
+MUSEBASE_MEANING_SOURCES=genius,lastfm,wikipedia   # 기본값. musixmatch는 빠져 있다
 MUSEBASE_MEANING_BACKFILL_LIMIT=50          # 일괄 생성 1회 처리량
 MUSEBASE_MEANING_BACKFILL_DELAY_MS=0        # 호출 간 간격 — 무료 티어면 4500
 ```
+
+### 자료원을 고른다 — `MUSEBASE_MEANING_SOURCES`
+
+쉼표로 나열한다. 목록에 있고 **키까지 있는** 소스만 실제로 쓰인다(위키피디아만 키가 필요 없다).
+지금 켜져 있는 자료원은 관리자 대시보드에 그대로 표시된다.
+
+`musixmatch`는 **기본값에 없다.** 그 사이트의 "Meaning"은 사람이 쓴 해설이 아니라 가사를 기계로
+분석한 결과이고(같은 블록에 무드·테마·콘텐츠 등급이 함께 온다), 자료로 넣으면 LLM이 쓴 글을 다시
+LLM에 넣어 요약하는 셈이 된다. 켜면 출처가 `Musixmatch (AI 분석)`으로 표시되고, 프롬프트가
+"다른 자료와 어긋나면 다른 자료를 따른다"로 취급한다. 스크래핑이라 약관 위험도 함께 진다 —
+**켜는 판단은 운영자 몫이다.**
+
+```
+MUSEBASE_MEANING_SOURCES=genius,lastfm,wikipedia,musixmatch
+```
+
+### Musixmatch 링크
+
+키를 넣으면 공식 API(`track.search`)로 확인한 **그 곡의 페이지**로 링크가 걸린다. 키가 없으면
+검색 링크로 물러난다. 주소를 규칙으로 만들지 않는 이유는 실측 때문이다 —
+`/lyrics/Pearl-Jam/Even-Flow`가 오류 없이 `/lyrics/Pearl-Jam/Alive`(**다른 곡**)로 넘어갔다.
 
 ### 무료로 쓰려면 — 헷갈리는 지점
 
@@ -234,4 +258,5 @@ OpenRouter는 Google Cloud 프로젝트가 아예 필요 없어, 프로젝트 �
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
 따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
+(현재 3 — `meanings` 테이블과 `musixmatch_url` 컬럼까지)
 (현재 2 = `lyrics` + `lookups` + `meanings`).

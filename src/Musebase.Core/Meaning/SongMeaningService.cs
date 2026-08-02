@@ -49,6 +49,9 @@ public sealed class SongMeaningService
     /// <summary>소스도 엔진도 구성되지 않았으면 이 기능은 꺼진 것이다.</summary>
     public bool IsEnabled => _writer is not null && _sources.Count > 0;
 
+    /// <summary>켜져 있는 소스 이름들 — 무엇에 근거해 만들어지는지 화면에 보여 주기 위한 것.</summary>
+    public IReadOnlyList<string> SourceNames => _sources.Select(s => s.Name).ToList();
+
     public async Task<SongMeaning> BuildAsync(
         string title, string artist, string targetLang, CancellationToken ct = default)
     {

@@ -31,6 +31,8 @@ public sealed record LyricsEntry
     public const string OriginUser = "user";
     public const string MatchExact = "exact";
     public const string MatchCleaned = "cleaned";
+    /// <summary>서버에 없었다. 조회 기록에만 쓰이는 값이다(항목 자체에는 실리지 않는다).</summary>
+    public const string MatchMiss = "miss";
 }
 
 /// <summary>PUT이 병합 정책으로 거부됐을 때의 응답(202).</summary>
@@ -61,6 +63,8 @@ public sealed record MeaningEntry
     /// <summary>근거로 쓴 원문들(JSON 배열 `[{name,url,text}]`).</summary>
     public string Sources { get; init; } = "[]";
     public string? GeniusUrl { get; init; }
+    /// <summary>공식 API로 확인한 Musixmatch 곡 페이지. 규칙으로 만든 주소는 다른 곡으로 갈 수 있어 쓰지 않는다.</summary>
+    public string? MusixmatchUrl { get; init; }
     public string? Engine { get; init; }
     public string? Model { get; init; }
     /// <summary>`ok` | `no-source` | `failed`.</summary>
