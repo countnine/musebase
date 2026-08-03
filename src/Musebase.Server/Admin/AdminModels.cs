@@ -8,6 +8,9 @@ public sealed record LookupRow(string At, string Title, string Artist, string Re
 public sealed record MissRow(
     string Title, string Artist, int Count, string LastAt, int Devices, string? Key = null);
 
+/// <summary>광고로 표시해 차단한 제목 1건.</summary>
+public sealed record AdTitleRow(string TitleKey, string Title, string Artist, string AddedAt);
+
 /// <summary>기기별 활동.</summary>
 public sealed record DeviceRow(string Device, int Lookups, int Hits, string LastAt);
 
@@ -53,7 +56,9 @@ public sealed record DashboardModel(
     MeaningSummary Meanings,
     /// <summary>지금 켜져 있는 의미 자료원 이름 — 무엇에 근거해 만들어지는지 화면에 드러낸다.</summary>
     IReadOnlyList<string> MeaningSources,
-    string Csrf);
+    string Csrf,
+    /// <summary>광고로 표시해 차단한 제목들(되돌릴 수 있어야 하므로 화면에 보여 준다).</summary>
+    IReadOnlyList<AdTitleRow>? AdTitles = null);
 
 /// <summary>대시보드의 "곡의 의미" 타일 — 만든 것 / 자료 없음 / 자료 부족 / 실패 + 아직 안 해 본 곡 수.</summary>
 public sealed record MeaningSummary(

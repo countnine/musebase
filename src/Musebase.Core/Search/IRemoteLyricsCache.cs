@@ -8,11 +8,18 @@ namespace Musebase.Core.Search;
 /// <param name="Pending">최근에 다른 기기도 이 곡을 물었다 — 번역을 잠시 양보할 만하다.</param>
 /// <param name="RetryAfterMs">서버가 제안하는 재조회 간격(0이면 제안 없음). 호출자가 clamp한다.</param>
 /// <param name="Langs">받은 가사에 들어 있는 번역 언어들(소문자). 히트가 아니면 빈 배열.</param>
+/// <param name="IsAd">
+/// 서버가 이 제목을 <b>광고로 표시</b>해 뒀다. 제공자 검색을 하지 말아야 한다 — 광고는 곡이
+/// 아니라서 검색이 늘 헛돌고, 어쩌다 뭔가 맞으면 엉뚱한 가사가 광고 위에 뜬다.
+/// </summary>
 public readonly record struct RemoteLyricsResult(
-    Lyrics? Lyrics, bool Pending, int RetryAfterMs, IReadOnlyList<string> Langs)
+    Lyrics? Lyrics, bool Pending, int RetryAfterMs, IReadOnlyList<string> Langs, bool IsAd = false)
 {
     /// <summary>미스·실패·미접속 — 아무 힌트도 없다.</summary>
     public static readonly RemoteLyricsResult Miss = new(null, false, 0, []);
+
+    /// <summary>서버가 광고로 표시한 제목 — 검색하지 않는다.</summary>
+    public static readonly RemoteLyricsResult Ad = new(null, false, 0, [], IsAd: true);
 
     /// <summary>대상 언어 번역이 들어 있는가(대소문자 무시).</summary>
     public bool HasLanguage(string lang) =>

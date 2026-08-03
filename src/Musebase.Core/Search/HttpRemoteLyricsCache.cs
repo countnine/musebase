@@ -117,6 +117,11 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         try
         {
             var body = await response.Content.ReadFromJsonAsync<MissBody>(Json, ct).ConfigureAwait(false);
+            if (body is { Ad: true })
+            {
+                _log?.Invoke("[server] 광고로 표시된 제목 — 가사를 찾지 않습니다");
+                return RemoteLyricsResult.Ad;
+            }
             if (body is not { Pending: true }) return RemoteLyricsResult.Miss;
             _log?.Invoke($"[server] 다른 기기도 이 곡을 찾는 중 — 번역을 양보합니다({body.RetryAfterMs}ms)");
             return new RemoteLyricsResult(null, true, body.RetryAfterMs, []);
@@ -262,9 +267,12 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         public string? Url { get; init; }
     }
 
-    /// <summary>404 본문(계약 v1의 "번역 양보"). 구버전 서버는 본문이 없다.</summary>
+    /// <summary>404 본문(계약 v1의 "번역 양보"·"광고 차단"). 구버전 서버는 본문이 없다.</summary>
     private sealed record MissBody
     {
+        /// <summary>이 제목은 광고로 표시돼 있다 — 제공자 검색도 업로드도 하지 않는다.</summary>
+        public bool Ad { get; init; }
+
         public string? Error { get; init; }
         public bool Pending { get; init; }
         public int RetryAfterMs { get; init; }

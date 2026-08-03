@@ -115,6 +115,8 @@ public static class AdminPages
         var uploads = Table(SongHeaders, m.RecentUploads.Select(SongRowHtml(tz)),
             "아직 올라온 가사가 없습니다.");
 
+        var ads = AdTable(m.AdTitles ?? [], m.Csrf, tz);
+
         var noTranslation = Table(SongHeaders, m.WithoutTranslation.Select(SongRowHtml(tz)),
             "모든 곡에 번역이 있습니다.");
 
@@ -157,6 +159,7 @@ public static class AdminPages
             <h2>번역 없는 곡 — 일괄 사전번역 대상{More("/admin/list?view=untranslated")}</h2>{noTranslation}
             <h2>기기별 (7일)</h2>{devices}
             <h2>일별 (7일)</h2>{daily}
+            <h2>광고로 차단한 제목{More("/admin/list?view=ads")}</h2>{ads}
             <h2>표기 차이로 갈린 곡 후보 (같은 느슨한 키){More("/admin/list?view=duplicates")}</h2>{duplicates}
             <h2>느슨한 키로 맞은 조회 (7일){More("/admin/list?view=cleaned")}</h2>{cleaned}
 
@@ -232,6 +235,7 @@ public static class AdminPages
             ["misses"] = "미스 상위 (7일)",
             ["untranslated"] = "번역 없는 곡",
             ["duplicates"] = "표기 차이로 갈린 곡 후보",
+            ["ads"] = "광고로 차단한 제목",
             ["cleaned"] = "느슨한 키로 맞은 조회 (7일)",
         };
 
@@ -259,6 +263,8 @@ public static class AdminPages
 
         "duplicates" => Table(SongHeaders, m.DuplicateCandidates.Select(SongRowHtml(tz)),
             "표기 차이로 갈린 곡이 없습니다."),
+
+        "ads" => AdTable(m.AdTitles ?? [], m.Csrf, tz),
 
         _ => Table(
             ["시각", "요청한 곡", "요청한 아티스트", "맞은 곡", "기기"],
@@ -326,6 +332,14 @@ public static class AdminPages
               <input type="hidden" name="confirm" value="1">
               <button class="danger" type="submit">이 곡 삭제</button>
               <span class="meta">삭제하면 다음에 어느 기기든 재생할 때 다시 검색해 새로 채웁니다.</span>
+            </form>
+
+            <form method="post" action="/admin/song/ad" style="margin-top:.6rem">
+              <input type="hidden" name="key" value="{Esc(key)}">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button class="danger" type="submit">광고로 표시</button>
+              <span class="meta">이 <b>제목</b>을 차단합니다 — 가사를 지우고, 앞으로 어느 기기가
+              올려도 등록하지 않으며 검색도 하지 않습니다. 되돌리기는 대시보드에서.</span>
             </form>
             """, "search");
     }
@@ -434,6 +448,23 @@ public static class AdminPages
             <td class="nowrap">{action}</td></tr>
             """;
     };
+
+    /// <summary>
+    /// 차단한 광고 제목 표. 되돌리는 버튼을 같이 둔다 — 잘못 눌러 진짜 곡을 막았을 때
+    /// 서버에 들어가지 않고도 풀 수 있어야 한다.
+    /// </summary>
+    private static string AdTable(IReadOnlyList<AdTitleRow> rows, string csrf, TimeZoneInfo tz) => Table(
+        ["차단한 제목", "표시 당시 아티스트", "표시 시각", ""],
+        rows.Select(r => $"""
+            <tr><td>{Esc(r.Title)}</td><td>{Esc(r.Artist)}</td>
+            <td class="nowrap">{Esc(AdminTime.ToLocal(r.AddedAt, tz))}</td>
+            <td><form method="post" action="/admin/ads/remove" class="inline" style="margin:0">
+              <input type="hidden" name="titleKey" value="{Esc(r.TitleKey)}">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit">해제</button>
+            </form></td></tr>
+            """),
+        "차단한 광고가 없습니다 — 광고가 가사로 올라오면 곡 상세에서 [광고로 표시]를 누르세요.");
 
     /// <summary>대시보드의 각 목록이 보여 주는 행 수 — 나머지는 "전체 보기"로 넘긴다.</summary>
     public const int DashboardRows = 10;

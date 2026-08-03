@@ -250,6 +250,70 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.NotNull(store.GetMeaning("Shallow", "Lady Gaga"));
     }
 
+    // ---- 광고 제목 차단 ----
+
+    [Fact]
+    public void 광고로_표시하면_가사를_지우고_이후_등록을_막는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("광고 없이 음악을 감상하세요.", "Spotify", Plain), "s26", out _);
+        Assert.Equal(1, store.Stats().Songs);
+
+        store.AddAdTitle("광고 없이 음악을 감상하세요.", "Spotify");
+
+        Assert.Equal(0, store.Stats().Songs);            // 쓰레기 행이 사라진다
+        Assert.True(store.IsAdTitle("광고 없이 음악을 감상하세요."));
+    }
+
+    [Fact]
+    public void 같은_광고를_다른_아티스트로_올려도_같은_제목이면_막힌다()
+    {
+        // 같은 광고가 아티스트를 여러 이름으로 달고 온다 — 그래서 제목만 본다.
+        using var store = NewStore();
+        store.AddAdTitle("NEW 뉴트럴 보드카 하이볼 출시", "Spotify");
+
+        Assert.True(store.IsAdTitle("NEW 뉴트럴 보드카 하이볼 출시"));
+        Assert.True(store.IsAdTitle("new 뉴트럴 보드카 하이볼 출시"));   // 대소문자
+        Assert.True(store.IsAdTitle("NEW  뉴트럴 보드카 하이볼 출시!"));  // 공백·문장부호
+    }
+
+    [Fact]
+    public void 광고로_표시된_제목이_여러_행으로_갈려_있어도_전부_지운다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("광고 없이 음악을 감상하세요.", "Spotify", Plain), "s26", out _);
+        store.Upsert(Entry("광고 없이 음악을 감상하세요.", "광고 • 1/2", Plain), "s26", out _);
+        Assert.Equal(2, store.Stats().Songs);
+
+        store.AddAdTitle("광고 없이 음악을 감상하세요.", "Spotify");
+        Assert.Equal(0, store.Stats().Songs);
+    }
+
+    [Fact]
+    public void 광고_표시는_되돌릴_수_있다()
+    {
+        using var store = NewStore();
+        store.AddAdTitle("광고 없이 음악을 감상하세요.", "Spotify");
+        var row = Assert.Single(store.AdTitles());
+
+        store.RemoveAdTitle(row.TitleKey);
+
+        Assert.False(store.IsAdTitle("광고 없이 음악을 감상하세요."));
+        Assert.Empty(store.AdTitles());
+    }
+
+    [Fact]
+    public void 진짜_곡은_영향을_받지_않는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "s26", out _);
+        store.AddAdTitle("광고 없이 음악을 감상하세요.", "Spotify");
+
+        Assert.False(store.IsAdTitle("Kids"));
+        Assert.NotNull(store.Get("Kids", "MGMT"));
+        Assert.Equal(1, store.Stats().Songs);
+    }
+
     [Fact]
     public void 자료부족은_의미_있음에서_빠진다()
     {
