@@ -209,6 +209,47 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.Single(store.Search(null, meaning: LyricsStore.MeaningFilterNone));
     }
 
+    [Theory]
+    // 같은 폰이 같은 곡을 날마다 다르게 보고한다 — 구분자 하나로 곡이 갈리면 안 된다.
+    [InlineData("Lady Gaga/Bradley Cooper")]
+    [InlineData("Lady Gaga, Bradley Cooper")]
+    [InlineData("Lady Gaga & Bradley Cooper")]
+    [InlineData("Lady Gaga feat. Bradley Cooper")]
+    [InlineData("Lady Gaga — A Star Is Born")]
+    public void 공동_아티스트_표기가_달라도_같은_곡으로_본다(string artist)
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Shallow", "Lady Gaga/Bradley Cooper", Plain), "s26", out _);
+
+        Assert.NotNull(store.Get("Shallow", artist));
+        Assert.Equal(1, store.Stats().Songs); // 새 행이 생기지 않는다
+
+        store.Upsert(Entry("Shallow", artist, Translated), "윈도우PC", out _);
+        Assert.Equal(1, store.Stats().Songs);
+    }
+
+    [Fact]
+    public void 표기가_갈려_이미_두_행이_됐어도_의미를_찾아낸다()
+    {
+        // 실측 상황: 의미는 슬래시 표기 행에만 붙어 있는데 폰은 쉼표 표기로 물어봤다.
+        using var store = NewStore();
+        store.Upsert(Entry("Shallow", "Lady Gaga/Bradley Cooper", Plain), "s26", out _);
+
+        // 예전 규칙으로 갈려 저장된 형제 행을 흉내낸다.
+        store.UpsertRawForTest("shallow|lady gaga, bradley cooper", "shallow|lady gaga, bradley cooper",
+            "Shallow", "Lady Gaga, Bradley Cooper", Plain);
+
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "shallow|lady gaga/bradley cooper", Title = "Shallow", Artist = "Lady Gaga/Bradley Cooper",
+            Lang = "ko", Sources = "[]", Summary = "영화 속 두 사람의 대화를 담은 곡이다.",
+            Status = MeaningEntry.StatusOk, UpdatedAt = "2026-08-03T00:00:00Z",
+        });
+
+        Assert.NotNull(store.GetMeaning("Shallow", "Lady Gaga, Bradley Cooper"));
+        Assert.NotNull(store.GetMeaning("Shallow", "Lady Gaga"));
+    }
+
     [Fact]
     public void 자료부족은_의미_있음에서_빠진다()
     {

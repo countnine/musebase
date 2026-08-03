@@ -119,6 +119,62 @@ public sealed class LyricsStore : IDisposable
             ReclassifyInsufficient();
             Execute("PRAGMA user_version = 4;");
         }
+
+        if (version < 5)
+        {
+            // 느슨한 키 규칙이 바뀌었다(공동 아티스트를 대표 한 명으로 줄인다).
+            // 기존 행을 다시 계산하지 않으면 예전에 갈린 곡들이 영영 서로를 못 찾는다.
+            RecomputeLooseKeys();
+            Execute("PRAGMA user_version = 5;");
+        }
+    }
+
+    /// <summary>모든 행의 <c>loose_key</c>를 지금 규칙으로 다시 계산한다(행은 합치지 않는다).</summary>
+    private void RecomputeLooseKeys()
+    {
+        var rows = new List<(string Key, string Title, string Artist)>();
+        using (var read = _conn.CreateCommand())
+        {
+            read.CommandText = "SELECT key, title, artist FROM lyrics;";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        }
+
+        foreach (var (key, title, artist) in rows)
+        {
+            using var update = _conn.CreateCommand();
+            update.CommandText = "UPDATE lyrics SET loose_key = $loose WHERE key = $k;";
+            update.Parameters.AddWithValue("$loose", PrimaryLooseKey(title, artist));
+            update.Parameters.AddWithValue("$k", key);
+            update.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// 병합 규칙을 우회해 행을 그대로 넣는다 — <b>테스트 전용</b>.
+    /// 예전 규칙으로 갈려 저장된 형제 행을 재현할 때 쓴다(운영 경로에서는 쓰지 않는다).
+    /// </summary>
+    public void UpsertRawForTest(string key, string looseKey, string title, string artist, string lrc)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT OR REPLACE INTO lyrics
+                    (key, loose_key, title, artist, lrc, service, origin, langs,
+                     line_count, has_inline, revision, updated_at, updated_by)
+                VALUES ($key, $loose, $title, $artist, $lrc, 'LRCLIB', 'provider', '',
+                        2, 0, 1, $at, 'test');
+                """;
+            cmd.Parameters.AddWithValue("$key", key);
+            cmd.Parameters.AddWithValue("$loose", looseKey);
+            cmd.Parameters.AddWithValue("$title", title);
+            cmd.Parameters.AddWithValue("$artist", artist);
+            cmd.Parameters.AddWithValue("$lrc", lrc);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.ExecuteNonQuery();
+        }
     }
 
     /// <summary>테스트에서 마이그레이션을 다시 돌려 보기 위한 것. 운영 경로에서는 쓰지 않는다.</summary>
@@ -177,11 +233,12 @@ public sealed class LyricsStore : IDisposable
             if (variant.Artist is { } a && !artists.Contains(a, StringComparer.OrdinalIgnoreCase)) artists.Add(a);
         }
 
-        // 아티스트에서 앨범 꼬리를 떼어 낸 형태도 후보에 넣는다.
+        // 앨범 꼬리를 뗀 형태와, 공동 아티스트를 대표 한 명으로 줄인 형태도 후보에 넣는다
+        // (구분자만 다른 표기 — "A/B" ↔ "A, B" — 를 흡수한다).
         foreach (var a in artists.ToArray())
         {
-            var stripped = StripAlbumSuffix(a);
-            if (!stripped.Equals(a, StringComparison.OrdinalIgnoreCase)) artists.Add(stripped);
+            foreach (var candidate in new[] { StripAlbumSuffix(a), LeadArtist(a) })
+                if (!artists.Contains(candidate, StringComparer.OrdinalIgnoreCase)) artists.Add(candidate);
         }
 
         var keys = new List<string>();
@@ -209,7 +266,23 @@ public sealed class LyricsStore : IDisposable
             if (variant.Artist is { Length: > 0 } a) cleanArtist = a;
             break; // 첫 변형이 가장 정제된 형태다
         }
-        return LyricsCacheStore.MakeKey(cleanTitle, StripAlbumSuffix(cleanArtist));
+        return LyricsCacheStore.MakeKey(cleanTitle, LeadArtist(cleanArtist));
+    }
+
+    /// <summary>
+    /// 느슨한 키에 쓸 <b>대표 아티스트 한 명</b>. 앨범 꼬리를 떼고 공동 아티스트도 첫 명만 남긴다.
+    ///
+    /// 실측으로 걸린 문제: 같은 폰이 같은 곡을 어떤 날은
+    /// <c>"Lady Gaga/Bradley Cooper"</c>, 어떤 날은 <c>"Lady Gaga, Bradley Cooper"</c>로 보고했다.
+    /// 구분자 하나가 달라 두 행으로 갈렸고, 한쪽에만 붙은 의미가 다른 쪽에서는 보이지 않았다.
+    /// 제목이 같고 대표 아티스트가 같으면 사실상 같은 곡이므로, 여기까지 줄여 흡수한다
+    /// (정확 키가 먼저 시도되므로 이건 어디까지나 <b>폴백</b>이다).
+    /// </summary>
+    public static string LeadArtist(string artist)
+    {
+        var stripped = StripAlbumSuffix(artist);
+        var names = Musebase.Core.Meaning.ArtistNames.All(stripped);
+        return names.Count > 0 ? names[0] : stripped;
     }
 
     /// <summary>
@@ -397,8 +470,15 @@ public sealed class LyricsStore : IDisposable
     {
         lock (_lock)
         {
-            var key = Locate(title, artist)?.Key ?? ExactKey(title, artist);
-            return ReadMeaning(key);
+            var found = Locate(title, artist);
+            var key = found?.Key ?? ExactKey(title, artist);
+            if (ReadMeaning(key) is { } direct) return direct;
+
+            // 같은 곡이 표기 차이로 두 행에 갈려 있고 의미가 **한쪽에만** 붙어 있을 수 있다
+            // (실측: "Lady Gaga/Bradley Cooper"와 "Lady Gaga, Bradley Cooper"). 가사가 맞았는데
+            // 의미만 비는 상태는 만들지 않는다 — 같은 느슨한 키를 쓰는 형제 행까지 살펴본다.
+            return ReadMeaningByLooseGroup(PrimaryLooseKey(title, artist))
+                ?? (found is null ? null : ReadMeaningByLooseGroup(PrimaryLooseKey(found.Title, found.Artist)));
         }
     }
 
@@ -406,6 +486,26 @@ public sealed class LyricsStore : IDisposable
     public MeaningEntry? GetMeaningByKey(string key)
     {
         lock (_lock) return ReadMeaning(key);
+    }
+
+    /// <summary>
+    /// 같은 느슨한 키를 쓰는 행들 중 의미가 붙은 것을 찾는다.
+    /// 쓸 수 있는 의미(<c>ok</c>)를 먼저 고른다 — "자료 부족" 행이 진짜 의미를 가릴 이유가 없다.
+    /// </summary>
+    private MeaningEntry? ReadMeaningByLooseGroup(string looseKey)
+    {
+        if (looseKey.Length == 0) return null;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.key FROM meanings m
+            JOIN lyrics l ON l.key = m.key
+            WHERE l.loose_key = $loose
+            ORDER BY CASE WHEN m.status = 'ok' THEN 0 ELSE 1 END, m.updated_at DESC
+            LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$loose", looseKey);
+        return cmd.ExecuteScalar() is string key ? ReadMeaning(key) : null;
     }
 
     private MeaningEntry? ReadMeaning(string key)

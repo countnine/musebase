@@ -563,29 +563,24 @@ public sealed class MainActivity : Activity
             return;
         }
 
-        var loading = new AlertDialog.Builder(this)
+        // 창은 **하나**만 띄우고 내용만 바꾼다. 불러오기용과 결과용을 따로 띄우면
+        // 팝업이 두 번 깜빡여 부자연스럽다(실측으로 지적받은 부분).
+        var dialog = new AlertDialog.Builder(this)
             .SetTitle($"{track.Title} — {track.Artist}")!
             .SetMessage("불러오는 중…")!
-            .SetCancelable(true)!
+            .SetPositiveButton("닫기", (_, _) => { })!
             .Show();
 
         Musebase.Core.Search.SongMeaningView? meaning = null;
         try { meaning = await remote.GetMeaningAsync(track.Title, track.Artist); }
         catch (Exception) { /* 조용한 강등 — 부가 기능이다 */ }
 
-        loading?.Dismiss();
-        if (IsFinishing || IsDestroyed) return;
+        if (IsFinishing || IsDestroyed || dialog is null || !dialog.IsShowing) return;
 
-        var body = meaning is null
+        dialog.SetMessage(meaning is null
             // 대부분의 곡에는 아직 의미가 없다 — 실패가 아니라 정상이다.
             ? "이 곡의 의미는 아직 없습니다."
-            : meaning.Summary + "\n\n" + meaning.CreditLine;
-
-        new AlertDialog.Builder(this)
-            .SetTitle($"{track.Title} — {track.Artist}")!
-            .SetMessage(body)!
-            .SetPositiveButton("닫기", (_, _) => { })!
-            .Show();
+            : meaning.Summary + "\n\n" + meaning.CreditLine);
     }
 
     private void ConfirmMarkWrong()
