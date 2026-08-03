@@ -114,11 +114,13 @@ public sealed class MainActivity : Activity
         _moveButton = IconButton(global::Android.Resource.Drawable.IcMenuCompass, "오버레이 위치 이동", ToggleOverlayMoveMode);
         var searchButton = IconButton(global::Android.Resource.Drawable.IcMenuSearch, "가사 검색",
             () => StartActivity(new Intent(this, typeof(SearchActivity))));
+        var meaningButton = IconButton(global::Android.Resource.Drawable.IcMenuInfoDetails, "이 곡의 의미", ShowMeaning);
         var wrongButton = IconButton(global::Android.Resource.Drawable.IcMenuDelete, "틀린 가사로 표시", ConfirmMarkWrong);
         var settingsButton = IconButton(global::Android.Resource.Drawable.IcMenuPreferences, "설정",
             () => StartActivity(new Intent(this, typeof(SettingsActivity))));
         var quitButton = IconButton(global::Android.Resource.Drawable.IcMenuCloseClearCancel, "앱 종료", ConfirmQuit);
         iconBar.AddView(searchButton);
+        iconBar.AddView(meaningButton);
         iconBar.AddView(wrongButton);
         iconBar.AddView(_overlayButton);
         iconBar.AddView(_moveButton);
@@ -541,6 +543,51 @@ public sealed class MainActivity : Activity
     /// 현재 곡을 "틀린 가사"로 표시한다(Windows 트레이의 같은 기능) — 이 곡은 이후 가사를 찾지 않고,
     /// 캐시에 저장된 잘못된 가사도 지운다. 되돌리려면 가사 검색에서 직접 골라 적용하면 된다.
     /// </summary>
+    /// <summary>
+    /// "이 곡의 의미" — 가사 서버가 미리 만들어 둔 문단을 <b>읽기만 한다</b>.
+    /// 생성은 서버 관리자 화면에서만 일어나므로 앱은 조회 전용이고, 없으면 그렇게 알려 줄 뿐이다.
+    ///
+    /// 출처 표기는 의무라(Wikipedia CC BY-SA 등) 본문과 함께 반드시 붙인다.
+    /// </summary>
+    private async void ShowMeaning()
+    {
+        if (MusebaseApp.Instance is not { } app || app.Source.CurrentTrack is not { } track)
+        {
+            Toast.MakeText(this, "재생 중인 곡이 없습니다.", ToastLength.Short)?.Show();
+            return;
+        }
+
+        if (app.Coordinator.RemoteCache is not { } remote)
+        {
+            Toast.MakeText(this, "가사 서버가 설정되지 않았습니다.", ToastLength.Short)?.Show();
+            return;
+        }
+
+        var loading = new AlertDialog.Builder(this)
+            .SetTitle($"{track.Title} — {track.Artist}")!
+            .SetMessage("불러오는 중…")!
+            .SetCancelable(true)!
+            .Show();
+
+        Musebase.Core.Search.SongMeaningView? meaning = null;
+        try { meaning = await remote.GetMeaningAsync(track.Title, track.Artist); }
+        catch (Exception) { /* 조용한 강등 — 부가 기능이다 */ }
+
+        loading?.Dismiss();
+        if (IsFinishing || IsDestroyed) return;
+
+        var body = meaning is null
+            // 대부분의 곡에는 아직 의미가 없다 — 실패가 아니라 정상이다.
+            ? "이 곡의 의미는 아직 없습니다."
+            : meaning.Summary + "\n\n" + meaning.CreditLine;
+
+        new AlertDialog.Builder(this)
+            .SetTitle($"{track.Title} — {track.Artist}")!
+            .SetMessage(body)!
+            .SetPositiveButton("닫기", (_, _) => { })!
+            .Show();
+    }
+
     private void ConfirmMarkWrong()
     {
         if (MusebaseApp.Instance?.Source.CurrentTrack is null)
