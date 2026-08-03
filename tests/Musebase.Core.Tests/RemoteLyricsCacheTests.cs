@@ -109,6 +109,26 @@ public class RemoteLyricsCacheTests
         await cache.SetAsync("T", "A", Lyrics.Parse(Lrc)!); // 예외가 새어 나오면 실패
     }
 
+    [Fact]
+    public async Task 광고로_표시된_제목은_힌트를_받아_검색하지_않는다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.NotFound,
+            """{"error":"ad","pending":false,"retryAfterMs":0,"ad":true}"""))));
+
+        var result = await cache.GetAsync("광고 없이 음악을 감상하세요.", "Spotify");
+
+        Assert.True(result.IsAd);
+        Assert.Null(result.Lyrics);
+        Assert.False(result.Pending); // 양보와 혼동하지 않는다
+    }
+
+    [Fact]
+    public async Task 구버전_서버의_평범한_404는_광고가_아니다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+        Assert.False((await cache.GetAsync("Kids", "MGMT")).IsAd);
+    }
+
     // ---- 곡의 의미(앱은 읽기만 한다) ----
 
     [Fact]

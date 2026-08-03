@@ -127,6 +127,105 @@ public sealed class LyricsStore : IDisposable
             RecomputeLooseKeys();
             Execute("PRAGMA user_version = 5;");
         }
+
+        if (version < 6)
+        {
+            // 광고 제목 차단 목록. 자동 판정(AdSignals)이 놓친 것을 사람이 표시해 막는다 —
+            // 실제로 "광고 없이 음악을 감상하세요." 같은 행이 가사로 올라와 있었다.
+            Execute("""
+                CREATE TABLE IF NOT EXISTS ad_titles (
+                    title_key TEXT PRIMARY KEY,   -- 정규화한 제목(공백·구두점 무시)
+                    title     TEXT NOT NULL,      -- 표시용 원본 표기
+                    artist    TEXT NOT NULL,      -- 표시용(판단 근거)
+                    added_at  TEXT NOT NULL
+                );
+                """);
+            Execute("PRAGMA user_version = 6;");
+        }
+    }
+
+    // ---- 광고 제목 차단 ----
+
+    /// <summary>
+    /// 비교용 제목 키. 표기가 조금씩 달라도(공백·문장부호·대소문자) 같은 광고로 본다.
+    /// <b>제목만</b> 본다 — 같은 광고가 아티스트를 여러 이름으로 달고 오기 때문이다.
+    /// </summary>
+    public static string AdKey(string title) => Musebase.Core.Meaning.MeaningText.Normalize(title);
+
+    /// <summary>이 제목이 광고로 표시돼 있는가.</summary>
+    public bool IsAdTitle(string title)
+    {
+        var key = AdKey(title);
+        if (key.Length == 0) return false;
+
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM ad_titles WHERE title_key = $k LIMIT 1;";
+            cmd.Parameters.AddWithValue("$k", key);
+            return cmd.ExecuteScalar() is not null;
+        }
+    }
+
+    /// <summary>광고로 표시한다. 이미 올라온 가사 행도 함께 지운다(쓰레기 행이다).</summary>
+    public void AddAdTitle(string title, string artist)
+    {
+        var key = AdKey(title);
+        if (key.Length == 0) return;
+
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO ad_titles (title_key, title, artist, added_at)
+                VALUES ($k, $t, $a, $at)
+                ON CONFLICT(title_key) DO UPDATE SET title = $t, artist = $a, added_at = $at;
+                """;
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.Parameters.AddWithValue("$t", title);
+            cmd.Parameters.AddWithValue("$a", artist);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.ExecuteNonQuery();
+
+            // 같은 제목으로 저장된 가사가 여러 아티스트로 갈려 있을 수 있다 — 전부 지운다.
+            using var purge = _conn.CreateCommand();
+            purge.CommandText = """
+                DELETE FROM lyrics WHERE key IN (
+                    SELECT key FROM lyrics WHERE lower(title) = lower($t)
+                );
+                """;
+            purge.Parameters.AddWithValue("$t", title);
+            purge.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>광고 표시를 되돌린다(잘못 눌렀을 때).</summary>
+    public void RemoveAdTitle(string titleKey)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM ad_titles WHERE title_key = $k;";
+            cmd.Parameters.AddWithValue("$k", titleKey);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>차단된 광고 제목 목록(최근 표시순).</summary>
+    public IReadOnlyList<AdTitleRow> AdTitles(int limit = 200)
+    {
+        var rows = new List<AdTitleRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT title_key, title, artist, added_at FROM ad_titles ORDER BY added_at DESC LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new AdTitleRow(
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+        }
+        return rows;
     }
 
     /// <summary>모든 행의 <c>loose_key</c>를 지금 규칙으로 다시 계산한다(행은 합치지 않는다).</summary>

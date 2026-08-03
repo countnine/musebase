@@ -106,6 +106,11 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
 
+    // 광고로 표시된 제목은 여기서 끝난다. 조회 기록도 남기지 않는다 — 광고는 곡이 아니라서
+    // 미스로 세면 히트율과 "미스 상위(채울 후보)" 목록이 둘 다 오염된다.
+    if (store.IsAdTitle(title!))
+        return Results.Json(new NotFoundBody("ad", false, 0, Ad: true), statusCode: 404);
+
     var found = store.Get(title!, artist ?? "");
     var device = AdminEndpoints.DeviceOf(request, admin);
 
@@ -161,6 +166,11 @@ app.MapPut("/v1/lyrics", async (HttpRequest request) =>
 
     if (incoming is null || string.IsNullOrWhiteSpace(incoming.Title) || string.IsNullOrWhiteSpace(incoming.Lrc))
         return Results.Json(new ApiError("title and lrc required"), statusCode: 400);
+
+    // 광고로 표시된 제목은 등록하지 않는다. **구버전 앱이 힌트를 몰라도 여기서 막힌다** —
+    // 차단의 실효는 이 줄에 있고, 조회 쪽 힌트는 헛도는 검색을 아끼기 위한 것이다.
+    if (store.IsAdTitle(incoming.Title))
+        return Results.Json(new ApiError("ad"), statusCode: StatusCodes.Status202Accepted);
 
     // 어느 기기가 올렸는지 남긴다(관리자 화면의 "올린 기기").
     var saved = store.Upsert(incoming, updatedBy: AdminEndpoints.DeviceOf(request, admin), out var rejection);

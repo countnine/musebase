@@ -92,7 +92,13 @@ public sealed record ApiError([property: JsonPropertyName("error")] string Error
 /// 받는 쪽은 제공자 검색은 그대로 하되 번역을 잠시 미루고 서버를 다시 조회하면 중복 번역을 피한다
 /// (`contracts/lyrics-api.md`의 "번역 양보"). 모르는 필드는 무시하면 되므로 하위 호환이다.
 /// </summary>
+/// <param name="Ad">
+/// 이 제목은 <b>광고로 표시</b>돼 있다. 클라이언트는 제공자 검색도 업로드도 하지 말아야 한다 —
+/// 광고는 곡이 아니라서 검색이 늘 헛돌고 서버에는 쓰레기 행이 쌓인다.
+/// 구버전 클라이언트는 이 필드를 모르고 평범한 미스로 처리한다(그래도 서버가 업로드를 막는다).
+/// </param>
 public sealed record NotFoundBody(
     [property: JsonPropertyName("error")] string Error,
     bool Pending,
-    int RetryAfterMs);
+    int RetryAfterMs,
+    bool Ad = false);

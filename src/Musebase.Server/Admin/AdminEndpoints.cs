@@ -195,6 +195,7 @@ public static class AdminEndpoints
                 "misses" => model.TopMisses.Count,
                 "untranslated" => model.WithoutTranslation.Count,
                 "duplicates" => model.DuplicateCandidates.Count,
+                "ads" => model.AdTitles?.Count ?? 0,
                 _ => model.CleanedMatches.Count,
             };
             var note = count < FullRows ? null : $"최대 {FullRows}건까지 보여 줍니다";
@@ -269,6 +270,39 @@ public static class AdminEndpoints
             var key = form["key"].ToString();
             if (!string.IsNullOrWhiteSpace(key)) store.Delete(key);
             return SeeOther("/admin/search");
+        });
+
+        // ---- 광고 차단 ----
+        // 자동 판정(AdSignals)은 재생 메타데이터에 기대는데, Spotify가 광고 플래그를 안 주는
+        // 경로에서는 "광고 없이 음악을 감상하세요." 같은 행이 가사로 올라온다. 사람이 표시하면
+        // 그 제목은 이후 조회·등록에서 막힌다.
+
+        app.MapPost("/admin/song/ad", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var key = form["key"].ToString();
+            var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
+            if (entry is null) return SeeOther("/admin/search");
+
+            store.AddAdTitle(entry.Title, entry.Artist);
+            var notice = $"\"{entry.Title}\"을(를) 광고로 표시했습니다 — 가사를 지웠고 앞으로 등록되지 않습니다.";
+            return SeeOther($"/admin?notice={Uri.EscapeDataString(notice)}");
+        });
+
+        app.MapPost("/admin/ads/remove", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var titleKey = form["titleKey"].ToString();
+            if (!string.IsNullOrWhiteSpace(titleKey)) store.RemoveAdTitle(titleKey);
+            return SeeOther($"/admin?notice={Uri.EscapeDataString("광고 표시를 해제했습니다.")}");
         });
 
         // ---- 곡의 의미 ----
@@ -374,7 +408,8 @@ public static class AdminEndpoints
                 Diagnostics: Diagnostics(req, options),
                 Meanings: MeaningSummaryOf(),
                 MeaningSources: meanings.SourceNames,
-                Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""));
+                Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""),
+                AdTitles: store.AdTitles(rows));
         }
 
         MeaningSummary MeaningSummaryOf()

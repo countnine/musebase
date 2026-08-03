@@ -285,6 +285,16 @@ public sealed class LyricsCoordinator : IDisposable
                 await TranslateAsync(remote, remoteCts.Token, persistAfter: true);
                 return;
             }
+
+            // 서버가 이 제목을 광고로 표시해 뒀다면 여기서 끝낸다. 제공자 검색은 늘 헛돌고,
+            // 어쩌다 뭔가 맞으면 광고 위에 엉뚱한 가사가 뜬다. 자동 판정(AdSignals)이 놓친
+            // 경로 — 재생 메타데이터에 광고 플래그가 없는 경우 — 를 사람이 표시해 메운다.
+            if (result.IsAd)
+            {
+                Log?.Invoke($"[ad] 서버가 광고로 표시한 제목 — 검색하지 않습니다: {track.Title}");
+                RaiseStatus(new LyricsStatus(LyricsStatusKind.NotFound, track.ToString()));
+                return;
+            }
         }
 
         RaiseStatus(new LyricsStatus(LyricsStatusKind.Searching, track.ToString()));
