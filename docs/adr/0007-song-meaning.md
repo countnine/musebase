@@ -42,7 +42,36 @@
 | Wikipedia | **없음** | 곡 문서 도입부(`prop=extracts`) |
 
 하나가 비어도 나머지가 채운다. 셋을 **병렬로** 부르고 실패는 무시한다 —
-`HttpRemoteLyricsCache`의 조용한 강등과 같은 원칙이다. Songfacts는 API가 없어 제외했다.
+`HttpRemoteLyricsCache`의 조용한 강등과 같은 원칙이다.
+
+#### Songfacts는 넣지 않는다 (2026-08-03 재검토)
+
+> 처음 이 문서에는 "Songfacts는 API가 없어 제외했다"고 적었다. **그 서술은 사실이 아니었다** —
+> 확인해 보니 [공식 API](https://www.songfacts.com/blog/pages/songfacts-api)가 있고
+> songfacts·artistfacts·차트 순위를 제공한다(상업용, 가격은 문의). 틀린 근거로 남겨 두면 같은
+> 검토를 되풀이하게 되므로 실제 조사 결과로 바꿔 적는다.
+
+**내용은 우리가 본 것 중 가장 좋다.** 사람이 쓴 사실 기반 서술이라 우리 파이프라인이 원하는
+"근거"에 정확히 들어맞는다. 실제 `Even Flow` 페이지에는
+*"wrote the lyrics about a homeless person who is neglected by society"* 가 있다 —
+위키피디아만으로는 `자료 부족`이 났던 바로 그 곡이다.
+
+**그래도 긁지 않는다. 약관이 이 행위를 지목해 금지한다.**
+
+> "With the exception of search engine bots, the use of data-mining/extraction software or bots
+> by any company that is not collecting data for a search engine is **strictly forbidden**."
+> — 또한 "limited license to access and **make personal use** of this site and **not to download or modify it**"
+
+`robots.txt`는 `/facts/`를 막지 않고 페이지도 익명으로 열린다. 하지만 **robots.txt는 크롤러 예절이고
+구속력이 있는 것은 약관이다** — 둘이 어긋나면 약관이 이긴다. 우리가 하려는 일(자동 추출 + 서버 DB에
+원문 저장)이 금지 문구 그대로다. Musixmatch 때는 기술적 장벽이 이유였지만 여기는 문서로 명시돼 있다.
+
+같은 성격(사람이 쓴 곡 해설)을 **Genius가 무료 공식 API로 제공**하고 이미 붙어 있다 —
+약관을 어길 실익이 없다. 정말 필요해지면 정당한 경로는 **Songfacts API 견적 문의**이고,
+기존 구조(`ISongMeaningSource` + 소스 선택 옵션) 그대로 `SongfactsSource`를 더하면 된다.
+
+대안으로 TheAudioDB(무료 API)도 확인했는데, `strDescriptionEN` 필드는 있으나 `Even Flow`에서
+비어 있었다 — 곡 단위 해설 커버리지가 얇아 Genius를 대체하지 못한다.
 
 ### 3. 번역이 아니라 요약이다 — LLM을 쓴다
 
