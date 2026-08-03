@@ -11,10 +11,24 @@ using Musebase.Server;
 //   MUSEBASE_DB     선택 — SQLite 경로(기본 ./lyrics.db)
 // CLI:
 //   --import <translations.db>   기존 클라이언트 캐시를 흡수하고 종료(시드용)
+//   --hash-password <비밀번호>    MUSEBASE_ADMIN_PASSWORD에 넣을 해시를 찍고 종료
 
 const int MaxBodyBytes = 256 * 1024;
 // 양보 힌트에 실어 보내는 재조회 간격. 클라이언트는 이 값을 자기 상한으로 clamp한다.
 const int YieldRetryAfterMs = 3000;
+
+// --hash-password: 설정 파일에 평문을 두지 않아도 되도록 해시를 만들어 준다.
+var hashIndex = Array.IndexOf(args, "--hash-password");
+if (hashIndex >= 0)
+{
+    if (hashIndex + 1 >= args.Length)
+    {
+        Console.Error.WriteLine("사용법: Musebase.Server --hash-password <비밀번호>");
+        return 2;
+    }
+    Console.WriteLine(AdminPassword.Hash(args[hashIndex + 1]));
+    return 0;
+}
 
 var dbPath = Environment.GetEnvironmentVariable("MUSEBASE_DB") ?? "lyrics.db";
 
@@ -55,7 +69,12 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", LogLevel.Warning);
 var app = builder.Build();
 using var store = new LyricsStore(dbPath);
 var admin = AdminOptions.FromEnvironment(token!);
-app.MapAdmin(store, admin);
+
+// 곡의 의미 — 키가 없으면 서비스가 꺼진 상태로 만들어지고 아무 데도 영향을 주지 않는다.
+var meaningOptions = MeaningOptions.FromEnvironment();
+var meanings = meaningOptions.BuildService();
+
+app.MapAdmin(store, admin, meanings, meaningOptions);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -109,7 +128,7 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
     {
         try
         {
-            store.LogLookup(title!, artist ?? "", found?.Match ?? "miss", found?.Key,
+            store.LogLookup(title!, artist ?? "", found?.Match ?? LyricsEntry.MatchMiss, found?.Key,
                 device, request.Headers.UserAgent.ToString());
         }
         catch (Exception e) { app.Logger.LogWarning("조회 기록 실패: {Message}", e.Message); }
@@ -152,6 +171,24 @@ app.MapPut("/v1/lyrics", async (HttpRequest request) =>
 
 app.MapGet("/v1/stats", (HttpRequest request) =>
     !Authorized(request) ? Unauthorized() : Results.Ok(store.Stats()));
+
+// 곡의 의미 — 앱은 조회만 한다. 생성은 관리자 화면에서만 일어난다(쿼타·비용을 사람이 통제).
+app.MapGet("/v1/meaning", (HttpRequest request, string? title, string? artist) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
+
+    // `insufficient`도 404다 — 문단은 있지만 "파악하기 어렵다"는 고백이라 곡 해설로 띄우면 안 된다.
+    var found = store.GetMeaning(title!, artist ?? "");
+    if (found is null || found.Status != MeaningEntry.StatusOk) return Results.NotFound();
+
+    // 원문 전체(sources)는 무겁고 앱에 필요 없다 — 출처 표기만 계산해 싣는다.
+    return Results.Ok(found with
+    {
+        Sources = "",
+        Attribution = MeaningMapper.Attribution(found.Sources),
+    });
+});
 
 app.Run();
 return 0;

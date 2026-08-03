@@ -194,6 +194,11 @@ public class TranslationSharingTests
         public string? ArrivingLrc { get; init; }
         public int ArriveAfter { get; init; } = int.MaxValue;
 
+        /// <summary>의미는 이 테스트의 관심사가 아니다 — 항상 없음(가사 흐름에 영향이 없어야 한다).</summary>
+        public Task<SongMeaningView?> GetMeaningAsync(
+            string title, string artist, CancellationToken ct = default) =>
+            Task.FromResult<SongMeaningView?>(null);
+
         public Task<RemoteLyricsResult> GetAsync(string title, string artist, CancellationToken ct = default)
         {
             int n;

@@ -28,9 +28,37 @@ MUSEBASE_DB=/var/lib/musebase/lyrics.db
 # MUSEBASE_LOG_LOOKUPS=0             # 조회 기록을 남기지 않으려면
 # MUSEBASE_LOOKUP_RETENTION_DAYS=90  # 조회 기록 보존 기간(기본 90일)
 # MUSEBASE_YIELD_WINDOW_SECONDS=30   # 번역 양보 판정 창(0이면 끔) — 아래 참고
+# --- 곡의 의미(선택) — 11절 참고 ---
+# MUSEBASE_MEANING_ENGINE=gemini     # gemini | openrouter | none(기본)
+# MUSEBASE_GEMINI_API_KEY=...
+# MUSEBASE_GENIUS_TOKEN=...
+# MUSEBASE_LASTFM_KEY=...
 EOF
 sudo chmod 600 /etc/musebase/server.env     # 토큰 파일은 절대 저장소에 커밋하지 않는다
 ```
+
+### 관리자 로그인 — 아이디·비밀번호
+
+기본은 토큰 로그인이다(주소창에 `?token=…`). 기기가 여러 대면 긴 토큰을 매번 붙여 넣어야 해
+불편하므로, 아이디·비밀번호를 정할 수 있다.
+
+```bash
+# 설정 파일에 평문을 두지 않도록 해시를 만든다
+/opt/musebase/Musebase.Server --hash-password '정할비밀번호'
+# → pbkdf2$210000$…$…
+```
+
+```
+MUSEBASE_ADMIN_USER=admin              # 생략하면 admin
+MUSEBASE_ADMIN_PASSWORD=pbkdf2$210000$…$…
+```
+
+- 값이 `pbkdf2$`로 시작하면 해시로, 아니면 **평문 그대로** 비교한다. 평문도 동작하지만
+  비밀번호는 다른 서비스와 돌려 쓰이기 쉬워, 설정 파일이 한 번 새면 피해가 여기서 끝나지 않는다
+  — 해시를 권한다.
+- **토큰 로그인은 계속 살아 있다.** 비밀번호를 잊거나 해시를 잘못 넣어도 들어갈 수 있어야 하기
+  때문이다(로그인 화면의 "토큰으로 들어가기"). 토큰은 어차피 앱이 API에 쓰는 값이라 새 비밀이 늘지 않는다.
+- 비밀번호를 지우고 재시작하면 예전처럼 토큰 화면만 나온다.
 
 ## 3. 빌드 · 전송 (개발 PC)
 
@@ -163,7 +191,95 @@ Spotify Connect처럼 **PC에서 재생하고 폰에서 조작**하면 두 기�
 두 앱 모두 **저장 즉시 반영**되며(재시작 불필요), 서버에 못 붙으면 조용히 기존 동작
 (로컬 캐시 → 제공자 검색)으로 강등된다.
 
+## 11. 곡의 의미 (선택)
+
+곡이 무엇에 대한 노래인지 한 문단으로 만들어 관리자 화면과 `/v1/meaning`에 실어 준다.
+**키를 넣지 않으면 통째로 꺼지고** 곡 상세에 Musixmatch·Genius 링크만 남는다(가사 기능엔 영향 없음).
+
+### 키 발급
+
+| 키 | 어디서 | 비고 |
+|---|---|---|
+| `MUSEBASE_GEMINI_API_KEY` | <https://aistudio.google.com/apikey> | 요금은 아래 "무료로 쓰려면" 참고 |
+| `MUSEBASE_GENIUS_TOKEN` | <https://genius.com/api-clients> → New API Client → **Generate Access Token** | 무료. OAuth 사용자 플로우 불필요 |
+| `MUSEBASE_LASTFM_KEY` | <https://www.last.fm/api/account/create> | 선택. Genius에 설명이 없는 곡을 메워 준다 |
+| `MUSEBASE_MUSIXMATCH_KEY` | <https://developer.musixmatch.com> | 선택. **곡 페이지 링크를 정확히** 만드는 데 쓴다(아래) |
+
+Wikipedia는 키가 필요 없고 기본으로 켜져 있다(`MUSEBASE_MEANING_WIKIPEDIA=0`으로 끔).
+
+```
+MUSEBASE_MEANING_ENGINE=gemini              # gemini | openrouter | none(기본)
+MUSEBASE_MEANING_LANG=ko
+MUSEBASE_GEMINI_API_KEY=...
+MUSEBASE_GEMINI_MODEL=gemini-2.5-flash-lite # 생략 가능
+MUSEBASE_GENIUS_TOKEN=...
+MUSEBASE_LASTFM_KEY=...
+MUSEBASE_MUSIXMATCH_KEY=...                 # 선택 — 곡 페이지 링크 정확도
+MUSEBASE_MEANING_SOURCES=genius,lastfm,wikipedia   # 기본값. musixmatch는 빠져 있다
+MUSEBASE_MEANING_BACKFILL_LIMIT=50          # 일괄 생성 1회 처리량
+MUSEBASE_MEANING_BACKFILL_DELAY_MS=0        # 호출 간 간격 — 무료 티어면 4500
+```
+
+### 자료원을 고른다 — `MUSEBASE_MEANING_SOURCES`
+
+쉼표로 나열한다. 목록에 있고 **키까지 있는** 소스만 실제로 쓰인다(위키피디아만 키가 필요 없다).
+지금 켜져 있는 자료원은 관리자 대시보드에 그대로 표시된다.
+
+`musixmatch`는 **기본값에 없다.** 그 사이트의 "Meaning"은 사람이 쓴 해설이 아니라 가사를 기계로
+분석한 결과이고(같은 블록에 무드·테마·콘텐츠 등급이 함께 온다), 자료로 넣으면 LLM이 쓴 글을 다시
+LLM에 넣어 요약하는 셈이 된다. 켜면 출처가 `Musixmatch (AI 분석)`으로 표시되고, 프롬프트가
+"다른 자료와 어긋나면 다른 자료를 따른다"로 취급한다. 스크래핑이라 약관 위험도 함께 진다 —
+**켜는 판단은 운영자 몫이다.**
+
+```
+MUSEBASE_MEANING_SOURCES=genius,lastfm,wikipedia,musixmatch
+```
+
+### Musixmatch 링크
+
+키를 넣으면 공식 API(`track.search`)로 확인한 **그 곡의 페이지**로 링크가 걸린다. 키가 없으면
+검색 링크로 물러난다. 주소를 규칙으로 만들지 않는 이유는 실측 때문이다 —
+`/lyrics/Pearl-Jam/Even-Flow`가 오류 없이 `/lyrics/Pearl-Jam/Alive`(**다른 곡**)로 넘어갔다.
+
+### 무료로 쓰려면 — 헷갈리는 지점
+
+**"$300 무료 체험 크레딧"과 "Gemini API 무료 티어"는 다른 제도다.** 크레딧은 Gemini API에
+**쓸 수 없다**(Google 공식 문서의 명시적 제외 항목). 무료로 쓰는 길은 무료 티어 하나뿐이고,
+그건 **결제 계정이 연결되지 않은 프로젝트에만** 적용된다.
+
+여기서 함정: 결제를 연결하는 순간 그 프로젝트는 즉시 **Tier 1(유료)** 이 되고 무료 티어는
+사라진다. 크레딧은 안 먹히므로 카드에서 실제로 청구된다. 되돌리려면 결제를 명시적으로 해제해야 한다.
+
+- **무료로 가려면**: 결제가 없는 **별도 프로젝트**를 만들어 그 안에서 키를 발급한다.
+  가사 번역용 프로젝트(Cloud Translation)는 결제가 필요하므로 **그쪽 결제를 끄면 안 된다.**
+  무료 티어는 15 RPM이라 백필을 한 번에 돌리려면 `MUSEBASE_MEANING_BACKFILL_DELAY_MS=4500`을 준다.
+- **유료(Tier 1)로 가도 된다**: 곡당 사실상 0원이라 보유 곡 전체를 채워도 몇백 원 수준이고,
+  분당 한도가 넉넉해 간격이 필요 없다. 무료 티어와 달리 **보낸 내용이 학습에 쓰이지 않는다.**
+
+쿼타에 걸려도 안전하다 — 429·5xx는 저장하지 않고 백필이 그 자리에서 멈춘다. 남은 곡은
+손대지 않으므로 나중에 다시 누르면 이어서 진행된다(영구 실패만 행으로 남아 건너뛰어진다).
+
+### 모델을 바꿔 보고 싶다면
+
+`MUSEBASE_MEANING_ENGINE=openrouter` + `MUSEBASE_OPENROUTER_API_KEY`로 바꾸고
+`MUSEBASE_OPENROUTER_MODEL`에 모델 문자열만 넣으면 된다(`anthropic/claude-opus-5`,
+`google/gemini-2.5-flash` …). 같은 곡을 [다시 생성]으로 만들어 문장을 비교할 수 있다.
+OpenRouter는 Google Cloud 프로젝트가 아예 필요 없어, 프로젝트 한도에 막혔을 때의 우회로이기도 하다.
+
+### 쓰는 법
+
+- 곡 상세 → **[의미 가져오기]** (다시 누르면 재생성)
+- 대시보드 → **[의미 일괄 생성]** — 아직 안 해 본 곡을 상한까지 처리
+- **생성은 사람이 누를 때만 일어난다.** 자동 생성은 두지 않았다 — 쿼타·비용이 예측 가능해야 하고
+  실패가 조용히 쌓이면 안 되기 때문이다.
+
+> **출처 표기 의무**: Wikipedia 본문은 CC BY-SA, Genius·Last.fm도 링크 표기를 요구한다.
+> 관리자 화면과 `/v1/meaning`의 `attribution`이 이를 담고 있으므로, 요약을 보여 주는 화면은
+> 출처를 함께 표시해야 한다.
+
 ## 업데이트
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
-따로 있으므로 배포로 지워지지 않는다.
+따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
+(현재 3 — `meanings` 테이블과 `musixmatch_url` 컬럼까지)
+(현재 2 = `lyrics` + `lookups` + `meanings`).

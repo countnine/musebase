@@ -33,4 +33,35 @@ public interface IRemoteLyricsCache
 
     /// <summary>서버에 가사를 올린다(업서트). 실패는 조용히 무시하므로 호출자가 await하지 않아도 된다.</summary>
     Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default);
+
+    /// <summary>
+    /// 곡의 의미를 가져온다. 없으면 null — 만들지는 않는다(생성은 서버 관리자만 한다).
+    /// 가사와 마찬가지로 실패·미접속도 조용히 null이다.
+    /// </summary>
+    Task<SongMeaningView?> GetMeaningAsync(string title, string artist, CancellationToken ct = default);
 }
+
+/// <summary>
+/// 앱이 보여 줄 "이 곡의 의미" 한 건.
+///
+/// <see cref="Attribution"/>은 <b>표시 의무</b>가 있다 — Wikipedia 본문은 CC BY-SA이고
+/// Genius·Last.fm도 링크 표기를 요구한다(`contracts/lyrics-api.md`). 본문만 떼어 보여 주면 안 된다.
+/// </summary>
+/// <param name="Summary">대상 언어 한 문단.</param>
+/// <param name="Attribution">출처 이름·링크 쌍.</param>
+/// <param name="Lang">요약 언어(`ko` 등).</param>
+public sealed record SongMeaningView(
+    string Summary,
+    IReadOnlyList<MeaningCredit> Attribution,
+    string Lang)
+{
+    /// <summary>화면 하단에 그대로 붙일 한 줄(링크가 없는 UI용).</summary>
+    public string CreditLine =>
+        Attribution.Count == 0
+            ? ""
+            : "출처: " + string.Join(" · ", Attribution.Select(a => a.Name))
+              + (Attribution.Any(a => a.Name == "Wikipedia") ? " (CC BY-SA)" : "");
+}
+
+/// <summary>출처 한 건.</summary>
+public sealed record MeaningCredit(string Name, string? Url);

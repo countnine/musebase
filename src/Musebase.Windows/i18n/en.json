@@ -91,6 +91,7 @@
   "tray.search": "Search lyrics…",
   "tray.edit": "Edit current lyrics…",
   "tray.export": "Export lyrics (.lrc)…",
+  "tray.meaning": "About this song…",
   "tray.wrong": "Mark as no lyrics (wrong lyrics)",
   "tray.settings": "Settings…",
   "tray.exit": "Exit",
@@ -167,6 +168,13 @@
   "translation.status.failed": "failed",
   "translation.status.disabled": "API translation off",
   "translation.status.disabledCache": "cached (API off)",
+
+  "meaning.title": "About this song",
+  "meaning.loading": "Loading…",
+  "meaning.noTrack": "Nothing is playing.",
+  "meaning.noServer": "No lyrics server configured — add the server address in Settings.",
+  "meaning.none": "No description for this song yet.",
+  "meaning.credit": "Sources:",
 
   "search.title": "Search lyrics",
   "search.button": "Search",

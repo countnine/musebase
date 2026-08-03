@@ -31,6 +31,8 @@ public sealed record LyricsEntry
     public const string OriginUser = "user";
     public const string MatchExact = "exact";
     public const string MatchCleaned = "cleaned";
+    /// <summary>서버에 없었다. 조회 기록에만 쓰이는 값이다(항목 자체에는 실리지 않는다).</summary>
+    public const string MatchMiss = "miss";
 }
 
 /// <summary>PUT이 병합 정책으로 거부됐을 때의 응답(202).</summary>
@@ -42,6 +44,45 @@ public sealed record PutRejected(bool Accepted, string Reason)
 
 /// <summary>GET /v1/stats — 검증·디버깅용 요약.</summary>
 public sealed record ServerStats(int Songs, int WithTranslation, string? LastUpdatedAt);
+
+/// <summary>
+/// 곡의 의미 1건. 앱은 <see cref="Summary"/>와 <see cref="Attribution"/>만 보면 되고,
+/// <see cref="Sources"/>(원문 JSON)는 관리자 화면·재생성 판단용이다.
+///
+/// <b>출처 표기는 선택이 아니다</b> — Wikipedia 본문은 CC BY-SA고 Genius·Last.fm도 링크 표기를
+/// 요구하므로, 요약을 보여 주는 화면은 <see cref="Attribution"/>을 함께 렌더해야 한다.
+/// </summary>
+public sealed record MeaningEntry
+{
+    public string Key { get; init; } = "";
+    public required string Title { get; init; }
+    public required string Artist { get; init; }
+    /// <summary>생성된 대상 언어 문단. `status`가 `ok`가 아니면 null.</summary>
+    public string? Summary { get; init; }
+    public string Lang { get; init; } = "ko";
+    /// <summary>근거로 쓴 원문들(JSON 배열 `[{name,url,text}]`).</summary>
+    public string Sources { get; init; } = "[]";
+    public string? GeniusUrl { get; init; }
+    /// <summary>공식 API로 확인한 Musixmatch 곡 페이지. 규칙으로 만든 주소는 다른 곡으로 갈 수 있어 쓰지 않는다.</summary>
+    public string? MusixmatchUrl { get; init; }
+    public string? Engine { get; init; }
+    public string? Model { get; init; }
+    /// <summary>`ok` | `no-source` | `failed`.</summary>
+    public string Status { get; init; } = StatusFailed;
+    public string UpdatedAt { get; init; } = "";
+
+    /// <summary>화면에 그대로 붙이는 출처 문구(이름·링크 쌍). 응답에 계산해 싣는다.</summary>
+    public IReadOnlyList<MeaningAttribution>? Attribution { get; init; }
+
+    public const string StatusOk = "ok";
+    public const string StatusNoSource = "no-source";
+    public const string StatusFailed = "failed";
+    /// <summary>자료는 있었지만 그것만으로는 의미를 말할 수 없었다 — 문단은 남되 의미로 세지 않는다.</summary>
+    public const string StatusInsufficient = "insufficient";
+}
+
+/// <summary>출처 한 건 — 이름과 원문 주소.</summary>
+public sealed record MeaningAttribution(string Name, string? Url);
 
 /// <summary>JSON 오류 본문.</summary>
 public sealed record ApiError([property: JsonPropertyName("error")] string Error);

@@ -46,6 +46,57 @@ public static class AdminAuth
     }
 }
 
+/// <summary>
+/// 관리자 비밀번호. 긴 토큰을 주소창에 붙여 넣는 대신 사람이 외울 수 있는 값으로 들어오게 한다.
+///
+/// 저장은 <b>PBKDF2-SHA256</b> 해시다 — 비밀번호는 다른 서비스와 돌려 쓰이기 쉬워, 설정 파일이
+/// 한 번 새면 피해가 이 서버에서 끝나지 않는다. 평문도 받아 주긴 하지만(개인 서버의 편의)
+/// 해시를 권한다. 형식은 <c>pbkdf2$반복수$소금(base64)$해시(base64)</c>.
+/// </summary>
+public static class AdminPassword
+{
+    /// <summary>느리게 만드는 것이 목적이다 — 로그인은 사람이 가끔 하는 일이라 비싸도 된다.</summary>
+    public const int Iterations = 210_000;
+
+    private const string Prefix = "pbkdf2$";
+
+    public static string Hash(string password, byte[]? salt = null)
+    {
+        salt ??= RandomNumberGenerator.GetBytes(16);
+        var key = Rfc2898DeriveBytes.Pbkdf2(
+            Encoding.UTF8.GetBytes(password), salt, Iterations, HashAlgorithmName.SHA256, 32);
+        return $"{Prefix}{Iterations}${Convert.ToBase64String(salt)}${Convert.ToBase64String(key)}";
+    }
+
+    /// <summary>
+    /// 설정값과 대조한다. 설정이 해시면 해시로, 평문이면 그대로 비교한다(둘 다 고정시간 비교).
+    /// 설정이 비어 있으면 <b>항상 실패</b> — 비밀번호를 안 정했는데 아무 값으로나 들어오면 안 된다.
+    /// </summary>
+    public static bool Verify(string? password, string? configured)
+    {
+        if (string.IsNullOrEmpty(password) || string.IsNullOrWhiteSpace(configured)) return false;
+
+        if (!configured!.StartsWith(Prefix, StringComparison.Ordinal))
+            return CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(password!), Encoding.UTF8.GetBytes(configured));
+
+        var parts = configured.Split('$');
+        if (parts.Length != 4 || !int.TryParse(parts[1], out var iterations)) return false;
+        try
+        {
+            var salt = Convert.FromBase64String(parts[2]);
+            var expected = Convert.FromBase64String(parts[3]);
+            var actual = Rfc2898DeriveBytes.Pbkdf2(
+                Encoding.UTF8.GetBytes(password!), salt, iterations, HashAlgorithmName.SHA256, expected.Length);
+            return CryptographicOperations.FixedTimeEquals(expected, actual);
+        }
+        catch (FormatException)
+        {
+            return false; // 설정이 깨졌다 — 통과시키지 않는다
+        }
+    }
+}
+
 /// <summary>검색어 → SQL LIKE 패턴.</summary>
 public static class AdminQuery
 {

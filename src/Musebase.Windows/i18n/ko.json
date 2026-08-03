@@ -91,6 +91,7 @@
   "tray.search": "가사 검색…",
   "tray.edit": "현재 가사 편집…",
   "tray.export": "가사 내보내기 (.lrc)…",
+  "tray.meaning": "이 곡의 의미…",
   "tray.wrong": "가사 없음으로 표시 (틀린 가사)",
   "tray.settings": "설정…",
   "tray.exit": "종료",
@@ -167,6 +168,13 @@
   "translation.status.failed": "실패",
   "translation.status.disabled": "API 번역 꺼짐",
   "translation.status.disabledCache": "캐시 이용 (API 꺼짐)",
+
+  "meaning.title": "이 곡의 의미",
+  "meaning.loading": "불러오는 중…",
+  "meaning.noTrack": "재생 중인 곡이 없습니다.",
+  "meaning.noServer": "가사 서버가 설정되지 않았습니다 — 설정에서 서버 주소를 넣으세요.",
+  "meaning.none": "이 곡의 의미는 아직 없습니다.",
+  "meaning.credit": "출처:",
 
   "search.title": "가사 검색",
   "search.button": "검색",

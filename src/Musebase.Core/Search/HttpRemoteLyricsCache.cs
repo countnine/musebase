@@ -127,6 +127,44 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         }
     }
 
+    /// <summary>
+    /// 곡의 의미. 서버에 없으면 404이고 그것은 정상이다 — 대부분의 곡에는 아직 의미가 없다.
+    ///
+    /// 회로 차단기와 실패 집계를 **가사와 공유한다**: 이건 부가 정보라 여기서 실패했다고
+    /// 가사 조회까지 막으면 손해가 크다. 그래서 실패해도 <see cref="OnFailure"/>를 부르지 않고
+    /// 조용히 null만 돌려준다(회로가 이미 열려 있으면 아예 시도하지 않는다).
+    /// </summary>
+    public async Task<SongMeaningView?> GetMeaningAsync(
+        string title, string artist, CancellationToken ct = default)
+    {
+        if (IsCircuitOpen()) return null;
+
+        try
+        {
+            var url = new Uri(_baseUri,
+                $"v1/meaning?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist)}");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(_timeout);
+
+            using var response = await _http.GetAsync(url, cts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null; // 404 = 아직 의미가 없다(정상)
+
+            var entry = await response.Content
+                .ReadFromJsonAsync<RemoteMeaningEntry>(Json, cts.Token).ConfigureAwait(false);
+            if (entry?.Summary is not { Length: > 0 } summary) return null;
+
+            var credits = (entry.Attribution ?? [])
+                .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+                .Select(a => new MeaningCredit(a.Name!, a.Url))
+                .ToList();
+            return new SongMeaningView(summary.Trim(), credits, entry.Lang ?? "ko");
+        }
+        catch (Exception)
+        {
+            return null; // 부가 기능 — 가사 조회에 영향을 주지 않는다
+        }
+    }
+
     public async Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)
     {
         if (IsCircuitOpen()) return;
@@ -208,6 +246,20 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         public int? Revision { get; init; }
         public string? UpdatedAt { get; init; }
         public string? Match { get; init; }
+    }
+
+    /// <summary>`GET /v1/meaning` 응답(필요한 필드만).</summary>
+    private sealed record RemoteMeaningEntry
+    {
+        public string? Summary { get; init; }
+        public string? Lang { get; init; }
+        public RemoteAttribution[]? Attribution { get; init; }
+    }
+
+    private sealed record RemoteAttribution
+    {
+        public string? Name { get; init; }
+        public string? Url { get; init; }
     }
 
     /// <summary>404 본문(계약 v1의 "번역 양보"). 구버전 서버는 본문이 없다.</summary>

@@ -109,6 +109,50 @@ public class RemoteLyricsCacheTests
         await cache.SetAsync("T", "A", Lyrics.Parse(Lrc)!); // 예외가 새어 나오면 실패
     }
 
+    // ---- 곡의 의미(앱은 읽기만 한다) ----
+
+    [Fact]
+    public async Task 의미와_출처를_읽는다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK, """
+            {"summary":"이 곡은 성장의 불안을 다룬다.","lang":"ko",
+             "attribution":[{"name":"Wikipedia","url":"https://en.wikipedia.org/wiki/Kids"},
+                            {"name":"Genius","url":null}]}
+            """))));
+
+        var meaning = await cache.GetMeaningAsync("Kids", "MGMT");
+
+        Assert.NotNull(meaning);
+        Assert.Equal("이 곡은 성장의 불안을 다룬다.", meaning!.Summary);
+        Assert.Equal(2, meaning.Attribution.Count);
+        // 출처 표기는 의무다 — 라이선스까지 붙는다.
+        Assert.Contains("Wikipedia", meaning.CreditLine);
+        Assert.Contains("CC BY-SA", meaning.CreditLine);
+    }
+
+    [Fact]
+    public async Task 의미가_없으면_404이고_그것은_정상이다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+        Assert.Null(await cache.GetMeaningAsync("Kids", "MGMT"));
+    }
+
+    [Fact]
+    public async Task 의미_조회_실패는_가사_조회를_막지_않는다()
+    {
+        // 부가 기능이라 실패를 서킷 브레이커에 세지 않는다 — 여기서 회로가 열리면 손해가 크다.
+        var handler = new StubHandler(req =>
+            req.RequestUri!.AbsolutePath.Contains("meaning")
+                ? Task.FromException<HttpResponseMessage>(new HttpRequestException("down"))
+                : Task.FromResult(Json(HttpStatusCode.OK,
+                    $$"""{"title":"Kids","artist":"MGMT","lrc":{{System.Text.Json.JsonSerializer.Serialize(Lrc)}},"service":"LRCLIB"}""")));
+        var cache = Create(handler);
+
+        for (var i = 0; i < 5; i++) Assert.Null(await cache.GetMeaningAsync("Kids", "MGMT"));
+
+        Assert.NotNull((await cache.GetAsync("Kids", "MGMT")).Lyrics);
+    }
+
     private static HttpRemoteLyricsCache Create(StubHandler handler) =>
         new("http://localhost:9/", "token", timeoutMs: 500, log: null, handler: handler);
 

@@ -228,15 +228,268 @@ public class AdminPageTests
     [Fact]
     public void 조회_기록이_비면_안내행이_렌더된다()
     {
-        var model = new DashboardModel(
-            new ServerStats(0, 0, null), 0, new HitRate(0, 0, 0), new HitRate(0, 0, 0),
-            [], [], [], [], [], [], [], [],
-            new ServerHealth(TimeSpan.FromHours(1), 0, 0, 90), []);
-
-        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
 
         Assert.Contains("아직 조회가 없습니다", html);
         Assert.Contains("colspan", html);
-        Assert.DoesNotContain("<script", html);   // JS를 쓰지 않는다(CSP를 강하게 잠글 수 있는 근거)
     }
+
+    [Fact]
+    public void 스크립트는_제출_스피너_하나뿐이다()
+    {
+        // 예전에는 JS가 한 줄도 없었다. 지금은 제출 스피너 하나가 있고, 그 대가로 CSP를 느슨하게
+        // 하지 않기 위해 **해시로 고정**한다 — 스크립트가 늘거나 바뀌면 이 테스트가 먼저 걸린다.
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        var scripts = html.Split("<script").Length - 1;
+        Assert.Equal(1, scripts);
+        Assert.Contains($"<script>{AdminHtml.BusyScript}</script>", html);
+    }
+
+    [Fact]
+    public void 제출은_히스토리를_늘리지_않는다()
+    {
+        // 평범한 폼 제출은 [검색 → 곡 → 곡(생성 후)]을 만들어 뒤로 가기가 "생성 전의 같은 곡"으로
+        // 간다. fetch로 보내고 location.replace로 지금 칸을 덮어써야 한 번에 그 앞 화면으로 간다.
+        Assert.Contains("fetch(", AdminHtml.BusyScript);
+        Assert.Contains("location.replace", AdminHtml.BusyScript);
+        Assert.DoesNotContain("history.pushState", AdminHtml.BusyScript);
+
+        // fetch가 없는 브라우저에서는 평소대로 제출돼야 한다.
+        Assert.Contains("if(!window.fetch", AdminHtml.BusyScript);
+        Assert.Contains("f.submit()", AdminHtml.BusyScript);
+    }
+
+    [Fact]
+    public void CSP는_그_스크립트의_해시만_허용한다()
+    {
+        Assert.StartsWith("'sha256-", AdminHtml.ScriptCsp);
+        Assert.DoesNotContain("unsafe-inline", AdminHtml.ScriptCsp);
+
+        // 스크립트를 고치면 해시도 따라 바뀌어야 한다(상수로 박아 두면 조용히 안 돈다).
+        var expected = Convert.ToBase64String(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(AdminHtml.BusyScript)));
+        Assert.Equal($"'sha256-{expected}'", AdminHtml.ScriptCsp);
+    }
+
+    [Fact]
+    public void 생성_폼은_스피너_표시_대상이다()
+    {
+        // data-busy가 없으면 눌러도 아무 반응이 없어 사람이 다시 누른다(같은 곡을 두 번 만든다).
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(0, 0, 0, Pending: 3, Enabled: true),
+        };
+
+        Assert.Contains("data-busy", AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
+    }
+
+    // ---- 곡의 의미 ----
+
+    [Fact]
+    public void 의미_엔진이_없으면_일괄_생성_버튼이_뜨지_않는다()
+    {
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(0, 0, 0, Pending: 30, Enabled: false),
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("엔진 미구성", html);
+        Assert.DoesNotContain("/admin/meanings/backfill", html);
+    }
+
+    [Fact]
+    public void 처리할_곡이_있으면_일괄_생성_버튼에_곡_수가_보인다()
+    {
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(5, 1, 0, Pending: 30, Enabled: true),
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("/admin/meanings/backfill", html);
+        Assert.Contains("의미 일괄 생성 (30곡)", html);
+    }
+
+    [Fact]
+    public void 처리할_곡이_없으면_버튼을_숨긴다()
+    {
+        var model = EmptyDashboard() with
+        {
+            Meanings = new MeaningSummary(5, 1, 0, Pending: 0, Enabled: true),
+        };
+
+        Assert.DoesNotContain("/admin/meanings/backfill",
+            AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
+    }
+
+    // ---- 로그인 ----
+
+    [Fact]
+    public void 비밀번호를_정하면_아이디_칸이_먼저_나온다()
+    {
+        var html = AdminPages.Login(passwordEnabled: true);
+
+        Assert.Contains("name=\"user\"", html);
+        Assert.Contains("name=\"password\"", html);
+        // 토큰은 사라지지 않는다 — 비밀번호를 잊었을 때의 비상구다.
+        Assert.Contains("name=\"token\"", html);
+        Assert.Contains("토큰으로 들어가기", html);
+    }
+
+    [Fact]
+    public void 비밀번호가_없으면_토큰_화면_그대로다()
+    {
+        var html = AdminPages.Login();
+
+        Assert.Contains("name=\"token\"", html);
+        Assert.DoesNotContain("name=\"password\"", html);
+    }
+
+    [Fact]
+    public void 비밀번호는_해시로_검증된다()
+    {
+        var stored = AdminPassword.Hash("여기는비밀번호");
+
+        Assert.StartsWith("pbkdf2$", stored);
+        Assert.DoesNotContain("여기는비밀번호", stored);   // 평문이 남지 않는다
+        Assert.True(AdminPassword.Verify("여기는비밀번호", stored));
+        Assert.False(AdminPassword.Verify("여기는비밀번회", stored));
+    }
+
+    [Fact]
+    public void 소금이_매번_달라_같은_비밀번호도_다른_해시가_된다()
+    {
+        Assert.NotEqual(AdminPassword.Hash("같은값"), AdminPassword.Hash("같은값"));
+    }
+
+    [Fact]
+    public void 평문_설정도_받아_주되_그대로_비교한다()
+    {
+        // 개인 서버의 편의 — 해시를 만들기 귀찮을 때. 문서에서는 해시를 권한다.
+        Assert.True(AdminPassword.Verify("평문암호", "평문암호"));
+        Assert.False(AdminPassword.Verify("다른암호", "평문암호"));
+    }
+
+    [Fact]
+    public void 비밀번호를_안_정했으면_무엇을_넣어도_통과하지_못한다()
+    {
+        // 설정이 비었을 때 빈 비밀번호로 들어가지는 사고를 막는다.
+        Assert.False(AdminPassword.Verify("", null));
+        Assert.False(AdminPassword.Verify("아무거나", null));
+        Assert.False(AdminPassword.Verify("아무거나", "   "));
+        Assert.False(AdminPassword.Verify("", ""));
+    }
+
+    [Fact]
+    public void 해시가_깨져_있으면_통과시키지_않는다()
+    {
+        Assert.False(AdminPassword.Verify("x", "pbkdf2$210000$짧은소금"));
+        Assert.False(AdminPassword.Verify("x", "pbkdf2$abc$c2FsdA==$aGFzaA=="));
+        Assert.False(AdminPassword.Verify("x", "pbkdf2$210000$!!!$!!!"));
+    }
+
+    // ---- 대시보드 구성 ----
+
+    [Fact]
+    public void 대시보드는_최근_올라온_가사를_맨_위에_둔다()
+    {
+        // 가사 서버의 정체성은 "무슨 가사가 들어와 있는가"다 — 조회 통계보다 앞에 온다.
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        var uploads = html.IndexOf("최근 올라온 가사", StringComparison.Ordinal);
+        var lookups = html.IndexOf("최근 조회", StringComparison.Ordinal);
+
+        Assert.True(uploads > 0 && lookups > 0);
+        Assert.True(uploads < lookups, "최근 올라온 가사가 최근 조회보다 위여야 한다");
+    }
+
+    [Fact]
+    public void 각_섹션에_전체_보기_링크가_있다()
+    {
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("/admin/search\">전체 보기", html);   // 최근 올라온 가사 = 질의 없는 검색 화면
+        foreach (var view in AdminPages.ListViews.Keys)
+            Assert.Contains($"/admin/list?view={view}", html);
+    }
+
+    [Fact]
+    public void 켜져_있는_의미_자료원을_화면에_보여_준다()
+    {
+        // 무엇에 근거해 만들어지는지가 설정에만 있으면 나중에 아무도 모른다.
+        var model = EmptyDashboard() with { MeaningSources = ["Genius", "Musixmatch (AI 분석)"] };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("의미 자료:", html);
+        Assert.Contains("Musixmatch (AI 분석)", html);
+    }
+
+    // ---- 미스 행에서 곡으로 ----
+
+    [Fact]
+    public void 미스여도_지금_서버에_있으면_가사로_가는_링크가_생긴다()
+    {
+        var model = EmptyDashboard() with
+        {
+            TopMisses = [new MissRow("Kids", "MGMT", 3, "2026-08-01T00:00:00Z", 2, "kids|mgmt")],
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("/admin/song?key=kids%7Cmgmt", html);
+        Assert.Contains("가사 보기", html);
+    }
+
+    [Fact]
+    public void 정말_없는_곡은_검색으로만_보낸다()
+    {
+        var model = EmptyDashboard() with
+        {
+            TopMisses = [new MissRow("Kids", "MGMT", 3, "2026-08-01T00:00:00Z", 2)],
+        };
+
+        var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
+
+        Assert.DoesNotContain("가사 보기", html);
+        Assert.Contains("/admin/search?q=Kids", html);
+    }
+
+    // ---- 검색 화면의 의미 필터 ----
+
+    [Fact]
+    public void 검색_결과에_의미_열이_있다()
+    {
+        var withMeaning = Song("Kids", MeaningEntry.StatusOk);
+        var without = Song("Go!", null);
+
+        var html = AdminPages.SearchPage(null, [withMeaning, without], Kst);
+
+        Assert.Contains("<th>의미</th>", html);
+        Assert.Contains("있음", html);
+    }
+
+    [Fact]
+    public void 고른_필터가_폼에_남아_있다()
+    {
+        var html = AdminPages.SearchPage(null, [], Kst, LyricsStore.MeaningFilterOk);
+
+        Assert.Contains($"value=\"{LyricsStore.MeaningFilterOk}\" selected", html);
+        Assert.Contains("의미 있음", html);
+    }
+
+    private static SongRow Song(string title, string? meaning) =>
+        new("k-" + title, "k", title, "아티스트", "LRCLIB", "provider",
+            ["ko"], 10, false, 1, "2026-07-29T00:00:00Z", "거실PC", meaning);
+
+    private static DashboardModel EmptyDashboard() => new(
+        new ServerStats(0, 0, null), 0, new HitRate(0, 0, 0), new HitRate(0, 0, 0),
+        [], [], [], [], [], [], [], [],
+        new ServerHealth(TimeSpan.FromHours(1), 0, 0, 90), [],
+        new MeaningSummary(0, 0, 0, 0, false), [], "csrf-token");
 }

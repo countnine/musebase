@@ -290,6 +290,7 @@ internal static class Program
             };
             // ---- 트레이·미니창 공유 동작(중복 구현 방지: 같은 로컬 함수를 호출) ----
             LyricsEditorWindow? editorWindow = null;
+            MeaningWindow? meaningWindow = null;
             void MediaPrevious() { telemetry.CountFeature("mediaControls"); _ = nowPlaying.SkipPreviousAsync(); }
             void MediaPlayPause() { telemetry.CountFeature("mediaControls"); _ = nowPlaying.TogglePlayPauseAsync(); }
             void MediaNext() { telemetry.CountFeature("mediaControls"); _ = nowPlaying.SkipNextAsync(); }
@@ -314,6 +315,18 @@ internal static class Program
                 editorWindow.Show();
             }
             void MarkWrong() => coordinator.MarkWrongLyrics();
+            void OpenMeaning()
+            {
+                if (coordinator.CurrentTrack is null) return;
+                telemetry.CountFeature("meaning");
+                if (meaningWindow is { IsLoaded: true })
+                {
+                    meaningWindow.Activate();
+                    return;
+                }
+                meaningWindow = new MeaningWindow(coordinator);
+                meaningWindow.Show();
+            }
 
             var searchItem = new MenuItem { Header = Loc.T("tray.search") };
             searchItem.Click += (_, _) => OpenSearch();
@@ -347,6 +360,10 @@ internal static class Program
                     MessageBox.Show(Loc.T("export.fail", ("error", ex.Message)), "Musebase", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             };
+
+            // 곡의 의미 — 서버가 미리 만들어 둔 문단을 읽기만 한다(생성은 서버 관리자 화면에서).
+            var meaningItem = new MenuItem { Header = Loc.T("tray.meaning") };
+            meaningItem.Click += (_, _) => OpenMeaning();
 
             // 현재 가사가 틀렸을 때: 표시 중단 + 캐시 제거 + 재검색 억제
             var wrongItem = new MenuItem { Header = Loc.T("tray.wrong") };
@@ -609,12 +626,15 @@ internal static class Program
                 editItem.IsEnabled = hasLyrics;
                 exportItem.IsEnabled = hasLyrics;
                 wrongItem.IsEnabled = hasLyrics;
+                // 의미는 가사가 없어도 볼 수 있다(서버에 곡만 있으면 된다).
+                meaningItem.IsEnabled = coordinator.CurrentTrack is not null;
                 RebuildSourceMenu();
             };
             menu.Items.Add(trackItem);
             menu.Items.Add(searchItem);
             menu.Items.Add(editItem);
             menu.Items.Add(exportItem);
+            menu.Items.Add(meaningItem);
             menu.Items.Add(wrongItem);
             menu.Items.Add(new Separator());
             menu.Items.Add(overlayToggle);
