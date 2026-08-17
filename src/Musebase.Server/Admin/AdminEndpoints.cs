@@ -361,7 +361,9 @@ public static class AdminEndpoints
             });
 
             // 콜백은 지금 요청의 출처로 만든다 — API 계정에 콜백을 미리 등록하지 않아도 된다.
-            return SeeOther(lastfm.AuthorizeUrl($"{req.Scheme}://{req.Host}/admin/lastfm/callback"));
+            var origin = CallbackOrigin(
+                req.Scheme, req.Host.Host, req.Host.ToString(), req.Headers["X-Forwarded-Proto"].ToString());
+            return SeeOther(lastfm.AuthorizeUrl($"{origin}/admin/lastfm/callback"));
         });
 
         app.MapGet("/admin/lastfm/callback", async (HttpRequest req, HttpResponse res, string? token) =>
@@ -592,6 +594,34 @@ public static class AdminEndpoints
             return result.Status;
         }
     }
+
+    /// <summary>
+    /// last.fm이 브라우저를 되돌려 보낼 우리 쪽 출처.
+    ///
+    /// <b><c>req.Scheme</c>을 그대로 쓰면 안 된다.</b> `tailscale serve`가 HTTPS를 종단하고
+    /// 앱에는 평문 HTTP로 넘기므로 실측에서 <c>http://oracle.…ts.net</c>이 나왔다 —
+    /// 그 호스트의 80번에는 아무도 없어서 승인 후 돌아올 때 "서버에 연결할 수 없습니다"가 뜬다.
+    /// 게다가 state 논스 쿠키가 <c>Secure</c>라 평문으로는 실리지도 않는다.
+    ///
+    /// 그래서 ① 프록시가 알려 준 <c>X-Forwarded-Proto</c>를 먼저 믿고,
+    /// ② 없으면 <b>루프백이 아닌 이상 https</b>로 본다 — 관리자 쿠키가 이미 <c>Secure</c>라
+    /// 이 화면 전체가 애초에 HTTPS를 전제로 한다(로컬 개발만 예외).
+    /// </summary>
+    /// <param name="host">호스트 이름만(포트 제외) — 루프백 판정용.</param>
+    /// <param name="authority">주소에 실제로 넣을 <c>host[:port]</c>.</param>
+    public static string CallbackOrigin(string scheme, string host, string authority, string? forwardedProto)
+    {
+        // 프록시가 여럿이면 "https, http"처럼 쉼표로 이어 붙는다 — 맨 앞이 원래 클라이언트 쪽이다.
+        var proto = (forwardedProto ?? "").Split(',')[0].Trim();
+
+        if (proto.Length == 0)
+            proto = IsLoopback(host) ? scheme : "https";
+
+        return $"{proto}://{authority}";
+    }
+
+    private static bool IsLoopback(string host) =>
+        host is "localhost" or "127.0.0.1" or "::1" or "[::1]";
 
     /// <summary>기기 라벨 계산(요청 헤더 → 이름). 조회 기록과 업로드 표기에 함께 쓴다.</summary>
     public static string DeviceOf(HttpRequest req, AdminOptions options) => DeviceLabel.Resolve(
