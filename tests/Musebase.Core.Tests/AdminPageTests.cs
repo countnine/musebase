@@ -499,6 +499,40 @@ public class AdminPageTests
         Assert.Contains("nav a.out{margin-left:auto", html);
     }
 
+    // ---- Last.fm 콜백 출처 ----
+
+    /// <summary>
+    /// 실제로 깨졌던 지점이다. `tailscale serve`가 HTTPS를 종단하고 앱에는 평문으로 넘기므로
+    /// <c>req.Scheme</c>이 <c>http</c>다 — 그대로 콜백을 만들면 승인 후 돌아올 때
+    /// 80번 포트에 아무도 없어 "서버에 연결할 수 없습니다"가 뜬다.
+    /// </summary>
+    [Fact]
+    public void 프록시_뒤에서는_콜백이_https여야_한다()
+    {
+        Assert.Equal("https://oracle.oryx-skink.ts.net",
+            AdminEndpoints.CallbackOrigin("http", "oracle.oryx-skink.ts.net", "oracle.oryx-skink.ts.net", null));
+    }
+
+    [Fact]
+    public void 프록시가_알려_준_프로토콜을_먼저_믿는다()
+    {
+        Assert.Equal("https://box.ts.net",
+            AdminEndpoints.CallbackOrigin("http", "box.ts.net", "box.ts.net", "https"));
+
+        // 프록시가 여럿이면 쉼표로 이어 붙는다 — 맨 앞이 원래 클라이언트 쪽이다.
+        Assert.Equal("https://box.ts.net",
+            AdminEndpoints.CallbackOrigin("http", "box.ts.net", "box.ts.net", "https, http"));
+    }
+
+    [Fact]
+    public void 로컬_개발만_http로_남는다()
+    {
+        Assert.Equal("http://127.0.0.1:5199",
+            AdminEndpoints.CallbackOrigin("http", "127.0.0.1", "127.0.0.1:5199", null));
+        Assert.Equal("http://localhost:5199",
+            AdminEndpoints.CallbackOrigin("http", "localhost", "localhost:5199", ""));
+    }
+
     // ---- 곡 상세: 외부 링크 · 커버 · 좋아요 ----
 
     [Fact]
