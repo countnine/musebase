@@ -75,8 +75,11 @@ public static class AdminHtml
     /// <summary>공통 레이아웃 — 다크 표 스타일 + 상단 네비게이션.</summary>
     public static string Layout(string title, string body, string? activeNav = null)
     {
-        string Nav(string href, string label, string id) =>
-            $"<a href=\"{href}\"{(activeNav == id ? " class=\"on\"" : "")}>{Esc(label)}</a>";
+        string Nav(string href, string label, string id, string? extra = null)
+        {
+            var classes = string.Join(" ", new[] { activeNav == id ? "on" : null, extra }.Where(c => c is not null));
+            return $"<a href=\"{href}\"{(classes.Length == 0 ? "" : $" class=\"{classes}\"")}>{Esc(label)}</a>";
+        }
 
         // CSS에 중괄호가 많아 $$(이중 보간) 원시 문자열을 쓴다 — 보간은 {{…}}, CSS 중괄호는 그대로.
         return $$"""
@@ -99,6 +102,8 @@ public static class AdminHtml
             nav{display:flex;gap:1rem;margin:.75rem 0 1.25rem;font-size:.9rem;
                  border-bottom:1px solid var(--line);padding-bottom:.6rem}
             nav a.on{color:var(--text);font-weight:600}
+            /* 로그아웃은 오른쪽 끝으로 밀고 흐리게 둔다 — 가운데 있으면 잘못 누른다. */
+            nav a.out{margin-left:auto;color:var(--dim)} nav a.out:hover{color:var(--bad)}
             table{border-collapse:collapse;width:100%;font-size:.85rem}
             th,td{border:1px solid var(--line);padding:.35rem .5rem;text-align:left;vertical-align:top}
             th{background:var(--panel)} tr:nth-child(even) td{background:#181818}
@@ -126,6 +131,12 @@ public static class AdminHtml
                  border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
             @keyframes spin{to{transform:rotate(360deg)} }
             @media (prefers-reduced-motion:reduce){button.busy::before{animation-duration:2.5s} }
+            .song{display:flex;gap:1rem;align-items:flex-start;margin-top:1.5rem}
+            .song>div{min-width:0} .song h2{margin-top:0}
+            .cover{width:6rem;height:6rem;border-radius:.4rem;border:1px solid var(--line);
+                   object-fit:cover;flex:0 0 auto;background:var(--panel)}
+            button.love{background:#3a2330} button.love:hover{background:#4c2c3e}
+            button.love.on{color:#ff8fb1}
             .srcpick{display:inline-flex;flex-wrap:wrap;gap:.15rem .8rem;align-items:center}
             .srcpick label{color:var(--dim);font-size:.8rem;white-space:nowrap}
             details{margin-top:2rem} summary{cursor:pointer;color:var(--dim)}
@@ -139,7 +150,7 @@ public static class AdminHtml
             <nav>
               {{Nav("/admin", "대시보드", "home")}}
               {{Nav("/admin/search", "가사 검색", "search")}}
-              {{Nav("/admin/logout", "로그아웃", "logout")}}
+              {{Nav("/admin/logout", "로그아웃", "logout", "out")}}
             </nav>
             {{body}}
             <script>{{BusyScript}}</script>

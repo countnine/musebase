@@ -142,6 +142,141 @@ public sealed class LyricsStore : IDisposable
                 """);
             Execute("PRAGMA user_version = 6;");
         }
+
+        if (version < 7)
+        {
+            // 밖에서 알아낸 사실(커버 주소·Last.fm 정식 주소)과 서버 설정값.
+            // 가사·의미와 따로 두는 이유는 같다 — 이쪽이 없거나 낡아도 가사는 멀쩡해야 한다.
+            Execute("""
+                CREATE TABLE IF NOT EXISTS song_links (
+                    key          TEXT PRIMARY KEY,   -- lyrics.key와 같은 규칙
+                    cover_url    TEXT,               -- cover_at이 있는데 여기가 NULL = 찾아봤지만 없었다
+                    cover_source TEXT,               -- 'itunes' | 'deezer'
+                    cover_at     TEXT,               -- 커버를 찾아본 시각. NULL이면 아직 안 찾아봤다
+                    lastfm_url   TEXT,               -- track.getInfo가 알려 준 정식 주소
+                    updated_at   TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    name  TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """);
+            Execute("PRAGMA user_version = 7;");
+        }
+    }
+
+    // ---- 곡 바깥 링크(커버·Last.fm) ----
+
+    /// <summary>이 곡에 대해 밖에서 알아낸 것. 아무것도 없으면 빈 <see cref="SongLinks"/>.</summary>
+    public SongLinks GetSongLinks(string key)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "SELECT cover_url, cover_source, cover_at, lastfm_url FROM song_links WHERE key = $k;";
+            cmd.Parameters.AddWithValue("$k", key);
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read()) return new SongLinks(key);
+            return new SongLinks(
+                key,
+                reader.IsDBNull(0) ? null : reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3));
+        }
+    }
+
+    /// <summary>
+    /// 커버 찾기 결과를 확정한다. <b>못 찾았을 때도 부른다</b>(<paramref name="url"/>=null) —
+    /// <c>cover_at</c>이 채워져 다음부터 화면을 열 때마다 외부 API를 다시 부르지 않는다.
+    /// </summary>
+    public void SetCover(string key, string? url, string? source)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO song_links (key, cover_url, cover_source, cover_at, updated_at)
+                VALUES ($k, $u, $s, $at, $at)
+                ON CONFLICT(key) DO UPDATE SET
+                    cover_url = $u, cover_source = $s, cover_at = $at, updated_at = $at;
+                """;
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.Parameters.AddWithValue("$u", (object?)url ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$s", (object?)source ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Last.fm이 알려 준 정식 곡 주소를 기억한다(커버 쪽 값은 건드리지 않는다).</summary>
+    public void SetLastFmUrl(string key, string url)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO song_links (key, lastfm_url, updated_at) VALUES ($k, $u, $at)
+                ON CONFLICT(key) DO UPDATE SET lastfm_url = $u, updated_at = $at;
+                """;
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.Parameters.AddWithValue("$u", url);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>커버를 처음부터 다시 찾게 한다(관리자의 [커버 다시 찾기]).</summary>
+    public void ForgetCover(string key)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "UPDATE song_links SET cover_url = NULL, cover_source = NULL, cover_at = NULL WHERE key = $k;";
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // ---- 서버 설정값(환경변수로 넣을 수 없는 것 — 지금은 Last.fm 세션 키뿐) ----
+
+    public string? GetSetting(string name)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT value FROM app_settings WHERE name = $n;";
+            cmd.Parameters.AddWithValue("$n", name);
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    public void SetSetting(string name, string value)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO app_settings (name, value) VALUES ($n, $v)
+                ON CONFLICT(name) DO UPDATE SET value = $v;
+                """;
+            cmd.Parameters.AddWithValue("$n", name);
+            cmd.Parameters.AddWithValue("$v", value);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void DeleteSetting(string name)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM app_settings WHERE name = $n;";
+            cmd.Parameters.AddWithValue("$n", name);
+            cmd.ExecuteNonQuery();
+        }
     }
 
     // ---- 광고 제목 차단 ----

@@ -16,6 +16,7 @@ public sealed record MeaningOptions(
     string? OpenRouterModel,
     string? GeniusToken,
     string? LastFmKey,
+    string? LastFmSecret,
     string? MusixmatchKey,
     IReadOnlyList<string> Sources,
     int BackfillLimit,
@@ -32,7 +33,8 @@ public sealed record MeaningOptions(
     /// `MUSEBASE_MEANING_ENGINE`(gemini|openrouter|none, 기본 none),
     /// `MUSEBASE_MEANING_LANG`(기본 ko), `MUSEBASE_GEMINI_API_KEY` / `MUSEBASE_GEMINI_MODEL`,
     /// `MUSEBASE_OPENROUTER_API_KEY` / `MUSEBASE_OPENROUTER_MODEL`,
-    /// `MUSEBASE_GENIUS_TOKEN`, `MUSEBASE_LASTFM_KEY`, `MUSEBASE_MUSIXMATCH_KEY`,
+    /// `MUSEBASE_GENIUS_TOKEN`, `MUSEBASE_LASTFM_KEY`, `MUSEBASE_LASTFM_SECRET`,
+    /// `MUSEBASE_MUSIXMATCH_KEY`,
     /// `MUSEBASE_MEANING_SOURCES`(쉼표 구분, 기본 `genius,lastfm,wikipedia`),
     /// `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔 — 예전 변수, 아래 설명),
     /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50),
@@ -66,6 +68,7 @@ public sealed record MeaningOptions(
             OpenRouterModel: Env("MUSEBASE_OPENROUTER_MODEL"),
             GeniusToken: Env("MUSEBASE_GENIUS_TOKEN"),
             LastFmKey: Env("MUSEBASE_LASTFM_KEY"),
+            LastFmSecret: Env("MUSEBASE_LASTFM_SECRET"),
             MusixmatchKey: Env("MUSEBASE_MUSIXMATCH_KEY"),
             Sources: sources,
             BackfillLimit: limit,
@@ -89,6 +92,12 @@ public sealed record MeaningOptions(
 
     /// <summary>Musixmatch 곡 페이지 주소를 찾아 주는 클라이언트(키가 없으면 꺼진 상태로 동작).</summary>
     public MusixmatchApi MusixmatchApi() => new(MusixmatchKey ?? "");
+
+    /// <summary>
+    /// Last.fm 계정 API(좋아요). 의미 수집과 같은 API 키를 쓰지만 쓰기에는 shared secret이 더 필요하다 —
+    /// 키만 있으면 <b>읽기(좋아요 여부)까지만</b> 된다.
+    /// </summary>
+    public LastFmAccount LastFmAccount() => new(LastFmKey, LastFmSecret);
 
     /// <summary>화면에 보여 줄 소스 이름.</summary>
     public static string SourceLabel(string id) => id switch

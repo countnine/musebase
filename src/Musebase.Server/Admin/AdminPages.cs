@@ -145,6 +145,8 @@ public static class AdminPages
               <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다.</span>
               """;
 
+        var lastfm = LastFmCard(m.LastFm, m.Csrf);
+
         return Layout("대시보드", $"""
             {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
             <div class="tiles">{tiles}</div>
@@ -152,6 +154,7 @@ public static class AdminPages
             <p class="meta">각 기기의 <b>로컬 캐시에 없는 곡만</b> 서버로 옵니다 —
             같은 곡을 반복 재생해도 조회 수는 늘지 않습니다(로컬 캐시 → 서버 → 제공자 검색 순).</p>
             {backfill}
+            {lastfm}
 
             <h2>최근 올라온 가사{More("/admin/search")}</h2>{uploads}
             <h2>최근 조회{More("/admin/list?view=lookups")}</h2>{recent}
@@ -280,7 +283,8 @@ public static class AdminPages
         LyricsEntry entry, IReadOnlyList<DisplayLine> lines, IReadOnlyList<string> langs,
         string? selectedLang, bool showTags, string csrf, TimeZoneInfo tz, string? notice = null,
         MeaningEntry? meaning = null, bool meaningEnabled = false,
-        IReadOnlyList<(string Id, string Label, bool Checked)>? meaningSources = null)
+        IReadOnlyList<(string Id, string Label, bool Checked)>? meaningSources = null,
+        SongLinks? links = null, LoveState? love = null)
     {
         var key = entry.Key ?? "";
         var langLinks = langs.Count == 0
@@ -298,8 +302,16 @@ public static class AdminPages
                     ? $"<tr><td class=\"nowrap meta\">{Esc(l.TimeTag)}</td><td>{Esc(l.Content)}</td><td>{Esc(l.Translation)}</td></tr>"
                     : $"<tr><td>{Esc(l.Content)}</td><td>{Esc(l.Translation)}</td></tr>"));
 
+        // 커버가 없으면 자리를 아예 그리지 않는다 — 깨진 이미지 아이콘이 더 나쁘다.
+        var cover = string.IsNullOrWhiteSpace(links?.CoverUrl)
+            ? ""
+            : $"""<img class="cover" src="{Esc(links!.CoverUrl)}" alt="{Esc(entry.Title)} 커버" width="96" height="96">""";
+
         return Layout($"{entry.Title} — {entry.Artist}", $"""
             {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
+            <div class="song">
+            {cover}
+            <div>
             <h2>{Esc(entry.Title)} — {Esc(entry.Artist)}</h2>
             <p class="meta">
               출처 {Esc(entry.Service ?? "-")} · origin {Esc(entry.Origin)} · rev {entry.Revision}
@@ -312,6 +324,10 @@ public static class AdminPages
               · <a href="/admin/song?key={Url(key)}&lang={Url(selectedLang)}&tags={(showTags ? 0 : 1)}">
                   타임태그 {(showTags ? "숨기기" : "보기")}</a>
               · <a href="/admin/raw?key={Url(key)}">원문(.lrc)</a></p>
+            <p class="meta">{ExternalLinks(entry, meaning, links)}</p>
+            {LoveForm(key, csrf, love ?? LoveState.NotConnected)}
+            </div>
+            </div>
             {MeaningCard(entry, meaning, csrf, meaningEnabled, meaningSources ?? [])}
             {body}
 
@@ -341,11 +357,97 @@ public static class AdminPages
               <span class="meta">이 <b>제목</b>을 차단합니다 — 가사를 지우고, 앞으로 어느 기기가
               올려도 등록하지 않으며 검색도 하지 않습니다. 되돌리기는 대시보드에서.</span>
             </form>
+
+            <form method="post" action="/admin/song/cover" style="margin-top:.6rem" data-busy>
+              <input type="hidden" name="key" value="{Esc(key)}">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit">커버 다시 찾기</button>
+              <span class="meta">한 번 못 찾으면 다시 찾지 않습니다{(links?.CoverSource is { } src ? $" (지금: {Esc(src)})" : "")} —
+              곡명·아티스트를 고친 뒤에는 여기서 다시 시켜 주세요.</span>
+            </form>
             """, "search");
     }
 
     /// <summary>
-    /// 가사 위에 붙는 "이 곡의 의미" 카드. 의미가 없으면 외부 링크와 생성 버튼만 보인다.
+    /// 대시보드의 Last.fm 계정 연결. <c>MUSEBASE_LASTFM_SECRET</c>이 없으면 <paramref name="link"/>가
+    /// null로 와서 카드 자체를 그리지 않는다 — 눌러도 안 되는 것을 보여 주지 않는다.
+    ///
+    /// 연결은 <b>폼이 아니라 링크</b>다. CSP <c>form-action 'self'</c>가 외부 도메인으로의
+    /// 폼 제출을 막기 때문이다(눌러도 조용히 아무 일도 안 일어난다).
+    /// </summary>
+    private static string LastFmCard(LastFmLink? link, string csrf)
+    {
+        if (link is null) return "";
+
+        if (string.IsNullOrEmpty(link.User))
+            return """
+                <p class="meta"><a href="/admin/lastfm/connect">Last.fm 계정 연결 →</a>
+                — 연결하면 곡 상세에서 좋아요를 켜고 끌 수 있습니다.</p>
+                """;
+
+        return $"""
+            <form method="post" action="/admin/lastfm/disconnect" class="inline">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit">Last.fm 연결 해제</button>
+              <span class="meta">연결됨: <b>{Esc(link.User)}</b> ·
+              last.fm 설정 &gt; Applications에서도 권한을 회수할 수 있습니다.</span>
+            </form>
+            """;
+    }
+
+    /// <summary>
+    /// 곡에서 밖으로 나가는 링크. 의미 카드가 아니라 <b>머리말 아래</b>에 둔다 —
+    /// Tunefind·YouTube는 의미의 출처가 아니라 곡을 더 보러 가는 통로이고, 의미가 비었을 때
+    /// 카드가 안내하는 "위 링크"가 실제로 위에 있어야 말이 맞는다.
+    ///
+    /// Musixmatch·Genius·Last.fm은 <b>확인한 주소가 있으면 그것을</b> 쓴다(없으면 검색으로 강등).
+    /// </summary>
+    private static string ExternalLinks(LyricsEntry entry, MeaningEntry? meaning, SongLinks? links)
+    {
+        var targets = new (string Label, string Url)[]
+        {
+            ("Last.fm", MeaningLinks.LastFm(entry.Title, entry.Artist, links?.LastFmUrl)),
+            ("Tunefind", MeaningLinks.Tunefind(entry.Title, entry.Artist)),
+            ("YouTube", MeaningLinks.YouTube(entry.Title, entry.Artist)),
+            ("Musixmatch", MeaningLinks.Musixmatch(entry.Title, entry.Artist, meaning?.MusixmatchUrl)),
+            ("Genius", MeaningLinks.Genius(entry.Title, entry.Artist, meaning?.GeniusUrl)),
+        };
+
+        return string.Join(" · ", targets.Select(t =>
+            $"<a href=\"{Esc(t.Url)}\" target=\"_blank\" rel=\"noopener noreferrer\">{Esc(t.Label)}</a>"));
+    }
+
+    /// <summary>
+    /// Last.fm 좋아요 토글. 계정을 연결하지 않았으면 아무것도 그리지 않는다 —
+    /// 눌러도 안 되는 버튼을 보여 주면 사람을 헷갈리게 한다.
+    ///
+    /// <b>모르는 상태(조회 실패)를 "좋아요 안 함"으로 그리지 않는다.</b> 그러면 이미 좋아요한 곡을
+    /// 다시 눌러 꺼 버리게 된다 — 그때는 확인만 다시 시킨다.
+    ///
+    /// <c>data-busy</c>라 기존 스크립트가 스피너를 돌리고 히스토리도 늘리지 않는다.
+    /// </summary>
+    private static string LoveForm(string key, string csrf, LoveState love)
+    {
+        if (!love.Connected) return "";
+
+        var (label, extra, on) = love.Known
+            ? (love.Loved ? "♥ 좋아요 해제" : "♡ 좋아요", love.Loved ? "0" : "1", love.Loved)
+            : ("♡ 좋아요 확인", "1", false);
+
+        var note = love.Known ? "" : "<span class=\"meta\">Last.fm 상태를 확인하지 못했습니다.</span>";
+        return $"""
+            <form method="post" action="/admin/song/love" class="inline" data-busy>
+              <input type="hidden" name="key" value="{Esc(key)}">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <input type="hidden" name="on" value="{extra}">
+              <button class="love{(on ? " on" : "")}" type="submit">{label}</button>
+              {note}
+            </form>
+            """;
+    }
+
+    /// <summary>
+    /// 가사 위에 붙는 "이 곡의 의미" 카드. 의미가 없으면 생성 버튼만 보인다.
     ///
     /// <b>출처 표기는 의무다</b> — Wikipedia 본문은 CC BY-SA고 Genius·Last.fm도 링크 표기를
     /// 요구하므로 요약과 항상 함께 렌더한다.
@@ -355,13 +457,6 @@ public static class AdminPages
         IReadOnlyList<(string Id, string Label, bool Checked)> sources)
     {
         var key = entry.Key ?? "";
-        var geniusUrl = MeaningLinks.Genius(entry.Title, entry.Artist, meaning?.GeniusUrl);
-
-        var musixmatchUrl = MeaningLinks.Musixmatch(entry.Title, entry.Artist, meaning?.MusixmatchUrl);
-        var links = $"""
-            <a href="{Esc(musixmatchUrl)}" target="_blank" rel="noopener noreferrer">Musixmatch</a>
-            · <a href="{Esc(geniusUrl)}" target="_blank" rel="noopener noreferrer">Genius</a>
-            """;
 
         // 어떤 자료로 만들지 그 자리에서 고른다 — 한 곡으로 소스를 바꿔 가며 시험해 볼 수 있다.
         var picker = sources.Count == 0 ? "" : $"""
@@ -390,7 +485,7 @@ public static class AdminPages
                 "<p class=\"warn\">자료 부족 — 모은 자료만으로는 곡의 의미를 판단하지 못했습니다.</p>"
                 + $"<p class=\"meta\">{Esc(meaning.Summary)}</p>",
             MeaningEntry.StatusNoSource =>
-                "<p class=\"meta\">외부 자료를 찾지 못했습니다 — 위 링크에서 직접 확인해 보세요.</p>",
+                "<p class=\"meta\">외부 자료를 찾지 못했습니다 — 위의 외부 링크에서 직접 확인해 보세요.</p>",
             MeaningEntry.StatusFailed =>
                 "<p class=\"meta\">생성에 실패했습니다(키·쿼타·네트워크).</p>",
             _ => "<p class=\"meta\">아직 만들지 않았습니다.</p>",
@@ -410,7 +505,6 @@ public static class AdminPages
             <h2>이 곡의 의미</h2>
             {bodyHtml}
             {credit}
-            <p class="meta">{links}</p>
             {button}
             """;
     }

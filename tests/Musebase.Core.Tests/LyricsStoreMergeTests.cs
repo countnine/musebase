@@ -395,6 +395,84 @@ public class LyricsStoreMergeTests : IDisposable
         Assert.Null(misses.Single(m => m.Title == "Go!").Key);     // 정말 없는 곡은 그대로 null
     }
 
+    // ---- 커버·설정값 ----
+
+    /// <summary>
+    /// "아직 안 찾아봤다"와 "찾아봤지만 없었다"는 다르다. 못 찾은 것을 기억하지 않으면
+    /// 곡 상세를 열 때마다 외부 API를 다시 부른다.
+    /// </summary>
+    [Fact]
+    public void 커버를_못_찾은_것도_기억한다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "안드로이드", out _);
+
+        Assert.False(store.GetSongLinks("kids|mgmt").CoverTried);
+
+        store.SetCover("kids|mgmt", null, null);
+
+        var links = store.GetSongLinks("kids|mgmt");
+        Assert.True(links.CoverTried);
+        Assert.Null(links.CoverUrl);
+    }
+
+    [Fact]
+    public void 커버_다시_찾기는_없었다는_기억을_지운다()
+    {
+        using var store = NewStore();
+        store.SetCover("kids|mgmt", null, null);
+        store.ForgetCover("kids|mgmt");
+
+        Assert.False(store.GetSongLinks("kids|mgmt").CoverTried);
+    }
+
+    /// <summary>
+    /// 커버 찾기와 Last.fm 조회는 서로 다른 때에 일어난다 — 한쪽이 다른 쪽 값을 지우면 안 된다.
+    /// </summary>
+    [Fact]
+    public void LastFm_주소와_커버는_서로를_지우지_않는다()
+    {
+        using var store = NewStore();
+        store.SetLastFmUrl("kids|mgmt", "https://www.last.fm/music/MGMT/_/Kids");
+        store.SetCover("kids|mgmt", "https://is1-ssl.mzstatic.com/x/600x600bb.jpg", CoverArt.ITunes);
+
+        var links = store.GetSongLinks("kids|mgmt");
+        Assert.Equal("https://www.last.fm/music/MGMT/_/Kids", links.LastFmUrl);
+        Assert.Equal(CoverArt.ITunes, links.CoverSource);
+
+        // 순서를 뒤집어도 같아야 한다.
+        store.SetLastFmUrl("kids|mgmt", "https://www.last.fm/music/MGMT/_/Kids2");
+        Assert.NotNull(store.GetSongLinks("kids|mgmt").CoverUrl);
+    }
+
+    [Fact]
+    public void 설정값은_넣은_대로_돌아오고_지워진다()
+    {
+        using var store = NewStore();
+        Assert.Null(store.GetSetting(LastFmAccount.SessionSetting));
+
+        store.SetSetting(LastFmAccount.SessionSetting, "sk-123");
+        store.SetSetting(LastFmAccount.SessionSetting, "sk-456");   // 덮어쓰기
+        Assert.Equal("sk-456", store.GetSetting(LastFmAccount.SessionSetting));
+
+        store.DeleteSetting(LastFmAccount.SessionSetting);
+        Assert.Null(store.GetSetting(LastFmAccount.SessionSetting));
+    }
+
+    /// <summary>
+    /// 이미 배포된 DB(user_version=6)를 열면 v7 블록이 다시 돌아야 하고, 그때 던지지 않아야 한다 —
+    /// 마이그레이션이 실패하면 서버가 아예 못 뜬다.
+    /// </summary>
+    [Fact]
+    public void 예전_스키마를_열어도_마이그레이션이_다시_돈다()
+    {
+        using (var old = NewStore()) old.SetUserVersionForTest(6);
+
+        using var store = NewStore();
+        store.SetCover("kids|mgmt", null, null);
+        Assert.True(store.GetSongLinks("kids|mgmt").CoverTried);
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

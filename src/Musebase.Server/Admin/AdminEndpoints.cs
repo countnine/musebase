@@ -58,6 +58,10 @@ public sealed record AdminOptions(
 public static class AdminEndpoints
 {
     private const string CookieName = "musebase_admin";
+
+    /// <summary>Last.fm 승인 플로우의 1회용 논스. 관리자 쿠키와 달리 <b>SameSite=Lax</b>여야 한다.</summary>
+    private const string StateCookie = "musebase_lastfm_state";
+
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
     /// <summary>303 See Other — 이 프레임워크에 기본 헬퍼가 없어 직접 만든다.</summary>
@@ -82,8 +86,11 @@ public static class AdminEndpoints
         // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
         // connect-src가 필요한 이유: 그 스크립트가 폼을 fetch로 보낸다. 기본값 'none'이면
         // 조용히 막혀 버튼만 잠긴 채 아무 일도 일어나지 않는다. 대상은 같은 출처뿐이다.
+        // img-src를 열지 않으면 default-src 'none' 때문에 커버가 **조용히** 안 뜬다(콘솔에만 남는다).
+        // 호스트는 CoverArt가 실제로 부르는 두 곳으로 한정한다 — 새 자료원을 더하면 여기도 같이 는다.
         var Csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
                 + "connect-src 'self'; "
+                + "img-src 'self' https://*.mzstatic.com https://*.dzcdn.net; "
                 + $"script-src {AdminHtml.ScriptCsp}";
 
         IResult Html(string html) =>
@@ -92,6 +99,9 @@ public static class AdminEndpoints
         // POST 뒤에는 303이 맞다 — 302는 "다음 요청의 메서드"를 규정하지 않아 브라우저마다 다르다.
         // 303은 반드시 GET으로 가라는 뜻이라 새로고침이 POST를 되풀이하지 않는다.
         static IResult SeeOther(string location) => new SeeOtherResult(location);
+
+        var lastfm = meaningOptions.LastFmAccount();
+        var covers = new CoverArt();
 
         string? Cookie(HttpRequest req) => req.Cookies.TryGetValue(CookieName, out var v) ? v : null;
 
@@ -212,7 +222,7 @@ public static class AdminEndpoints
                 q, store.Search(q, limit: 200, meaning: filter), options.TimeZone, filter));
         });
 
-        app.MapGet("/admin/song", (HttpRequest req, string? key, string? lang, string? tags, string? notice) =>
+        app.MapGet("/admin/song", async (HttpRequest req, string? key, string? lang, string? tags, string? notice) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             if (string.IsNullOrWhiteSpace(key)) return SeeOther("/admin/search");
@@ -224,13 +234,17 @@ public static class AdminEndpoints
             var selected = string.IsNullOrWhiteSpace(lang) ? langs.FirstOrDefault() : lang;
             var showTags = tags != "0";
 
+            var links = await ResolveLinksAsync(entry);
+            var love = await LoveStateOf(entry);
+
             return Html(AdminPages.SongPage(
                 entry, AdminLrc.ToDisplayLines(entry.Lrc, selected), langs, selected, showTags,
                 AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), options.TimeZone, notice,
                 store.GetMeaningByKey(entry.Key ?? ""), meanings.IsEnabled,
                 meaningOptions.SelectableSources()
                     .Select(s => (s.Id, MeaningOptions.SourceLabel(s.Id), s.Default))
-                    .ToList()));
+                    .ToList(),
+                links, love));
         });
 
         app.MapGet("/admin/raw", (HttpRequest req, string? key) =>
@@ -304,6 +318,140 @@ public static class AdminEndpoints
             if (!string.IsNullOrWhiteSpace(titleKey)) store.RemoveAdTitle(titleKey);
             return SeeOther($"/admin?notice={Uri.EscapeDataString("광고 표시를 해제했습니다.")}");
         });
+
+        // ---- 커버 이미지 ----
+
+        app.MapPost("/admin/song/cover", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var key = form["key"].ToString();
+            var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
+            if (entry is null) return SeeOther("/admin/search");
+
+            store.ForgetCover(entry.Key ?? key);
+            var found = await FindCoverAsync(entry);
+            var notice = found is null ? "커버를 찾지 못했습니다." : $"커버를 찾았습니다({found.Source}).";
+            return SeeOther($"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
+        });
+
+        // ---- Last.fm 계정 연결 ----
+        // 승인은 last.fm에서 일어나고 브라우저가 여기로 돌아온다. **관리자 쿠키는 SameSite=Strict라
+        // 그 크로스사이트 이동에는 실리지 않는다** — 그대로 두면 콜백이 로그인 화면으로 떨어지고
+        // 1회용 토큰이 날아간다. 그래서 콜백의 신원 증명은 아래 state 논스 쿠키(SameSite=Lax)로 한다.
+        // 논스는 로그인한 관리자가 /connect를 눌렀을 때만 구워지므로 그 사람이 시작한 플로우임을 증명한다.
+
+        app.MapGet("/admin/lastfm/connect", (HttpRequest req, HttpResponse res) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            if (!lastfm.CanConnect)
+                return SeeOther($"/admin?notice={Uri.EscapeDataString("MUSEBASE_LASTFM_KEY와 MUSEBASE_LASTFM_SECRET이 필요합니다.")}");
+
+            var nonce = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+            res.Cookies.Append(StateCookie, nonce, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Lax,   // Strict면 last.fm에서 돌아올 때 실리지 않는다
+                Path = "/admin/lastfm",
+                Expires = DateTimeOffset.UtcNow.AddMinutes(10),
+            });
+
+            // 콜백은 지금 요청의 출처로 만든다 — API 계정에 콜백을 미리 등록하지 않아도 된다.
+            return SeeOther(lastfm.AuthorizeUrl($"{req.Scheme}://{req.Host}/admin/lastfm/callback"));
+        });
+
+        app.MapGet("/admin/lastfm/callback", async (HttpRequest req, HttpResponse res, string? token) =>
+        {
+            var nonce = req.Cookies.TryGetValue(StateCookie, out var v) ? v : null;
+            res.Cookies.Delete(StateCookie, new CookieOptions { Path = "/admin/lastfm" });
+
+            if (string.IsNullOrEmpty(nonce))
+                return SeeOther($"/admin?notice={Uri.EscapeDataString("연결 요청이 만료됐습니다 — 다시 눌러 주세요.")}");
+            if (string.IsNullOrWhiteSpace(token))
+                return SeeOther($"/admin?notice={Uri.EscapeDataString("Last.fm이 승인을 거절했습니다.")}");
+
+            var session = await lastfm.ExchangeTokenAsync(token!);
+            if (session is null)
+                return SeeOther($"/admin?notice={Uri.EscapeDataString("세션 키를 받지 못했습니다(토큰은 1회용입니다 — 다시 시도하세요).")}");
+
+            store.SetSetting(LastFmAccount.SessionSetting, session.Value.Session);
+            store.SetSetting(LastFmAccount.UserSetting, session.Value.User);
+            return SeeOther($"/admin?notice={Uri.EscapeDataString($"Last.fm에 연결했습니다: {session.Value.User}")}");
+        });
+
+        app.MapPost("/admin/lastfm/disconnect", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            store.DeleteSetting(LastFmAccount.SessionSetting);
+            store.DeleteSetting(LastFmAccount.UserSetting);
+            return SeeOther($"/admin?notice={Uri.EscapeDataString("Last.fm 연결을 해제했습니다.")}");
+        });
+
+        app.MapPost("/admin/song/love", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var key = form["key"].ToString();
+            var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
+            if (entry is null) return SeeOther("/admin/search");
+
+            var session = store.GetSetting(LastFmAccount.SessionSetting);
+            var notice = string.IsNullOrEmpty(session)
+                ? "Last.fm 계정이 연결돼 있지 않습니다."
+                : await SetLovedAsync(entry, form["on"].ToString() != "0", session!);
+
+            return SeeOther($"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
+        });
+
+        async Task<string> SetLovedAsync(LyricsEntry entry, bool loved, string session)
+        {
+            var ok = await lastfm.SetLovedAsync(entry.Title, entry.Artist, loved, session);
+            if (!ok) return "Last.fm에 반영하지 못했습니다(연결이 끊겼을 수 있습니다).";
+            return loved ? "Last.fm 좋아요를 켰습니다." : "Last.fm 좋아요를 껐습니다.";
+        }
+
+        /// 커버를 찾아 저장한다. **못 찾아도 저장한다** — 그래야 화면을 열 때마다 다시 부르지 않는다.
+        async Task<CoverImage?> FindCoverAsync(LyricsEntry entry)
+        {
+            var found = await covers.FindAsync(entry.Title, entry.Artist);
+            store.SetCover(entry.Key ?? "", found?.Url, found?.Source);
+            return found;
+        }
+
+        async Task<SongLinks> ResolveLinksAsync(LyricsEntry entry)
+        {
+            var links = store.GetSongLinks(entry.Key ?? "");
+            if (links.CoverTried) return links;
+
+            var found = await FindCoverAsync(entry);
+            return links with { CoverUrl = found?.Url, CoverSource = found?.Source, CoverAt = "now" };
+        }
+
+        /// 좋아요 여부. **모르면 Known=false다** — 모르는 것을 "안 함"으로 그리면 이미 켜 둔 곡을 끄게 된다.
+        async Task<LoveState> LoveStateOf(LyricsEntry entry)
+        {
+            var session = store.GetSetting(LastFmAccount.SessionSetting);
+            var user = store.GetSetting(LastFmAccount.UserSetting);
+            if (string.IsNullOrEmpty(session) || string.IsNullOrEmpty(user)) return LoveState.NotConnected;
+
+            var state = await lastfm.GetStateAsync(entry.Title, entry.Artist, user!);
+            if (state is null) return new LoveState(true, false, false);
+
+            // 정식 곡 주소는 알아낸 김에 기억해 둔다 — 다음부터는 규칙으로 만든 주소를 쓰지 않는다.
+            if (state.Url is not null) store.SetLastFmUrl(entry.Key ?? "", state.Url);
+            return new LoveState(true, true, state.Loved);
+        }
 
         // ---- 곡의 의미 ----
         // 생성은 **사람이 누를 때만** 일어난다. 자동 생성을 두지 않는 이유는 쿼타·비용이
@@ -409,7 +557,11 @@ public static class AdminEndpoints
                 Meanings: MeaningSummaryOf(),
                 MeaningSources: meanings.SourceNames,
                 Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""),
-                AdTitles: store.AdTitles(rows));
+                AdTitles: store.AdTitles(rows),
+                // 연결할 수 없는 구성이면 null — 카드를 아예 그리지 않는다.
+                LastFm: lastfm.CanConnect
+                    ? new LastFmLink(store.GetSetting(LastFmAccount.UserSetting))
+                    : null);
         }
 
         MeaningSummary MeaningSummaryOf()

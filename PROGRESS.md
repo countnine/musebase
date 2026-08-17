@@ -55,6 +55,13 @@
   - **삼성 One UI는 서드파티 앱 로그를 막는다** — `adb shell setprop log.tag.Musebase VERBOSE` 없이는 `Musebase` 태그가 logcat에 한 줄도 안 나와 앱이 죽은 것처럼 보인다. `dumpsys media_session`은 metadata를 제목/아티스트/앨범 3개로만 덤프해서 광고 플래그가 안 보이므로, 앱이 찍는 `ad-signals` 로그가 사실상 유일한 프로브다.
 
 ## 미배포 (서버 쪽 작업 — 앱 릴리스와 무관하게 이미 운영 중)
+- **곡 상세 보강(서버 관리자 화면 전용)** — 앱과 `/v1` 계약은 건드리지 않는다.
+  - **외부 링크 다섯 개** — Last.fm · Tunefind · YouTube · Musixmatch · Genius를 의미 카드가 아니라 **머리말 아래**로 옮겼다(Tunefind·YouTube는 의미의 출처가 아니라 곡을 더 보러 가는 통로이고, 의미가 비었을 때 카드가 안내하는 "위 링크"가 실제로 위에 있어야 말이 맞는다).
+  - **Tunefind API는 쓸 수 없다 — 링크만** — 셀프서비스 가입 창구가 없고 `info@tunefind.com`으로 라이선스 계약을 맺어야 하며 **무료 티어가 없다**. robots.txt는 AI 크롤러를 전면 차단한다. 주소는 반드시 `/search?q=`다 — 흔히 보이는 `/search/site?q=`는 실측 404. Last.fm 곡 주소는 반대로 **규칙 생성이 안전하다**(이름이 안 맞으면 조용히 다른 곡으로 가지 않고 "없는 곡"이 뜬다 — Musixmatch가 `Even-Flow`에서 `Alive`로 넘어가던 것과 대조).
+  - **Last.fm 좋아요 표시·토글** — `track.getInfo`에 `username`을 주면 `userloved`가 실려 온다(읽기는 지금 키로 충분). 켜고 끄기는 POST + `api_sig` + 세션 키가 필요해 **브라우저 승인 플로우**를 넣었다(`?cb=`로 콜백을 그때그때 넘겨 API 계정에 등록할 필요가 없다). **함정: 관리자 쿠키가 `SameSite=Strict`라 last.fm에서 돌아오는 이동에 실리지 않는다** — 그대로 두면 콜백이 로그인 화면으로 떨어지고 1회용 토큰이 날아간다. 콜백의 신원 증명은 `SameSite=Lax`인 state 논스 쿠키로 따로 한다. 조회 실패는 **"좋아요 안 함"으로 그리지 않는다**(꺼진 하트를 보고 누르면 이미 켜 둔 것을 끄게 된다).
+  - **커버 이미지** — iTunes Search(키 불필요, `100x100bb.jpg` → `600x600bb.jpg`)에서 찾고 없으면 Deezer. 첫 결과를 믿지 않고 `MeaningMatch.IsSameSong`을 통과시킨다. **못 찾은 것도 기억**해 열 때마다 다시 부르지 않는다(`song_links.cover_at`, [커버 다시 찾기]로 해제). **Last.fm 이미지는 쓰지 않는다** — API 약관이 artwork를 계약 대상에서 명시적으로 제외한다. CSP `default-src 'none'` 때문에 `img-src`를 그 두 호스트로 열었다(안 열면 이미지가 **조용히** 안 뜬다).
+  - **로그아웃을 우상단으로** — 네비 가운데(대시보드·가사 검색·로그아웃)에 있어 잘못 눌렀다. `margin-left:auto`로 오른쪽 끝에 흐린 색으로 뺐다.
+  - 저장은 `song_links` + `app_settings`(`user_version=7`). 컬럼·테이블 추가뿐이라 **구 버전 바이너리로 롤백해도 안전**. 테스트 38건 추가(333개 통과).
 - **곡의 의미(서버)** — 곡이 무엇에 대한 노래인지 한 문단으로. 관리자 곡 상세의 가사 **위**에 카드로 뜨고, 앱용 `GET /v1/meaning`도 열어 뒀다(앱 표시는 다음 작업). 배경은 `docs/adr/0007-song-meaning.md`.
   - **Musixmatch는 링크만** — 공개 API에 meaning 엔드포인트가 없고(그 섹션은 사용자 기여 웹 콘텐츠) 크롤링은 약관 위반이다. 자동 수집은 **Genius**(`/songs/{id}`의 `description`, 무료 토큰) + **Last.fm**(`track.getInfo`의 wiki, 무료 키) + **Wikipedia**(키 불필요) 셋을 병렬로 겹친다.
   - **엔진은 갈아끼운다** — `IMeaningWriter` + `MeaningWriterRegistry`(기존 `ITranslator`/`TranslatorRegistry`와 같은 모양). 기본은 **Gemini Developer API 직결**(API 키 한 줄, 무료 티어로 보유 곡 전체를 0원에 채운다 — Vertex AI는 서비스 계정·IAM 배선이 개인 프로젝트엔 과하다), 비교·전환용으로 **OpenRouter**(OpenAI 호환, `model` 문자열만 바꾸면 Claude·GPT·Gemini). 둘 다 순수 HttpClient라 SDK 의존성 0.
