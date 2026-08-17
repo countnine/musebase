@@ -37,6 +37,30 @@ public sealed record HitRate(int Exact, int Cleaned, int Miss)
 /// <summary>상세 화면의 가사 한 줄(원문과 번역을 나란히 보여주기 위한 형태).</summary>
 public sealed record DisplayLine(string TimeTag, string Content, string? Translation);
 
+/// <summary>
+/// 곡 하나에 대해 밖에서 알아낸 것. 가사·의미와 따로 두는 이유는 이쪽이 비어 있어도
+/// 가사는 멀쩡해야 하기 때문이다.
+/// </summary>
+/// <param name="CoverAt">
+/// 커버를 찾아본 시각. <c>null</c>이면 아직 안 찾아본 것이고, 값이 있는데
+/// <paramref name="CoverUrl"/>이 비어 있으면 <b>찾아봤지만 없었다</b>는 뜻이다(다시 부르지 않는다).
+/// </param>
+public sealed record SongLinks(
+    string Key, string? CoverUrl = null, string? CoverSource = null,
+    string? CoverAt = null, string? LastFmUrl = null)
+{
+    public bool CoverTried => !string.IsNullOrEmpty(CoverAt);
+}
+
+/// <summary>
+/// 곡 상세가 보여 줄 Last.fm 상태. 계정을 연결하지 않았거나 조회가 실패하면 전부 꺼진 값이다 —
+/// <b>모르는 것을 "좋아요 안 함"으로 그리면 안 된다</b>(꺼진 하트를 보고 다시 누르게 된다).
+/// </summary>
+public sealed record LoveState(bool Connected, bool Known, bool Loved)
+{
+    public static readonly LoveState NotConnected = new(false, false, false);
+}
+
 /// <summary>대시보드가 그리는 데 필요한 전부. 페이지 렌더러는 DB를 모른다(테스트 가능하도록).</summary>
 public sealed record DashboardModel(
     ServerStats Stats,
@@ -58,7 +82,12 @@ public sealed record DashboardModel(
     IReadOnlyList<string> MeaningSources,
     string Csrf,
     /// <summary>광고로 표시해 차단한 제목들(되돌릴 수 있어야 하므로 화면에 보여 준다).</summary>
-    IReadOnlyList<AdTitleRow>? AdTitles = null);
+    IReadOnlyList<AdTitleRow>? AdTitles = null,
+    /// <summary>Last.fm 계정 연결 상태 — 쓸 수 없는 구성이면 <c>null</c>이라 카드를 아예 안 그린다.</summary>
+    LastFmLink? LastFm = null);
+
+/// <summary>대시보드의 Last.fm 카드 — 연결한 아이디(없으면 미연결).</summary>
+public sealed record LastFmLink(string? User);
 
 /// <summary>대시보드의 "곡의 의미" 타일 — 만든 것 / 자료 없음 / 자료 부족 / 실패 + 아직 안 해 본 곡 수.</summary>
 public sealed record MeaningSummary(

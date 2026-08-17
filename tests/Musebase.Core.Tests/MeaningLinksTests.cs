@@ -62,4 +62,54 @@ public class MeaningLinksTests
         Assert.StartsWith("https://genius.com/search?q=", MeaningLinks.Genius("Kids", "MGMT", null));
         Assert.StartsWith("https://genius.com/search?q=", MeaningLinks.Genius("Kids", "MGMT", "  "));
     }
+
+    /// <summary>
+    /// 검색으로 흔히 나오는 <c>/search/site?q=</c>는 실측에서 404다 — 그쪽으로 보내면
+    /// 사람이 "Tunefind가 죽었나" 하고 만다.
+    /// </summary>
+    [Fact]
+    public void Tunefind는_경로형이_아니라_query다()
+    {
+        var url = MeaningLinks.Tunefind("Kids", "MGMT");
+
+        Assert.StartsWith("https://www.tunefind.com/search?q=", url);
+        Assert.DoesNotContain("/search/site", url);
+        Assert.Contains("MGMT%20Kids", url);
+    }
+
+    [Fact]
+    public void YouTube는_아티스트와_제목으로_검색한다()
+    {
+        var url = MeaningLinks.YouTube("Kids", "MGMT");
+
+        Assert.StartsWith("https://www.youtube.com/results?search_query=", url);
+        Assert.Contains("MGMT%20Kids", url);
+    }
+
+    [Fact]
+    public void LastFm은_확인한_주소를_우선한다()
+    {
+        var known = "https://www.last.fm/music/MGMT/_/Kids";
+        Assert.Equal(known, MeaningLinks.LastFm("Kids", "MGMT", known));
+    }
+
+    /// <summary>
+    /// Musixmatch와 달리 규칙 생성이 허용된다 — 이름이 안 맞으면 <b>다른 곡으로 넘어가지 않고</b>
+    /// "그런 곡 없음"이 뜬다. 대신 조각마다 이스케이프해서 슬래시가 경로를 늘리지 않게 한다.
+    /// </summary>
+    [Fact]
+    public void LastFm_주소를_모르면_이름으로_만든다()
+    {
+        Assert.Equal("https://www.last.fm/music/MGMT/_/Kids", MeaningLinks.LastFm("Kids", "MGMT", null));
+
+        var slashed = MeaningLinks.LastFm("Shallow", "Lady Gaga/Bradley Cooper", null);
+        Assert.Equal("https://www.last.fm/music/Lady%20Gaga%2FBradley%20Cooper/_/Shallow", slashed);
+    }
+
+    [Fact]
+    public void 아티스트를_모르면_LastFm_검색으로_보낸다()
+    {
+        // 이름 없이 /music//_/Kids를 만들면 404가 아니라 엉뚱한 페이지가 된다.
+        Assert.StartsWith("https://www.last.fm/search?q=", MeaningLinks.LastFm("Kids", "", null));
+    }
 }

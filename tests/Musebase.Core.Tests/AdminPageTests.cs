@@ -483,6 +483,114 @@ public class AdminPageTests
         Assert.Contains("의미 있음", html);
     }
 
+    // ---- 로그아웃 위치 ----
+
+    [Fact]
+    public void 로그아웃은_네비의_맨_끝에_따로_있다()
+    {
+        // 가운데 있으면 잘못 누른다 — `out` 클래스가 오른쪽 끝으로 미는 CSS와 짝이다.
+        var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
+
+        var search = html.IndexOf("/admin/search\"", StringComparison.Ordinal);
+        var logout = html.IndexOf("/admin/logout", StringComparison.Ordinal);
+
+        Assert.True(search > 0 && logout > search, "로그아웃이 가사 검색보다 뒤여야 한다");
+        Assert.Contains("<a href=\"/admin/logout\" class=\"out\">", html);
+        Assert.Contains("nav a.out{margin-left:auto", html);
+    }
+
+    // ---- 곡 상세: 외부 링크 · 커버 · 좋아요 ----
+
+    [Fact]
+    public void 곡_상세에_외부_링크_다섯_개가_있다()
+    {
+        var html = SongPage();
+
+        foreach (var name in new[] { "Last.fm", "Tunefind", "YouTube", "Musixmatch", "Genius" })
+            Assert.Contains($">{name}</a>", html);
+
+        // 새 창으로 나가되 원본 탭을 넘겨주지 않는다.
+        Assert.Contains("rel=\"noopener noreferrer\"", html);
+    }
+
+    [Fact]
+    public void 커버가_없으면_이미지를_그리지_않는다()
+    {
+        // 깨진 이미지 아이콘이 빈자리보다 나쁘다.
+        Assert.DoesNotContain("<img class=\"cover\"", SongPage());
+
+        var withCover = SongPage(links: new SongLinks("k", "https://is1-ssl.mzstatic.com/a/600x600bb.jpg",
+            CoverArt.ITunes, "2026-08-17T00:00:00Z"));
+        Assert.Contains("<img class=\"cover\"", withCover);
+        Assert.Contains("alt=\"Kids 커버\"", withCover);
+    }
+
+    [Fact]
+    public void 계정을_연결하지_않으면_좋아요_토글이_없다()
+    {
+        Assert.DoesNotContain("/admin/song/love", SongPage());
+    }
+
+    [Fact]
+    public void 좋아요를_켠_곡은_끄는_쪽으로_보여_준다()
+    {
+        var html = SongPage(love: new LoveState(Connected: true, Known: true, Loved: true));
+
+        Assert.Contains("/admin/song/love", html);
+        Assert.Contains("♥ 좋아요 해제", html);
+        Assert.Contains("name=\"on\" value=\"0\"", html);
+        Assert.Contains("data-busy", html);   // 스피너 + 히스토리 안 늘리기가 따라온다
+    }
+
+    /// <summary>
+    /// 조회에 실패한 것과 "좋아요 안 함"은 다르다. 꺼진 하트로 그리면 이미 켜 둔 곡을 끄게 된다.
+    /// </summary>
+    [Fact]
+    public void 상태를_모르면_좋아요_안_함으로_그리지_않는다()
+    {
+        var html = SongPage(love: new LoveState(Connected: true, Known: false, Loved: false));
+
+        Assert.Contains("확인하지 못했습니다", html);
+        Assert.DoesNotContain("♥ 좋아요 해제", html);
+    }
+
+    [Fact]
+    public void 정식_주소를_알면_LastFm_링크가_그것으로_간다()
+    {
+        var html = SongPage(links: new SongLinks("k", LastFmUrl: "https://www.last.fm/music/MGMT/_/Kids+"));
+
+        Assert.Contains("https://www.last.fm/music/MGMT/_/Kids+", html);
+    }
+
+    // ---- 대시보드: Last.fm 연결 ----
+
+    [Fact]
+    public void 연결할_수_없는_구성이면_LastFm_카드를_숨긴다()
+    {
+        // 눌러도 안 되는 것을 보여 주면 사람을 헷갈리게 한다(secret이 없는 상태).
+        Assert.DoesNotContain("/admin/lastfm/connect",
+            AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst));
+    }
+
+    [Fact]
+    public void 연결_전에는_연결_링크를_연결_후에는_아이디를_보여_준다()
+    {
+        var before = AdminPages.Dashboard(
+            EmptyDashboard() with { LastFm = new LastFmLink(null) }, DateTimeOffset.UtcNow, Kst);
+        Assert.Contains("<a href=\"/admin/lastfm/connect\">", before);
+
+        var after = AdminPages.Dashboard(
+            EmptyDashboard() with { LastFm = new LastFmLink("jay") }, DateTimeOffset.UtcNow, Kst);
+        Assert.Contains("연결됨: <b>jay</b>", after);
+        Assert.Contains("/admin/lastfm/disconnect", after);
+    }
+
+    private static string SongPage(SongLinks? links = null, LoveState? love = null) =>
+        AdminPages.SongPage(
+            new LyricsEntry { Key = "kids|mgmt", Title = "Kids", Artist = "MGMT", Lrc = "[00:01.00]hello" },
+            [], [], null, showTags: false, "csrf-token", Kst,
+            links: links, love: love);
+
     private static SongRow Song(string title, string? meaning) =>
         new("k-" + title, "k", title, "아티스트", "LRCLIB", "provider",
             ["ko"], 10, false, 1, "2026-07-29T00:00:00Z", "거실PC", meaning);

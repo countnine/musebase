@@ -73,6 +73,27 @@
 대안으로 TheAudioDB(무료 API)도 확인했는데, `strDescriptionEN` 필드는 있으나 `Even Flow`에서
 비어 있었다 — 곡 단위 해설 커버리지가 얇아 Genius를 대체하지 못한다.
 
+#### Tunefind도 넣지 않는다 — 링크만 (2026-08-17)
+
+"이 곡이 어느 드라마·영화에 쓰였는가"는 곡 배경으로 값진 정보라 [Tunefind](https://www.tunefind.com)
+API를 검토했다. **개인이 쓸 수 있는 경로가 없다.**
+
+- 셀프서비스 가입 창구가 없고 `info@tunefind.com`으로 **라이선스 계약**을 맺어야 한다.
+  티어는 Starter~Enterprise로 나뉘지만 **무료 티어가 없다.**
+- robots.txt가 `ClaudeBot`·`anthropic-ai`·`GPTBot` 등을 전면 차단한다 — 크롤링도 답이 아니다.
+
+그래서 곡 상세에 **검색 링크만** 단다(`MeaningLinks.Tunefind`). 주소는 반드시 `/search?q=`다 —
+검색 결과에 흔히 나오는 `/search/site?q=`는 실측에서 404였다.
+
+계약을 맺게 되면 붙이는 자리는 `ISongMeaningSource` + `MUSEBASE_MEANING_SOURCES` 그대로다.
+
+#### Last.fm 이미지는 자료원이 아니다
+
+`track.getInfo`는 앨범 이미지를 함께 주지만, Last.fm API 약관은 audio·audiovisual·**artwork**를
+계약 대상에서 명시적으로 제외한다("all such content is expressly excluded from this Agreement").
+커버 이미지는 iTunes Search(폴백 Deezer)에서 따로 가져온다 — 가져올 수 있다는 것과 써도 된다는
+것은 다르다.
+
 ### 3. 번역이 아니라 요약이다 — LLM을 쓴다
 
 세 소스 모두 영어 산문이다. DeepL은 번역만 하므로 그대로 넣으면 "의미"가 아니라 긴 영어

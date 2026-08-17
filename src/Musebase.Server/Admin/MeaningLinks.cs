@@ -43,4 +43,37 @@ public static class MeaningLinks
     /// </summary>
     public static string Musixmatch(string title, string artist, string? knownUrl) =>
         string.IsNullOrWhiteSpace(knownUrl) ? MusixmatchSearch(title, artist) : knownUrl!;
+
+    /// <summary>
+    /// 이 곡이 어느 드라마·영화에 쓰였는지 보러 간다.
+    ///
+    /// <b>API는 쓸 수 없다</b> — Tunefind는 셀프서비스 가입 창구가 없고 라이선스 계약이 필요하며
+    /// 무료 티어가 없다. robots.txt도 AI 크롤러를 전면 차단한다. 그래서 링크만 단다.
+    ///
+    /// 반드시 <c>/search?q=</c>다. 검색 결과에 흔히 나오는 <c>/search/site?q=</c>는 실측에서 <b>404</b>다.
+    /// </summary>
+    public static string Tunefind(string title, string artist) =>
+        "https://www.tunefind.com/search?q=" + Uri.EscapeDataString(Query(title, artist));
+
+    public static string YouTube(string title, string artist) =>
+        "https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(Query(title, artist));
+
+    /// <summary>
+    /// Last.fm 곡 페이지. 아는 주소(<c>track.getInfo</c>가 알려 준 정식 주소)가 있으면 그것을 쓰고,
+    /// 없으면 이름으로 만든다.
+    ///
+    /// Musixmatch와 달리 <b>규칙 생성이 안전하다</b> — 이름이 안 맞으면 조용히 다른 곡으로 넘어가지 않고
+    /// "그런 곡 없음" 페이지가 뜬다(엉뚱한 곡으로 보내는 것이 훨씬 나쁘다).
+    /// </summary>
+    public static string LastFm(string title, string artist, string? knownUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(knownUrl)) return knownUrl!;
+
+        var a = (artist ?? "").Trim();
+        var t = (title ?? "").Trim();
+        if (a.Length == 0)
+            return "https://www.last.fm/search?q=" + Uri.EscapeDataString(t);
+
+        return $"https://www.last.fm/music/{Uri.EscapeDataString(a)}/_/{Uri.EscapeDataString(t)}";
+    }
 }

@@ -67,6 +67,6 @@ public class MeaningOptionsTests
     private static readonly MeaningOptions Empty = new(
         Engine: "none", Lang: "ko",
         GeminiApiKey: null, GeminiModel: null, OpenRouterApiKey: null, OpenRouterModel: null,
-        GeniusToken: null, LastFmKey: null, MusixmatchKey: null,
+        GeniusToken: null, LastFmKey: null, LastFmSecret: null, MusixmatchKey: null,
         Sources: [], BackfillLimit: 50, BackfillDelayMs: 0);
 }

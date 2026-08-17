@@ -33,6 +33,8 @@ MUSEBASE_DB=/var/lib/musebase/lyrics.db
 # MUSEBASE_GEMINI_API_KEY=...
 # MUSEBASE_GENIUS_TOKEN=...
 # MUSEBASE_LASTFM_KEY=...
+# --- Last.fm 좋아요(선택) — 12절 참고 ---
+# MUSEBASE_LASTFM_SECRET=...         # 있어야 좋아요를 켜고 끌 수 있다(읽기는 KEY만으로 된다)
 EOF
 sudo chmod 600 /etc/musebase/server.env     # 토큰 파일은 절대 저장소에 커밋하지 않는다
 ```
@@ -202,7 +204,7 @@ Spotify Connect처럼 **PC에서 재생하고 폰에서 조작**하면 두 기�
 |---|---|---|
 | `MUSEBASE_GEMINI_API_KEY` | <https://aistudio.google.com/apikey> | 요금은 아래 "무료로 쓰려면" 참고 |
 | `MUSEBASE_GENIUS_TOKEN` | <https://genius.com/api-clients> → New API Client → **Generate Access Token** | 무료. OAuth 사용자 플로우 불필요 |
-| `MUSEBASE_LASTFM_KEY` | <https://www.last.fm/api/account/create> | 선택. Genius에 설명이 없는 곡을 메워 준다 |
+| `MUSEBASE_LASTFM_KEY` | <https://www.last.fm/api/account/create> | 선택. Genius에 설명이 없는 곡을 메워 준다. 같은 페이지의 Shared secret은 12절(좋아요)에서 쓴다 |
 | `MUSEBASE_MUSIXMATCH_KEY` | <https://developer.musixmatch.com> | 선택. **곡 페이지 링크를 정확히** 만드는 데 쓴다(아래) |
 
 Wikipedia는 키가 필요 없고 기본으로 켜져 있다(`MUSEBASE_MEANING_WIKIPEDIA=0`으로 끔).
@@ -277,9 +279,51 @@ OpenRouter는 Google Cloud 프로젝트가 아예 필요 없어, 프로젝트 �
 > 관리자 화면과 `/v1/meaning`의 `attribution`이 이를 담고 있으므로, 요약을 보여 주는 화면은
 > 출처를 함께 표시해야 한다.
 
+## 12. Last.fm 좋아요 · 커버 이미지 (선택)
+
+관리자 화면 전용이다. 앱에는 나가지 않으므로 이 절을 건너뛰어도 앱 동작은 그대로다.
+
+### 곡 상세의 외부 링크
+
+곡 상세 머리말 아래에 **Last.fm · Tunefind · YouTube · Musixmatch · Genius** 링크가 있다.
+Tunefind는 이 곡이 어느 드라마·영화에 쓰였는지 보러 가는 곳인데 **API는 쓰지 않는다** —
+셀프서비스 가입 창구가 없고 라이선스 계약이 필요하며 무료 티어가 없다(문의처 `info@tunefind.com`).
+
+### 커버 이미지
+
+키가 필요 없다. 곡 상세를 처음 열 때 iTunes Search API로 찾고(없으면 Deezer),
+찾은 주소를 DB에 기억한다. **못 찾은 것도 기억하므로** 열 때마다 다시 부르지 않는다 —
+곡명·아티스트를 고친 뒤에는 곡 상세 아래 **[커버 다시 찾기]** 를 누른다.
+
+Last.fm은 앨범 이미지를 주지만 쓰지 않는다. API 약관이 artwork를 계약 대상에서 **명시적으로
+제외**하기 때문이다(가져올 수 있다는 것과 써도 된다는 것은 다르다).
+
+### Last.fm 좋아요
+
+곡 상세에서 좋아요를 켜고 끌 수 있다. 읽기(좋아요 여부)는 `MUSEBASE_LASTFM_KEY`만으로 되고,
+**켜고 끄려면 shared secret과 계정 연결이 더 필요하다.**
+
+```
+MUSEBASE_LASTFM_KEY=...       # API 계정 페이지의 API key
+MUSEBASE_LASTFM_SECRET=...    # 같은 페이지의 Shared secret — 이게 있어야 연결 버튼이 뜬다
+```
+
+<https://www.last.fm/api/accounts> 에서 두 값을 함께 볼 수 있다. 넣고 재시작한 뒤:
+
+1. 대시보드 → **[Last.fm 계정 연결]**
+2. last.fm 승인 페이지에서 허용
+3. 돌아오면 `연결됨: 아이디`가 뜬다
+
+콜백 주소는 등록하지 않아도 된다 — 그때 접속한 주소를 그대로 넘긴다. 승인은 **브라우저에서**
+일어나므로 테일넷 안 주소여도 문제없다.
+
+> **세션 키는 DB(`app_settings`)에 저장된다.** 백업 파일에 Last.fm 쓰기 자격증명이 함께 들어간다는
+> 뜻이다. 지우려면 대시보드의 **[Last.fm 연결 해제]**, 또는 last.fm 설정 > Applications에서
+> 권한 자체를 회수한다.
+
 ## 업데이트
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
 따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
-(현재 3 — `meanings` 테이블과 `musixmatch_url` 컬럼까지)
-(현재 2 = `lyrics` + `lookups` + `meanings`).
+(현재 7 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`).
+컬럼·테이블 추가뿐이라 **구 버전 바이너리로 롤백해도 안전하다.**
