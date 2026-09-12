@@ -102,3 +102,14 @@ public sealed record NotFoundBody(
     bool Pending,
     int RetryAfterMs,
     bool Ad = false);
+
+/// <summary>
+/// <c>POST /v1/meaning</c>이 <b>의미를 만들지 못했을 때</b>(202)의 본문.
+///
+/// 만들지 못한 것은 오류가 아니라 흔한 결과다(자료가 없는 곡이 많다). 다만 이유마다 사람에게
+/// 할 말이 달라서 — 자료가 없는 것인지, 자료는 있었는데 부족했는지, 쿼타 때문에 잠시 안 되는
+/// 것인지 — status를 그대로 실어 보낸다. 값은 <c>meanings.status</c>와 같고,
+/// 여기에만 나오는 <c>retry</c>는 <b>저장하지 않았으니 다시 눌러도 된다</b>는 뜻이다.
+/// </summary>
+public sealed record MeaningNotMade(
+    [property: JsonPropertyName("status")] string Status);

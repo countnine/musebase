@@ -199,6 +199,11 @@ public class TranslationSharingTests
             string title, string artist, CancellationToken ct = default) =>
             Task.FromResult<SongMeaningView?>(null);
 
+        /// <summary>생성도 마찬가지 — 사람이 누를 때만 일어나므로 가사 흐름에서는 불리지 않는다.</summary>
+        public Task<MeaningRequestResult> RequestMeaningAsync(
+            string title, string artist, CancellationToken ct = default) =>
+            Task.FromResult(MeaningRequestResult.Of(MeaningRequestStatus.Unavailable));
+
         public Task<RemoteLyricsResult> GetAsync(string title, string artist, CancellationToken ct = default)
         {
             int n;

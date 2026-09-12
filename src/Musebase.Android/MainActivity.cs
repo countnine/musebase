@@ -544,8 +544,11 @@ public sealed class MainActivity : Activity
     /// 캐시에 저장된 잘못된 가사도 지운다. 되돌리려면 가사 검색에서 직접 골라 적용하면 된다.
     /// </summary>
     /// <summary>
-    /// "이 곡의 의미" — 가사 서버가 미리 만들어 둔 문단을 <b>읽기만 한다</b>.
-    /// 생성은 서버 관리자 화면에서만 일어나므로 앱은 조회 전용이고, 없으면 그렇게 알려 줄 뿐이다.
+    /// "이 곡의 의미" — 서버가 만들어 둔 문단을 보여 주고, <b>없으면 그 자리에서 만들 수 있다</b>.
+    ///
+    /// 만들기는 <b>사람이 누를 때만</b> 일어난다(자동 생성은 여전히 없다) — 한 번이 외부 자료
+    /// 수집 + LLM 호출이라 비싸기 때문이다. 서버가 <c>MUSEBASE_MEANING_ALLOW_CLIENT=0</c>이면
+    /// 막을 수 있고, 그때는 눌러도 안 된다고 알려 준다.
     ///
     /// 출처 표기는 의무라(Wikipedia CC BY-SA 등) 본문과 함께 반드시 붙인다.
     /// </summary>
@@ -569,7 +572,17 @@ public sealed class MainActivity : Activity
             .SetTitle($"{track.Title} — {track.Artist}")!
             .SetMessage("불러오는 중…")!
             .SetPositiveButton("닫기", (_, _) => { })!
+            .SetNeutralButton("의미 만들기", (IDialogInterfaceOnClickListener?)null)!
             .Show();
+
+        var make = dialog?.GetButton((int)DialogButtonType.Neutral);
+        if (make is not null)
+        {
+            make.Visibility = ViewStates.Gone;   // 결과를 보기 전에는 감춘다
+            // 기본 동작은 "누르면 창이 닫힌다"인데, 만드는 동안 창이 살아 있어야 진행 상황을
+            // 보여 줄 수 있다. 그래서 Show() 뒤에 리스너를 직접 붙인다(안드로이드 관례).
+            make.Click += (_, _) => MakeMeaning(remote, dialog!, make, track);
+        }
 
         Musebase.Core.Search.SongMeaningView? meaning = null;
         try { meaning = await remote.GetMeaningAsync(track.Title, track.Artist); }
@@ -577,11 +590,64 @@ public sealed class MainActivity : Activity
 
         if (IsFinishing || IsDestroyed || dialog is null || !dialog.IsShowing) return;
 
-        dialog.SetMessage(meaning is null
+        if (meaning is null)
+        {
             // 대부분의 곡에는 아직 의미가 없다 — 실패가 아니라 정상이다.
-            ? "이 곡의 의미는 아직 없습니다."
-            : meaning.Summary + "\n\n" + meaning.CreditLine);
+            dialog.SetMessage("이 곡의 의미는 아직 없습니다.\n[의미 만들기]를 누르면 지금 만듭니다.");
+            if (make is not null) make.Visibility = ViewStates.Visible;
+        }
+        else
+        {
+            ShowMeaningText(dialog, meaning);
+        }
     }
+
+    /// <summary>
+    /// 서버에 의미 생성을 요청하고 결과를 같은 창에 그린다.
+    ///
+    /// 수십 초가 걸릴 수 있어 <b>버튼을 잠그고</b> 진행 중임을 글로 밝힌다 — 반응이 없으면
+    /// 사람이 다시 눌러 같은 곡을 두 번 만들게 된다(서버도 막지만 기다림이 길어진다).
+    /// </summary>
+    private async void MakeMeaning(
+        Musebase.Core.Search.IRemoteLyricsCache remote, AlertDialog dialog, global::Android.Widget.Button make,
+        TrackInfo track)
+    {
+        make.Enabled = false;
+        dialog.SetMessage("의미를 만드는 중… 수십 초 걸릴 수 있습니다.");
+
+        var result = await remote.RequestMeaningAsync(track.Title, track.Artist);
+
+        if (IsFinishing || IsDestroyed || !dialog.IsShowing) return;
+
+        if (result is { Status: Musebase.Core.Search.MeaningRequestStatus.Created, Meaning: { } made })
+        {
+            ShowMeaningText(dialog, made);
+            make.Visibility = ViewStates.Gone;
+            return;
+        }
+
+        // 만들지 못한 이유마다 사람이 할 일이 다르다 — 뭉뚱그리면 다시 누를지 말지 알 수 없다.
+        dialog.SetMessage(result.Status switch
+        {
+            Musebase.Core.Search.MeaningRequestStatus.NoSource =>
+                "이 곡에 대한 외부 자료를 찾지 못했습니다.",
+            Musebase.Core.Search.MeaningRequestStatus.Insufficient =>
+                "자료가 부족해 의미를 판단하지 못했습니다.",
+            Musebase.Core.Search.MeaningRequestStatus.Retry =>
+                "지금은 만들 수 없습니다(쿼타·네트워크).\n저장하지 않았으니 잠시 후 다시 눌러 보세요.",
+            Musebase.Core.Search.MeaningRequestStatus.Unavailable =>
+                "이 서버에서는 앱에서 의미를 만들 수 없습니다.",
+            _ => "의미를 만들지 못했습니다.",
+        });
+
+        // 다시 눌러 볼 수 있는 것은 일시적 실패뿐이다 — 자료가 없는 곡은 눌러도 같은 답이 온다.
+        make.Enabled = result.Status is Musebase.Core.Search.MeaningRequestStatus.Retry
+                                     or Musebase.Core.Search.MeaningRequestStatus.Failed;
+    }
+
+    /// <summary>본문과 출처를 함께 그린다 — 출처 표기는 계약상 의무라 떼어 놓지 않는다.</summary>
+    private static void ShowMeaningText(AlertDialog dialog, Musebase.Core.Search.SongMeaningView meaning) =>
+        dialog.SetMessage(meaning.Summary + "\n\n" + meaning.CreditLine);
 
     private void ConfirmMarkWrong()
     {

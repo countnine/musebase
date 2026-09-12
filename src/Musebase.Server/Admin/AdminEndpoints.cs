@@ -80,7 +80,8 @@ public static class AdminEndpoints
 
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
-        Musebase.Core.Meaning.SongMeaningService meanings, MeaningOptions meaningOptions)
+        Musebase.Core.Meaning.SongMeaningService meanings, MeaningOptions meaningOptions,
+        MeaningGenerator generator)
     {
         // 스크립트는 딱 하나(제출 스피너)뿐이라 'unsafe-inline' 대신 **그 해시만** 허용한다 —
         // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
@@ -574,25 +575,10 @@ public static class AdminEndpoints
             return new MeaningSummary(ok, none, failed, pending, meanings.IsEnabled, insufficient);
         }
 
-        // 결과를 저장하고 status만 돌려준다. 실패·자료없음도 행으로 남겨 백필이 같은 곡을
-        // 무한히 재시도하지 않게 한다 — 단 **일시적 실패는 예외다.** 쿼타 초과를 행으로
-        // 남기면 한도가 회복된 뒤에도 그 곡은 영영 건너뛰어진다.
-        async Task<string> GenerateStatusAsync(
-            string key, string title, string artist, IReadOnlyList<string>? only = null)
-        {
-            // 소스를 골라 왔으면 이번 한 번만 그 조합으로 만든다(설정은 그대로 둔다).
-            var service = only is { Count: > 0 } ? meaningOptions.BuildService(only) : meanings;
-            var result = await service.BuildAsync(title, artist, meaningOptions.Lang);
-            if (result.Status == Musebase.Core.Meaning.SongMeaning.Retry) return result.Status;
-
-            // 곡 페이지 주소는 의미 소스와 별개다 — Musixmatch를 자료로 쓰지 않아도 링크는 정확해야 한다.
-            var musixmatch = await meaningOptions.MusixmatchApi().FindAsync(title, artist);
-
-            store.UpsertMeaning(
-                MeaningMapper.ToEntry(key, title, artist, meaningOptions.Lang, result)
-                with { MusixmatchUrl = musixmatch?.ShareUrl });
-            return result.Status;
-        }
+        // 저장·중복 방지 규칙은 앱용 `POST /v1/meaning`과 **같은 코드**를 쓴다(MeaningGenerator).
+        Task<string> GenerateStatusAsync(
+            string key, string title, string artist, IReadOnlyList<string>? only = null) =>
+            generator.GenerateAsync(key, title, artist, only);
     }
 
     /// <summary>

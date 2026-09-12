@@ -73,8 +73,9 @@ var admin = AdminOptions.FromEnvironment(token!);
 // 곡의 의미 — 키가 없으면 서비스가 꺼진 상태로 만들어지고 아무 데도 영향을 주지 않는다.
 var meaningOptions = MeaningOptions.FromEnvironment();
 var meanings = meaningOptions.BuildService();
+var meaningGenerator = new MeaningGenerator(store, meanings, meaningOptions);
 
-app.MapAdmin(store, admin, meanings, meaningOptions);
+app.MapAdmin(store, admin, meanings, meaningOptions, meaningGenerator);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -198,6 +199,38 @@ app.MapGet("/v1/meaning", (HttpRequest request, string? title, string? artist) =
         Sources = "",
         Attribution = MeaningMapper.Attribution(found.Sources),
     });
+});
+
+// 앱에서 의미 만들기. **사람이 누를 때만 일어난다**는 원칙은 그대로고(자동 생성은 여전히 없다),
+// 누르는 자리가 관리자 화면 하나에서 각 기기로 늘어난 것이다(ADR-0007 결정 4 참고).
+// 비용이 드는 유일한 쓰기 경로라 `MUSEBASE_MEANING_ALLOW_CLIENT=0`으로 막을 수 있다.
+app.MapPost("/v1/meaning", async (HttpRequest request, string? title, string? artist) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
+
+    if (!meaningOptions.AllowClientGeneration)
+        return Results.Json(new ApiError("client generation disabled"), statusCode: StatusCodes.Status403Forbidden);
+    if (!meaningGenerator.IsEnabled)
+        return Results.Json(new ApiError("meaning engine not configured"), statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    // 광고는 곡이 아니다 — 조회에서 막는 것과 같은 이유로 생성에도 토큰을 쓰지 않는다.
+    if (store.IsAdTitle(title!))
+        return Results.Json(new ApiError("ad"), statusCode: 404);
+
+    // 의미는 가사 행에 붙는다(같은 key). 서버에 없는 곡은 만들 자리가 없다 —
+    // 앱은 방금 그 곡의 가사를 받아 띄운 상태이므로 정상 경로에서는 늘 있다.
+    var found = store.Get(title!, artist ?? "");
+    if (found?.Key is not { Length: > 0 } key) return Results.Json(new ApiError("song not found"), statusCode: 404);
+
+    var status = await meaningGenerator.GenerateAsync(key, found.Title, found.Artist);
+
+    // 만들어졌으면 조회와 **같은 모양**으로 돌려준다 — 앱이 다시 GET 하지 않아도 되게.
+    if (status == MeaningEntry.StatusOk && store.GetMeaningByKey(key) is { } made)
+        return Results.Ok(made with { Sources = "", Attribution = MeaningMapper.Attribution(made.Sources) });
+
+    // 만들지 못한 이유는 앱이 사람에게 그대로 설명해야 하므로 상태를 실어 보낸다.
+    return Results.Json(new MeaningNotMade(status), statusCode: StatusCodes.Status202Accepted);
 });
 
 app.Run();

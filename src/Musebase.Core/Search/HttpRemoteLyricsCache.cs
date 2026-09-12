@@ -156,19 +156,68 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
 
             var entry = await response.Content
                 .ReadFromJsonAsync<RemoteMeaningEntry>(Json, cts.Token).ConfigureAwait(false);
-            if (entry?.Summary is not { Length: > 0 } summary) return null;
-
-            var credits = (entry.Attribution ?? [])
-                .Where(a => !string.IsNullOrWhiteSpace(a.Name))
-                .Select(a => new MeaningCredit(a.Name!, a.Url))
-                .ToList();
-            return new SongMeaningView(summary.Trim(), credits, entry.Lang ?? "ko");
+            return ToView(entry);
         }
         catch (Exception)
         {
             return null; // 부가 기능 — 가사 조회에 영향을 주지 않는다
         }
     }
+
+    /// <summary>
+    /// 의미를 지금 만들어 달라고 요청한다(사람이 버튼을 눌렀을 때만).
+    ///
+    /// 조회와 달리 <b>회로가 열려 있어도 시도한다</b> — 사람이 방금 누른 동작이라 조용히
+    /// 아무 일도 안 일어나면 고장으로 보인다. 대신 결과는 실패로 정직하게 돌려준다.
+    /// 타임아웃도 따로 길게 잡는다: 외부 자료 수집 + LLM이라 수십 초가 걸린다.
+    /// </summary>
+    public async Task<MeaningRequestResult> RequestMeaningAsync(
+        string title, string artist, CancellationToken ct = default)
+    {
+        try
+        {
+            var url = new Uri(_baseUri,
+                $"v1/meaning?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist)}");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(GenerateTimeout);
+
+            using var response = await _http.PostAsync(url, null, cts.Token).ConfigureAwait(false);
+
+            // 403(앱 생성 꺼짐) · 503(엔진 미구성) — 둘 다 "이 서버에서는 안 된다"는 같은 말이다.
+            if (response.StatusCode is System.Net.HttpStatusCode.Forbidden
+                                    or System.Net.HttpStatusCode.ServiceUnavailable)
+                return MeaningRequestResult.Of(MeaningRequestStatus.Unavailable);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Accepted)
+            {
+                var notMade = await response.Content
+                    .ReadFromJsonAsync<RemoteMeaningNotMade>(Json, cts.Token).ConfigureAwait(false);
+                return MeaningRequestResult.Of(notMade?.Status switch
+                {
+                    "no-source" => MeaningRequestStatus.NoSource,
+                    "insufficient" => MeaningRequestStatus.Insufficient,
+                    "retry" => MeaningRequestStatus.Retry,
+                    _ => MeaningRequestStatus.Failed,
+                });
+            }
+
+            if (!response.IsSuccessStatusCode) return MeaningRequestResult.Of(MeaningRequestStatus.Failed);
+
+            var entry = await response.Content
+                .ReadFromJsonAsync<RemoteMeaningEntry>(Json, cts.Token).ConfigureAwait(false);
+            var view = ToView(entry);
+            return view is null
+                ? MeaningRequestResult.Of(MeaningRequestStatus.Failed)
+                : new MeaningRequestResult(MeaningRequestStatus.Created, view);
+        }
+        catch (Exception)
+        {
+            return MeaningRequestResult.Of(MeaningRequestStatus.Failed);
+        }
+    }
+
+    /// <summary>생성은 외부 자료 수집 + LLM이라 조회 타임아웃(수 초)으로는 늘 끊긴다.</summary>
+    private static readonly TimeSpan GenerateTimeout = TimeSpan.FromSeconds(90);
 
     public async Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)
     {
@@ -254,11 +303,32 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     }
 
     /// <summary>`GET /v1/meaning` 응답(필요한 필드만).</summary>
+    /// <summary>
+    /// 응답 → 화면에 띄울 형태. 조회와 생성이 <b>같은 모양</b>의 본문을 주므로 한 군데서 옮긴다.
+    /// 출처 표기는 의무라 본문과 함께 실어 보낸다(빈 이름은 버린다).
+    /// </summary>
+    private static SongMeaningView? ToView(RemoteMeaningEntry? entry)
+    {
+        if (entry?.Summary is not { Length: > 0 } summary) return null;
+
+        var credits = (entry.Attribution ?? [])
+            .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+            .Select(a => new MeaningCredit(a.Name!, a.Url))
+            .ToList();
+        return new SongMeaningView(summary.Trim(), credits, entry.Lang ?? "ko");
+    }
+
     private sealed record RemoteMeaningEntry
     {
         public string? Summary { get; init; }
         public string? Lang { get; init; }
         public RemoteAttribution[]? Attribution { get; init; }
+    }
+
+    /// <summary>생성이 202로 끝났을 때의 본문 — 만들지 못한 이유가 들어 있다.</summary>
+    private sealed record RemoteMeaningNotMade
+    {
+        public string? Status { get; init; }
     }
 
     private sealed record RemoteAttribution

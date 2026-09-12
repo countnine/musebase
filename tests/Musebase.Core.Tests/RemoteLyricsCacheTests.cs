@@ -173,6 +173,83 @@ public class RemoteLyricsCacheTests
         Assert.NotNull((await cache.GetAsync("Kids", "MGMT")).Lyrics);
     }
 
+    // ---- 의미 만들기(사람이 버튼을 눌렀을 때만) ----
+
+    [Fact]
+    public async Task 만들기는_POST로_보낸다()
+    {
+        HttpMethod? method = null;
+        var cache = Create(new StubHandler(req =>
+        {
+            method = req.Method;
+            return Task.FromResult(Json(HttpStatusCode.OK,
+                """{"summary":"이 곡은 성장의 불안을 다룬다.","lang":"ko","attribution":[]}"""));
+        }));
+
+        var result = await cache.RequestMeaningAsync("Kids", "MGMT");
+
+        Assert.Equal(HttpMethod.Post, method);
+        Assert.Equal(MeaningRequestStatus.Created, result.Status);
+        Assert.Equal("이 곡은 성장의 불안을 다룬다.", result.Meaning!.Summary);
+    }
+
+    /// <summary>
+    /// 만들지 못한 것은 오류가 아니라 흔한 결과다. 다만 이유마다 사람에게 할 말이 다르므로
+    /// (다시 눌러 볼지 말지가 갈린다) 202 본문의 status를 그대로 옮겨야 한다.
+    /// </summary>
+    [Theory]
+    [InlineData("no-source", MeaningRequestStatus.NoSource)]
+    [InlineData("insufficient", MeaningRequestStatus.Insufficient)]
+    [InlineData("retry", MeaningRequestStatus.Retry)]
+    [InlineData("뭔가 새로운 값", MeaningRequestStatus.Failed)]
+    public async Task 만들지_못한_이유를_구분해_옮긴다(string status, MeaningRequestStatus expected)
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(
+            Json(HttpStatusCode.Accepted, $$"""{"status":"{{status}}"}"""))));
+
+        var result = await cache.RequestMeaningAsync("Kids", "MGMT");
+
+        Assert.Equal(expected, result.Status);
+        Assert.Null(result.Meaning);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]        // 서버가 앱 생성을 껐다
+    [InlineData(HttpStatusCode.ServiceUnavailable)] // 의미 엔진 미구성
+    public async Task 서버가_막았으면_안내할_수_있게_구분한다(HttpStatusCode code)
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(code))));
+        Assert.Equal(MeaningRequestStatus.Unavailable,
+            (await cache.RequestMeaningAsync("Kids", "MGMT")).Status);
+    }
+
+    [Fact]
+    public async Task 만들기_실패는_예외_대신_Failed다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromException<HttpResponseMessage>(new HttpRequestException("down"))));
+        Assert.Equal(MeaningRequestStatus.Failed, (await cache.RequestMeaningAsync("Kids", "MGMT")).Status);
+    }
+
+    /// <summary>
+    /// 조회와 달리 <b>회로가 열려 있어도 시도한다</b> — 사람이 방금 누른 동작이라
+    /// 조용히 아무 일도 안 일어나면 고장으로 보인다.
+    /// </summary>
+    [Fact]
+    public async Task 회로가_열려_있어도_만들기는_시도한다()
+    {
+        var handler = new StubHandler(req => req.Method == HttpMethod.Post
+            ? Task.FromResult(Json(HttpStatusCode.Accepted, """{"status":"no-source"}"""))
+            : Task.FromException<HttpResponseMessage>(new HttpRequestException("down")));
+        var cache = Create(handler);
+
+        await cache.GetAsync("T", "A");
+        await cache.GetAsync("T", "A");   // 회로 오픈
+        var callsAfterOpen = handler.Calls;
+
+        Assert.Equal(MeaningRequestStatus.NoSource, (await cache.RequestMeaningAsync("Kids", "MGMT")).Status);
+        Assert.Equal(callsAfterOpen + 1, handler.Calls);
+    }
+
     private static HttpRemoteLyricsCache Create(StubHandler handler) =>
         new("http://localhost:9/", "token", timeoutMs: 500, log: null, handler: handler);
 
