@@ -20,7 +20,8 @@ public sealed record MeaningOptions(
     string? MusixmatchKey,
     IReadOnlyList<string> Sources,
     int BackfillLimit,
-    int BackfillDelayMs)
+    int BackfillDelayMs,
+    bool AllowClientGeneration = true)
 {
     /// <summary>
     /// 소스 id. <b>기본값에 musixmatch는 없다</b> — 그 자료는 사람이 쓴 해설이 아니라
@@ -38,7 +39,8 @@ public sealed record MeaningOptions(
     /// `MUSEBASE_MEANING_SOURCES`(쉼표 구분, 기본 `genius,lastfm,wikipedia`),
     /// `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔 — 예전 변수, 아래 설명),
     /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50),
-    /// `MUSEBASE_MEANING_BACKFILL_DELAY_MS`(기본 0 — 아래 설명).
+    /// `MUSEBASE_MEANING_BACKFILL_DELAY_MS`(기본 0 — 아래 설명),
+    /// `MUSEBASE_MEANING_ALLOW_CLIENT`(0이면 앱의 [의미 만들기] 버튼을 막는다 — 기본 켬).
     ///
     /// `MUSEBASE_MEANING_WIKIPEDIA=0`은 소스 목록이 생기기 전부터 쓰던 변수라 계속 받아 준다 —
     /// 목록을 직접 지정하지 않은 경우에만 기본값에서 위키피디아를 뺀다(직접 지정이 항상 이긴다).
@@ -72,7 +74,8 @@ public sealed record MeaningOptions(
             MusixmatchKey: Env("MUSEBASE_MUSIXMATCH_KEY"),
             Sources: sources,
             BackfillLimit: limit,
-            BackfillDelayMs: delay);
+            BackfillDelayMs: delay,
+            AllowClientGeneration: Env("MUSEBASE_MEANING_ALLOW_CLIENT") != "0");
     }
 
     /// <summary>설정 문자열 → 소스 id 목록. 알 수 없는 이름은 무시한다(오타로 서버가 죽지 않게).</summary>

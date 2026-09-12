@@ -42,10 +42,46 @@ public interface IRemoteLyricsCache
     Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default);
 
     /// <summary>
-    /// 곡의 의미를 가져온다. 없으면 null — 만들지는 않는다(생성은 서버 관리자만 한다).
+    /// 곡의 의미를 가져온다. 없으면 null — 이 호출은 <b>만들지 않는다</b>.
     /// 가사와 마찬가지로 실패·미접속도 조용히 null이다.
     /// </summary>
     Task<SongMeaningView?> GetMeaningAsync(string title, string artist, CancellationToken ct = default);
+
+    /// <summary>
+    /// 곡의 의미를 <b>지금 만들어 달라고</b> 서버에 요청한다. 사람이 버튼을 눌렀을 때만 부른다 —
+    /// 한 번이 외부 API 여러 개 + LLM 호출이라 비싸다(자동 호출 금지).
+    ///
+    /// 조회와 달리 수십 초가 걸릴 수 있어 <b>훨씬 긴 타임아웃</b>을 쓰고, 실패해도
+    /// 서킷 브레이커에 세지 않는다(부가 기능 때문에 가사 조회가 막히면 손해가 크다).
+    /// </summary>
+    Task<MeaningRequestResult> RequestMeaningAsync(string title, string artist, CancellationToken ct = default);
+}
+
+/// <summary>의미 생성 요청의 결과.</summary>
+/// <param name="Status">무슨 일이 있었는지 — 사람에게 할 말이 이것으로 갈린다.</param>
+/// <param name="Meaning">만들어졌을 때의 본문(그 외에는 null).</param>
+public readonly record struct MeaningRequestResult(MeaningRequestStatus Status, SongMeaningView? Meaning)
+{
+    public static MeaningRequestResult Of(MeaningRequestStatus status) => new(status, null);
+}
+
+/// <summary>
+/// 생성 요청의 결말. 서버가 돌려주는 <c>status</c>와 클라이언트 쪽 사정(미설정·미접속)을 합친 것이다.
+/// </summary>
+public enum MeaningRequestStatus
+{
+    /// <summary>만들었다 — <see cref="MeaningRequestResult.Meaning"/>에 본문이 있다.</summary>
+    Created,
+    /// <summary>외부 자료를 하나도 못 찾았다. 흔한 결과이고 실패가 아니다.</summary>
+    NoSource,
+    /// <summary>자료는 있었지만 그것만으로 의미를 말할 수 없었다.</summary>
+    Insufficient,
+    /// <summary>쿼타·네트워크로 잠시 안 된다. <b>저장하지 않았으므로 다시 눌러도 된다.</b></summary>
+    Retry,
+    /// <summary>서버에 의미 엔진이 구성돼 있지 않거나 앱 생성이 꺼져 있다.</summary>
+    Unavailable,
+    /// <summary>서버에 못 붙었거나 그 곡이 서버에 없다.</summary>
+    Failed,
 }
 
 /// <summary>
