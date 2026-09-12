@@ -40,7 +40,8 @@ public sealed class MeaningGenerator(
 
         var task = _inFlight.GetOrAdd(gateKey, _ => RunAsync(key, title, artist, only));
         // 끝나면 자리를 비워 다음 [다시 생성]이 새로 돌게 한다.
-        _ = task.ContinueWith(_ => _inFlight.TryRemove(gateKey, out _), TaskScheduler.Default);
+        _ = task.ContinueWith(
+            _ => _inFlight.TryRemove(gateKey, out Task<string>? _), TaskScheduler.Default);
         return task;
     }
 
