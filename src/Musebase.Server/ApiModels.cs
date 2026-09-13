@@ -132,9 +132,18 @@ public sealed record SongExtrasBody(
     /// 이 곡의 서버 키. 앱이 <c>{서버 주소}/song?key=…</c>로 관리 화면을 바로 열 수 있게 준다 —
     /// 키를 만드는 규칙은 전적으로 서버 몫이라 클라이언트가 조립할 수 없다.
     /// </summary>
-    string? Key = null)
+    string? Key = null,
+    /// <summary>서버에 Spotify 계정이 연결돼 있는가. false면 앱은 그 표시를 감춘다.</summary>
+    bool SpotifyConnected = false,
+    /// <summary>
+    /// 라이브러리 저장 여부를 <b>실제로 확인했는가</b>. false면 <paramref name="SpotifySaved"/>를
+    /// 믿으면 안 된다 — <c>loveKnown</c>과 같은 이유다.
+    /// </summary>
+    bool SpotifyKnown = false,
+    bool SpotifySaved = false)
 {
-    public static SongExtrasBody From(SongLinks links, LoveState love) =>
+    public static SongExtrasBody From(SongLinks links, LoveState love, SpotifyState? spotify = null) =>
         new(links.CoverUrl, links.CoverSource, links.LastFmUrl,
-            love.Connected, love.Known, love.Loved, links.Key);
+            love.Connected, love.Known, love.Loved, links.Key,
+            spotify?.Connected ?? false, spotify?.Known ?? false, spotify?.Saved ?? false);
 }
