@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
@@ -49,7 +50,9 @@ public sealed record MiniWindowActions(
     Func<Task<byte[]?>>? GetThumbnail = null,
     // 의미: 있으면 창을 열고, 없으면 그 자리에서 만든다
     Func<Task<SongMeaningView?>>? GetMeaning = null,
-    Func<Task<MeaningRequestResult>>? MakeMeaning = null);
+    Func<Task<MeaningRequestResult>>? MakeMeaning = null,
+    // 가사 서버 주소(설정값) — 이 곡의 서버 화면을 브라우저로 열 때 쓴다. 없으면 그 버튼이 사라진다
+    Func<string?>? ServerEndpoint = null);
 
 /// <summary>
 /// 작업표시줄에 상주하는 컨트롤 허브. 오버레이가 숨겨져도(사용자 숨김·일시정지·가림방지)
@@ -80,6 +83,9 @@ public sealed class MiniWindow : Window
     private static readonly Color Dim = Color.FromRgb(0x8A, 0x93, 0xA2);
     private static readonly Color Accent = Color.FromRgb(0x7C, 0xC4, 0xFF);
     private static readonly Color Heart = Color.FromRgb(0xFF, 0x8F, 0xB1);
+
+    /// <summary>"모른다"·"안 됐다"를 나타내는 색. 켬/끔 어느 쪽으로도 읽히면 안 되므로 따로 둔다.</summary>
+    private static readonly Color Warn = Color.FromRgb(0xFF, 0xC2, 0x6B);
 
     private readonly MiniWindowActions _a;
 
@@ -113,12 +119,18 @@ public sealed class MiniWindow : Window
     private readonly Button _coverRetry;
     private readonly Button _minimize;
     private readonly Button _close;
+    private readonly Button _openServer;
+
+    /// <summary>평상시 층 우상단의 좋아요 표시(누르는 것이 아니라 보는 것).</summary>
+    private readonly TextBlock _restLove;
 
     private bool _closingToExit;   // "종료" 경로에서만 실제 닫힘 허용
     private SongExtras? _extras;
     private int _extrasEpoch;      // 곡이 바뀌면 늦게 도착한 응답을 버린다
     private bool _hasServerCover;  // 서버 커버를 걸었는가 — 재생 앱 표지로 덮지 않는다(그쪽이 더 선명하다)
     private bool _hasMeaning;      // 의미가 이미 있는가 — 버튼 글자가 이것으로 갈린다
+    private bool _extrasFailed;    // 서버에 못 물어봤다 — "좋아요 없음"과 구별해 알린다
+    private string? _fetchedKey;   // 마지막으로 조회한 곡(제목|아티스트) — 상태만 바뀌면 다시 안 받는다
 
     public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions)
     {
@@ -175,21 +187,49 @@ public sealed class MiniWindow : Window
             FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(Ink),
             TextTrimming = TextTrimming.CharacterEllipsis,
+            TextAlignment = TextAlignment.Right,
         };
         _restArtist = new TextBlock
         {
             FontSize = 12,
             Foreground = new SolidColorBrush(Dim),
             TextTrimming = TextTrimming.CharacterEllipsis,
+            TextAlignment = TextAlignment.Right,
             Margin = new Thickness(0, 1, 0, 0),
         };
-        var restStack = new StackPanel
-        {
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(14, 12, 14, 12),
-        };
+        // 글자가 놓인 자리에만 어두운 판을 깐다. 예전에는 창 아래쪽 전체에 그라데이션을 깔았는데
+        // 표지의 아래 절반이 늘 어두워졌다 — 가릴 이유가 없는 데까지 가리는 셈이었다.
+        var restStack = new StackPanel();
         restStack.Children.Add(_restTitle);
         restStack.Children.Add(_restArtist);
+
+        var restPlate = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0xC4, 0x06, 0x09, 0x0D)),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 6, 10, 7),
+            Margin = new Thickness(12),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            MaxWidth = 300,
+            Child = restStack,
+        };
+
+        // 좋아요는 <b>평상시에도</b> 보여야 한다 — 호버 층에만 있어 상태를 보려면 마우스를 올려야 했다.
+        // 여기 있는 것은 표시 전용이다(누르는 것은 호버 층의 버튼).
+        _restLove = new TextBlock
+        {
+            FontSize = 15,
+            Margin = new Thickness(12),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Visibility = Visibility.Collapsed,
+            IsHitTestVisible = false,
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color = Colors.Black, BlurRadius = 4, ShadowDepth = 0, Opacity = 0.9,
+            },
+        };
 
         // 의미는 **마우스를 올렸을 때만** 가운데에 보여 준다 — 평소에는 표지를 가리지 않는다.
         // 길면 잘라낸다(전문은 의미 창).
@@ -208,9 +248,8 @@ public sealed class MiniWindow : Window
         };
 
         _rest = new Grid();
-        // 위는 거의 투명하게 두고(커버가 보여야 한다) 아래로 갈수록 어둡게 — 글자가 읽히도록.
-        _rest.Children.Add(new Border { Background = Scrim(0.0, 0.62) });
-        _rest.Children.Add(restStack);
+        _rest.Children.Add(restPlate);
+        _rest.Children.Add(_restLove);
 
         // ---- 3) 호버 층: 모든 컨트롤 ----
         _title = new TextBlock
@@ -235,11 +274,13 @@ public sealed class MiniWindow : Window
             Margin = new Thickness(0, 2, 0, 0),
         };
 
-        _love = Chip(() => ToggleLove());
-        _meaning = Chip(() => OnMeaningClick());
-        _coverRetry = Chip(() => RetryCover());
-        _search = Chip(() => _a.OpenSearch());
-        var songRow = Row(_love, _meaning, _coverRetry, _search);
+        // 글리프는 Segoe Fluent Icons / MDL2의 공통 코드포인트를 쓴다(두 Windows 버전에서 같은 그림).
+        _love = IconButton(() => ToggleLove(), "♡", "mini.love.off");
+        _meaning = IconButton(() => OnMeaningClick(), "", "mini.meaning");        // ReadingList
+        _coverRetry = IconButton(() => RetryCover(), "", "mini.cover");           // Refresh
+        _search = IconButton(() => _a.OpenSearch(), "", "mini.search");           // Search
+        _openServer = IconButton(() => OpenOnServer(), "", "mini.openServer");    // OpenInNewWindow
+        var songRow = Row(_love, _meaning, _coverRetry, _search, _openServer);
 
         var top = new StackPanel();
         top.Children.Add(_title);
@@ -247,9 +288,9 @@ public sealed class MiniWindow : Window
         top.Children.Add(_source);
         top.Children.Add(songRow);
 
-        _prev = MediaButton(() => _a.OnPrevious());
-        _playPause = MediaButton(() => _a.OnPlayPause(), primary: true);
-        _next = MediaButton(() => _a.OnNext());
+        _prev = MediaButton(() => _a.OnPrevious(), "", "controls.previous");
+        _playPause = MediaButton(() => _a.OnPlayPause(), "", "controls.playPause", primary: true);
+        _next = MediaButton(() => _a.OnNext(), "", "controls.next");
         var playbackRow = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -260,9 +301,10 @@ public sealed class MiniWindow : Window
         playbackRow.Children.Add(_playPause);
         playbackRow.Children.Add(_next);
 
-        _offsetMinus = Chip(() => _a.AdjustOffset(-0.5));
-        _offsetPlus = Chip(() => _a.AdjustOffset(0.5));
-        _offsetReset = Chip(() => _a.AdjustOffset(null));
+        // 오프셋은 숫자가 곧 뜻이라 글리프로 대신할 수 없다 — 짧은 글자를 그대로 두고 납작하게만 만든다.
+        _offsetMinus = TextButton(() => _a.AdjustOffset(-0.5), "mini.offset.minus");
+        _offsetPlus = TextButton(() => _a.AdjustOffset(0.5), "mini.offset.plus");
+        _offsetReset = TextButton(() => _a.AdjustOffset(null), "mini.offset.reset");
         _offsetLabel = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
@@ -273,11 +315,12 @@ public sealed class MiniWindow : Window
         var offsetRow = Row(_offsetMinus, _offsetPlus, _offsetReset);
         offsetRow.Children.Add(_offsetLabel);
 
-        _openLyrics = Chip(() => _a.OpenLyricsEditor());
-        _wrong = Chip(() => _a.MarkWrong());
-        _overlayToggle = Chip(() => _a.SetOverlayVisible(!_a.IsOverlayVisible()));
-        _settings = Chip(() => _a.OpenSettings());
-        _exit = Chip(() => { _closingToExit = true; _a.Exit(); });
+        _openLyrics = IconButton(() => _a.OpenLyricsEditor(), "", "mini.openLyrics");   // Edit
+        _wrong = IconButton(() => _a.MarkWrong(), "", "mini.wrong");                    // Warning
+        _overlayToggle = IconButton(
+            () => _a.SetOverlayVisible(!_a.IsOverlayVisible()), "", "mini.showOverlay"); // Caption
+        _settings = IconButton(() => _a.OpenSettings(), "", "mini.settings");           // Settings
+        _exit = IconButton(() => { _closingToExit = true; _a.Exit(); }, "", "mini.exit"); // PowerButton
         var featureRow = Row(_openLyrics, _wrong, _overlayToggle, _settings, _exit);
 
         var bottom = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
@@ -286,8 +329,8 @@ public sealed class MiniWindow : Window
         bottom.Children.Add(featureRow);
 
         // 제목 표시줄이 없으니 최소화·닫기를 직접 둔다(호버할 때만 보인다).
-        _minimize = Chip(() => WindowState = WindowState.Minimized);
-        _close = Chip(() => Close());
+        _minimize = IconButton(() => WindowState = WindowState.Minimized, "", "mini.minimize");
+        _close = IconButton(() => Close(), "", "mini.close");
         var windowButtons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -452,8 +495,10 @@ public sealed class MiniWindow : Window
     ///
     /// 표지는 두 곳에서 오는데 <b>서로 기다리지 않는다</b> — 재생 앱이 준 표지(SMTC)는 네트워크가
     /// 없어 거의 즉시 오고, 서버가 이미 가진 커버도 한 번의 왕복이면 온다. 둘을 나란히 띄워
-    /// 먼저 도착한 쪽을 건다. 다만 <b>SMTC 표지가 오면 그쪽이 이긴다</b> — 지금 나오는 음원과
-    /// 정확히 같은 앨범이라 리마스터·싱글 버전까지 맞는다(검색은 엉뚱한 앨범을 집을 수 있다).
+    /// 먼저 도착한 쪽을 건다.
+    ///
+    /// 다만 <b>서버 커버가 오면 그쪽이 이긴다</b> — 재생 앱 표지는 300px에 로고 띠·여백이 붙어
+    /// 오는 반면 서버 것은 600px 정사각이라 훨씬 깨끗하다.
     ///
     /// 그 사이 곡이 또 바뀌면 늦게 온 응답은 버린다.
     /// </summary>
@@ -461,6 +506,7 @@ public sealed class MiniWindow : Window
     {
         var epoch = ++_extrasEpoch;
         _hasServerCover = false;
+        _extrasFailed = false;
         _cover.Source = null;      // 곡이 바뀌었다 — 앞 곡 표지를 남겨 두지 않는다
         ApplyMeaning(null);
         ApplyExtras(null);
@@ -468,7 +514,38 @@ public sealed class MiniWindow : Window
         FetchThumbnail(epoch);
         FetchServerExtras(epoch);
         FetchMeaning(epoch);
+        ChaseCover(epoch);
     }
+
+    /// <summary>
+    /// 커버가 <b>나중에 생기는</b> 곡을 따라잡는다.
+    ///
+    /// 처음 트는 곡은 서버에 가사 행이 아직 없어 <c>GET /v1/song</c>이 404다 — 그 재생 내내
+    /// 커버가 비어 있었다. 가사를 올리고 나면 생기지만, 그때는 화면 상태가 더 바뀌지 않아
+    /// 다시 물어볼 계기가 없다. 그래서 몇 번만 되물어 본다.
+    ///
+    /// 곡이 바뀌면(<paramref name="epoch"/>) 멈추고, 커버가 걸리면 더 묻지 않는다.
+    /// </summary>
+    private async void ChaseCover(int epoch)
+    {
+        if (_a.GetExtras is not { } get) return;
+
+        foreach (var wait in CoverChaseDelays)
+        {
+            await Task.Delay(wait);
+            if (epoch != _extrasEpoch || _hasServerCover) return;
+
+            var extras = await get();
+            if (epoch != _extrasEpoch) return;
+            if (extras is null) continue;          // 아직 서버에 없는 곡 — 다음 차례에 다시
+            ApplyExtras(extras);
+            if (_hasServerCover) return;
+        }
+    }
+
+    /// <summary>커버를 되묻는 간격. 가사 검색·번역·업로드가 끝나는 시간을 넉넉히 덮는다.</summary>
+    private static readonly TimeSpan[] CoverChaseDelays =
+        [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(40)];
 
     private async void FetchThumbnail(int epoch)
     {
@@ -486,7 +563,12 @@ public sealed class MiniWindow : Window
 
         var extras = await get();
         if (epoch != _extrasEpoch) return;
+
+        // 곡이 서버에 아직 없으면(404)도 null이라 이것만으로 "오류"라고 할 수는 없다.
+        // 다만 좋아요·커버가 통째로 비는 이유를 사람이 알 수 있어야 해서 표시는 남긴다.
+        _extrasFailed = extras is null;
         ApplyExtras(extras);
+        if (_extrasFailed) _source.Text = Loc.T("mini.extras.failed");
     }
 
     private async void FetchMeaning(int epoch)
@@ -521,7 +603,7 @@ public sealed class MiniWindow : Window
 
         var epoch = _extrasEpoch;
         _meaning.IsEnabled = false;
-        _meaning.Content = Loc.T("mini.meaning.making");
+        _meaning.ToolTip = Loc.T("mini.meaning.making");
 
         var result = await make();
         if (epoch != _extrasEpoch) return;
@@ -543,7 +625,7 @@ public sealed class MiniWindow : Window
     };
 
     private void ApplyMeaningLabel() =>
-        _meaning.Content = Loc.T(_hasMeaning ? "mini.meaning" : "mini.meaning.find");
+        _meaning.ToolTip = Loc.T(_hasMeaning ? "mini.meaning" : "mini.meaning.find");
 
     private async void ToggleLove()
     {
@@ -551,11 +633,33 @@ public sealed class MiniWindow : Window
 
         _love.IsEnabled = false;
         var epoch = _extrasEpoch;
-        var updated = await set(!now.ShowLoved);
+        // 모르는 상태(조회 실패)면 끄는 쪽으로 보내지 않는다 — 이미 켜 둔 것을 꺼 버릴 수 있다.
+        // 켜는 요청은 이미 켜져 있어도 해가 없고, 응답으로 실제 상태를 받아 온다.
+        var updated = await set(!now.LoveKnown || !now.Loved);
         if (epoch != _extrasEpoch) return;
 
         _love.IsEnabled = true;
         if (updated is not null) ApplyExtras(updated);
+    }
+
+    /// <summary>
+    /// 이 곡의 가사 서버 화면 주소. 키는 <b>서버가 준 것만</b> 쓴다 — 정규화 규칙이 서버 몫이라
+    /// 앱이 제목·아티스트로 만들면 같은 곡이라도 다른 키가 나온다. 키가 없거나(구버전 서버)
+    /// 서버 주소를 안 넣었으면 null이고, 그러면 버튼 자체를 감춘다.
+    /// </summary>
+    private string? ServerUrl() => _extras?.AdminUrl(_a.ServerEndpoint?.Invoke());
+
+    private void OpenOnServer()
+    {
+        if (ServerUrl() is not { } url) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception e)
+        {
+            Log.Write($"[mini] 가사 서버 열기 실패: {e.Message}");
+        }
     }
 
     private async void RetryCover()
@@ -581,14 +685,56 @@ public sealed class MiniWindow : Window
         _love.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
         if (connected)
         {
-            var on = extras!.ShowLoved;
-            _love.Content = Loc.T(on ? "mini.love.on" : "mini.love.off");
-            _love.Foreground = new SolidColorBrush(on ? Heart : Ink);
+            _love.Content = LoveGlyph(extras);
+            _love.ToolTip = LoveTip(extras);
+            _love.Foreground = new SolidColorBrush(extras!.ShowLoved ? Heart : Ink);
         }
+
+        ApplyLoveBadge();
 
         _coverRetry.Visibility = _a.RefreshCover is null ? Visibility.Collapsed : Visibility.Visible;
         _meaning.Visibility = _a.OpenMeaning is null ? Visibility.Collapsed : Visibility.Visible;
+        _openServer.Visibility = ServerUrl() is null ? Visibility.Collapsed : Visibility.Visible;
     }
+
+    /// <summary>
+    /// 평상시 층 우상단의 좋아요 표시. <b>세 가지를 구별한다</b> —
+    /// 켬(♥) · 끔(♡) · <b>모름(!)</b>. 모르는 것을 꺼진 하트로 그리면 사람이 눌러서 이미 켜 둔 것을
+    /// 끄게 되므로, 확인하지 못한 상태는 반드시 다르게 보여야 한다.
+    ///
+    /// 서버에 물어보지도 못했으면(⚠) 좋아요가 아니라 <b>연결 문제</b>다 — 그것도 조용히 두지 않는다.
+    /// </summary>
+    private void ApplyLoveBadge()
+    {
+        if (_extrasFailed)
+        {
+            _restLove.Text = "⚠";
+            _restLove.Foreground = new SolidColorBrush(Warn);
+            _restLove.ToolTip = Loc.T("mini.extras.failed");
+            _restLove.Visibility = Visibility.Visible;
+            return;
+        }
+
+        if (_extras is not { LoveConnected: true } extras)
+        {
+            _restLove.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        _restLove.Text = extras.LoveKnown ? (extras.Loved ? "♥" : "♡") : "!";
+        _restLove.Foreground = new SolidColorBrush(
+            extras.LoveKnown ? (extras.Loved ? Heart : Ink) : Warn);
+        _restLove.ToolTip = LoveTip(extras);
+        _restLove.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>좋아요 버튼에 그릴 글자 — 모르는 상태는 켠 것도 끈 것도 아닌 제3의 모양이다.</summary>
+    private static string LoveGlyph(SongExtras? extras) =>
+        extras is not { LoveKnown: true } ? "♡ !" : extras.Loved ? "♥" : "♡";
+
+    private static string LoveTip(SongExtras? extras) => Loc.T(
+        extras is not { LoveKnown: true } ? "mini.love.unknown"
+        : extras.Loved ? "mini.love.on" : "mini.love.off");
 
     /// <summary>재생 앱이 준 표지 바이트를 건다. 성공하면 true(서버 커버를 부르지 않아도 된다).</summary>
     private bool ShowThumbnail(byte[]? bytes)
@@ -829,8 +975,105 @@ public sealed class MiniWindow : Window
         return button;
     }
 
-    private static Button MediaButton(Action onClick, bool primary = false) =>
-        Chip(onClick, primary, size: 38);
+    /// <summary>
+    /// 아이콘 버튼 — <b>네모를 없앤다</b>. 예전에는 모든 버튼이 <see cref="Chip"/>이라 반투명 판과
+    /// 흰 테두리가 커버 위를 덮었다. 이제 평소에는 글리프만 떠 있고, <b>마우스를 올렸을 때만</b>
+    /// 은은한 원이 생긴다(오버레이의 재생 컨트롤이 쓰던 방식과 같다).
+    ///
+    /// 글꼴을 <b>명시</b>하는 것이 중요하다. 지금까지는 FontFamily를 주지 않아 ⏮ ▶ 같은 문자가
+    /// 폰트 폴백에 따라 네모(두부)로 떨어질 수 있었다 — Segoe Fluent Icons(Win11) / Segoe MDL2
+    /// Assets(Win10)를 차례로 지정해 두 버전 모두에서 같은 그림이 나오게 한다.
+    ///
+    /// 못 쓰는 버튼은 <b>흐려진다</b>. Chip 템플릿에는 IsEnabled 트리거가 없어 눌리지만 않을 뿐
+    /// 멀쩡해 보였다.
+    /// </summary>
+    private static Button IconButton(
+        Action onClick, string glyph, string tooltipKey, double size = 30, bool filled = false)
+    {
+        var border = new FrameworkElementFactory(typeof(Border), "bg");
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(size / 2));
+        if (filled)
+            // 채운 원(재생·일시정지) — 배경을 버튼에서 받아 그린다.
+            border.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding(nameof(Control.Background))
+            { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+        else
+            border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(content);
+
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+        if (!filled)
+            template.Triggers.Add(new Trigger
+            {
+                Property = UIElement.IsMouseOverProperty,
+                Value = true,
+                Setters = { new Setter(Border.BackgroundProperty, HoverFill, "bg") },
+            });
+        template.Triggers.Add(new Trigger
+        {
+            Property = UIElement.IsEnabledProperty,
+            Value = false,
+            Setters = { new Setter(UIElement.OpacityProperty, 0.35, "bg") },
+        });
+
+        var button = new Button
+        {
+            Template = template,
+            Content = glyph,
+            FontFamily = IconFont,
+            FontSize = size >= 34 ? 15 : 13,
+            Foreground = new SolidColorBrush(Ink),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Width = size,
+            Height = size,
+            Margin = new Thickness(1, 0, 1, 0),
+            Cursor = Cursors.Hand,
+            ToolTip = Loc.T(tooltipKey),
+        };
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    /// <summary>글리프로 대신할 수 없는 짧은 글자 버튼(오프셋 ±0.5s) — 생김새는 아이콘 버튼과 같다.</summary>
+    private static Button TextButton(Action onClick, string tooltipKey)
+    {
+        var button = IconButton(onClick, "", tooltipKey, size: 30);
+        button.FontFamily = SystemFonts.MessageFontFamily;
+        button.FontSize = 11;
+        button.Width = double.NaN;                        // 글자 길이에 맞춘다
+        button.Padding = new Thickness(8, 0, 8, 0);
+        return button;
+    }
+
+    /// <summary>Windows 11의 Segoe Fluent Icons, 없으면 Windows 10의 Segoe MDL2 Assets.</summary>
+    private static readonly FontFamily IconFont = new("Segoe Fluent Icons, Segoe MDL2 Assets");
+
+    private static readonly Brush HoverFill = Freeze(
+        new SolidColorBrush(Color.FromArgb(0x3C, 0xFF, 0xFF, 0xFF)));
+
+    private static Brush Freeze(Brush brush)
+    {
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>
+    /// 재생 버튼. 재생/일시정지만 채운 원으로 띄워 어디를 누를지 한눈에 보이게 한다 —
+    /// 나머지는 글리프만.
+    /// </summary>
+    private static Button MediaButton(Action onClick, string glyph, string tooltipKey, bool primary = false)
+    {
+        var button = IconButton(onClick, glyph, tooltipKey, size: primary ? 40 : 34, filled: primary);
+        if (!primary) return button;
+
+        button.Background = new SolidColorBrush(Accent);
+        button.Foreground = new SolidColorBrush(Color.FromRgb(0x06, 0x12, 0x1D));
+        return button;
+    }
 
     private static StackPanel Row(params UIElement[] children)
     {
@@ -853,6 +1096,8 @@ public sealed class MiniWindow : Window
             _artist.Text = _restArtist.Text = "";
             _artist.Visibility = _restArtist.Visibility = Visibility.Collapsed;
             _extrasEpoch++;          // 진행 중인 조회 결과를 버린다
+            _fetchedKey = null;
+            _extrasFailed = false;
             ApplyExtras(null);
             return;
         }
@@ -862,21 +1107,29 @@ public sealed class MiniWindow : Window
         var hasArtist = !string.IsNullOrWhiteSpace(artist);
         _artist.Visibility = _restArtist.Visibility = hasArtist ? Visibility.Visible : Visibility.Collapsed;
 
+        // 이 메서드는 가사 상태가 바뀔 때마다(곡당 여러 번) 불린다. 예전에는 그때마다 다시 받느라
+        // 커버가 지워졌다 다시 걸려 깜빡였고 GET도 곡당 여러 번 나갔다 — 곡이 정말 바뀐 때만 받는다.
+        var key = $"{title}|{artist}";
+        if (key == _fetchedKey) return;
+        _fetchedKey = key;
+
         FetchExtras();
     }
 
     /// <summary>오버레이 표시 상태에 맞춰 토글 버튼 라벨을 갱신한다(트레이와 동기화).</summary>
     public void SyncOverlayVisible(bool visible) =>
-        _overlayToggle.Content = Loc.T(visible ? "mini.hideOverlay" : "mini.showOverlay");
+        _overlayToggle.ToolTip = Loc.T(visible ? "mini.hideOverlay" : "mini.showOverlay");
 
     /// <summary>재생 상태·컨트롤 가용성에 맞춰 재생 컨트롤 행을 갱신한다.</summary>
     public void RefreshPlayback()
     {
         var c = _a.GetControls();
         var playing = _a.IsPlaying();
-        _prev.Content = Loc.T("mini.control.prev");
-        _next.Content = Loc.T("mini.control.next");
-        _playPause.Content = Loc.T(playing ? "mini.control.pause" : "mini.control.play");
+        // 글리프는 고정(아이콘 글꼴), 설명만 언어를 따른다.
+        _playPause.Content = playing ? "" : "";   // Pause / Play
+        _prev.ToolTip = Loc.T("controls.previous");
+        _next.ToolTip = Loc.T("controls.next");
+        _playPause.ToolTip = Loc.T("controls.playPause");
         _prev.IsEnabled = c.CanPrevious;
         _playPause.IsEnabled = c.CanPlayPause;
         _next.IsEnabled = c.CanNext;
@@ -898,19 +1151,23 @@ public sealed class MiniWindow : Window
     {
         Title = Loc.T("mini.title");
         SyncOverlayVisible(_a.IsOverlayVisible());
-        _settings.Content = Loc.T("mini.settings");
-        _exit.Content = Loc.T("mini.exit");
-        _search.Content = Loc.T("mini.search");
-        _openLyrics.Content = Loc.T("mini.openLyrics");
-        _wrong.Content = Loc.T("mini.wrong");
+        // 아이콘 버튼은 글자가 아니라 툴팁이 설명을 담는다 — 언어를 바꾸면 툴팁이 따라간다.
+        _settings.ToolTip = Loc.T("mini.settings");
+        _exit.ToolTip = Loc.T("mini.exit");
+        _search.ToolTip = Loc.T("mini.search");
+        _openLyrics.ToolTip = Loc.T("mini.openLyrics");
+        _wrong.ToolTip = Loc.T("mini.wrong");
+        _coverRetry.ToolTip = Loc.T("mini.cover");
+        _openServer.ToolTip = Loc.T("mini.openServer");
+        _minimize.ToolTip = Loc.T("mini.minimize");
+        _close.ToolTip = Loc.T("mini.close");
         _offsetMinus.Content = Loc.T("mini.offset.minus");
         _offsetPlus.Content = Loc.T("mini.offset.plus");
         _offsetReset.Content = Loc.T("mini.offset.reset");
-        _coverRetry.Content = Loc.T("mini.cover");
-        _minimize.Content = "—";
-        _close.Content = "✕";
         ApplyMeaningLabel();
-        _love.Content = Loc.T(_extras is { } e && e.ShowLoved ? "mini.love.on" : "mini.love.off");
+        _love.Content = LoveGlyph(_extras);
+        _love.ToolTip = LoveTip(_extras);
+        ApplyLoveBadge();
         RefreshOffset();
         RefreshPlayback();
     }

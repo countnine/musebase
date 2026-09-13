@@ -100,6 +100,14 @@ internal static class Program
             H.NotifyIcon.TaskbarIcon? tray = null;
             MiniWindow? miniWindow = null;
 
+            // 오버레이 좌상단 버튼이 부른다 — 떠 있으면 감추고, 없으면 앞으로 가져온다.
+            void TogglePanel()
+            {
+                if (miniWindow is not { } mini) return;
+                if (mini is { IsVisible: true, WindowState: not WindowState.Minimized }) mini.Hide();
+                else mini.ShowFromTray();
+            }
+
             // 브라우저 디스플레이 서버(인프로세스 Kestrel). null=꺼짐. 토글/자동시작/종료 경로가 공유.
             BrowserDisplayServer? browserServer = null;
 
@@ -168,14 +176,12 @@ internal static class Program
                 nowPlaying.IsPlayingChanged += playing =>
                     app.Dispatcher.BeginInvoke(() => overlay.SetPausedSuppressed(!playing));
 
-                // 오버레이 좌측 재생 컨트롤(이전/재생·정지/다음). 마우스 오버 시에만 표시.
-                // 트레이·미니창과 같은 코드 경로(MediaPrevious/MediaPlayPause/MediaNext)를 공유.
-                overlay.EnableMediaControls(
-                    controlsProvider: () => nowPlaying.GetControls(),
-                    playingProvider: () => nowPlaying.IsPlaying,
-                    onPrevious: MediaPrevious,
-                    onPlayPause: MediaPlayPause,
-                    onNext: MediaNext);
+                // 오버레이 좌상단의 제어판 여닫기 버튼. 마우스 오버 시에만 표시.
+                // 예전에는 이 자리에 재생 컨트롤이 있었으나 같은 기능이 제어판에 있고,
+                // 정작 오버레이에서 제어판으로 가는 길은 없었다(트레이를 찾아야 했다).
+                overlay.EnablePanelButton(
+                    visibleProvider: () => miniWindow is { IsVisible: true, WindowState: not WindowState.Minimized },
+                    onToggle: TogglePanel);
 
                 // 재생 상태 변경 시 미니창 재생 버튼(재생/일시정지·활성) 갱신.
                 nowPlaying.IsPlayingChanged += _ =>
@@ -714,7 +720,9 @@ internal static class Program
                 MakeMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
                     ? rc.RequestMeaningAsync(t.Title, t.Artist)
                     : Task.FromResult(Musebase.Core.Search.MeaningRequestResult.Of(
-                        Musebase.Core.Search.MeaningRequestStatus.Unavailable))));
+                        Musebase.Core.Search.MeaningRequestStatus.Unavailable)),
+                // 이 곡의 서버 화면을 브라우저로 열 때 쓴다(주소가 비면 그 버튼이 사라진다).
+                ServerEndpoint: () => settings.LyricsServerEndpoint));
 
             // 재생 중인 곡이 없거나 서버가 없으면 물어보지 않는다.
             Task<Musebase.Core.Search.SongExtras?> WithTrack(
