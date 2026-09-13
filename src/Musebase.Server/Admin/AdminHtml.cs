@@ -131,10 +131,16 @@ public static class AdminHtml
                  border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
             @keyframes spin{to{transform:rotate(360deg)} }
             @media (prefers-reduced-motion:reduce){button.busy::before{animation-duration:2.5s} }
-            .song{display:flex;gap:1rem;align-items:flex-start;margin-top:1.5rem}
-            .song>div{min-width:0} .song h2{margin-top:0}
-            .cover{width:6rem;height:6rem;border-radius:.4rem;border:1px solid var(--line);
+            /* 커버는 오른쪽 정보 단의 높이에 맞춰 늘어난다(align-self:stretch) —
+               aspect-ratio가 1이라 너비가 높이를 따라와 정사각을 유지한다. */
+            .song{display:flex;gap:1rem;align-items:stretch;margin-top:1.5rem}
+            .song>div{min-width:0;flex:1 1 auto} .song h2{margin-top:0}
+            .cover{align-self:stretch;width:auto;height:auto;aspect-ratio:1;min-height:9rem;
+                   border-radius:.4rem;border:1px solid var(--line);
                    object-fit:cover;flex:0 0 auto;background:var(--panel)}
+            /* 마지막 두 닫는 중괄호 사이 공백은 일부러다 — 붙이면 보간 문자열의 닫는 괄호로 읽힌다. */
+            @media (max-width:40rem){.song{flex-wrap:wrap} .cover{height:9rem} }
+            .actions{display:flex;flex-wrap:wrap;gap:.4rem;margin:.6rem 0 .35rem}
             button.love{background:#3a2330} button.love:hover{background:#4c2c3e}
             button.love.on{color:#ff8fb1}
             .srcpick{display:inline-flex;flex-wrap:wrap;gap:.15rem .8rem;align-items:center}
