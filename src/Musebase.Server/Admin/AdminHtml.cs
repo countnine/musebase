@@ -135,7 +135,9 @@ public static class AdminHtml
                aspect-ratio가 1이라 너비가 높이를 따라와 정사각을 유지한다. */
             .song{display:flex;gap:1rem;align-items:stretch;margin-top:1.5rem}
             .song>div{min-width:0;flex:1 1 auto} .song h2{margin-top:0}
-            .cover{align-self:stretch;width:auto;height:auto;aspect-ratio:1;min-height:9rem;
+            /* 정보 단이 길어도 300px에서 멈춘다 — 그 이상은 가사를 화면 밖으로 밀어낸다. */
+            .cover{align-self:stretch;width:auto;height:auto;aspect-ratio:1;
+                   min-height:9rem;max-height:300px;
                    border-radius:.4rem;border:1px solid var(--line);
                    object-fit:cover;flex:0 0 auto;background:var(--panel)}
             /* 마지막 두 닫는 중괄호 사이 공백은 일부러다 — 붙이면 보간 문자열의 닫는 괄호로 읽힌다. */

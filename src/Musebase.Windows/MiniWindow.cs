@@ -1,3 +1,5 @@
+using System.IO;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -41,7 +43,12 @@ public sealed record MiniWindowActions(
     Action? OpenMeaning = null,
     Func<Task<SongExtras?>>? GetExtras = null,
     Func<bool, Task<SongExtras?>>? SetLoved = null,
-    Func<Task<SongExtras?>>? RefreshCover = null);
+    Func<Task<SongExtras?>>? RefreshCover = null,
+    // 재생 앱(SMTC)이 준 앨범 표지 — 서버 커버보다 우선한다
+    Func<Task<byte[]?>>? GetThumbnail = null,
+    // 의미: 있으면 창을 열고, 없으면 그 자리에서 만든다
+    Func<Task<SongMeaningView?>>? GetMeaning = null,
+    Func<Task<MeaningRequestResult>>? MakeMeaning = null);
 
 /// <summary>
 /// 작업표시줄에 상주하는 컨트롤 허브. 오버레이가 숨겨져도(사용자 숨김·일시정지·가림방지)
@@ -100,6 +107,8 @@ public sealed class MiniWindow : Window
     private bool _closingToExit;   // "종료" 경로에서만 실제 닫힘 허용
     private SongExtras? _extras;
     private int _extrasEpoch;      // 곡이 바뀌면 늦게 도착한 응답을 버린다
+    private bool _hasThumbnail;    // 재생 앱이 준 표지를 이미 걸었는가(서버 커버로 덮지 않는다)
+    private bool _hasMeaning;      // 의미가 이미 있는가 — 버튼 글자가 이것으로 갈린다
 
     public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions)
     {
@@ -177,7 +186,7 @@ public sealed class MiniWindow : Window
         };
 
         _love = Chip(() => ToggleLove());
-        _meaning = Chip(() => _a.OpenMeaning?.Invoke());
+        _meaning = Chip(() => OnMeaningClick());
         _coverRetry = Chip(() => RetryCover());
         _search = Chip(() => _a.OpenSearch());
         var songRow = Row(_love, _meaning, _coverRetry, _search);
@@ -318,19 +327,96 @@ public sealed class MiniWindow : Window
     // ---- 곡에 딸린 것들 ----
 
     /// <summary>
-    /// 곡이 바뀌면 커버·좋아요를 다시 받아 온다. 서버가 커버를 처음 찾는 곡이면 몇 초 걸리므로
-    /// <b>화면을 막지 않고</b> 받는 대로 채운다. 그 사이 곡이 또 바뀌면 늦게 온 응답은 버린다.
+    /// 곡이 바뀌면 표지·좋아요·의미를 다시 받아 온다.
+    ///
+    /// 표지는 두 곳에서 오는데 <b>서로 기다리지 않는다</b> — 재생 앱이 준 표지(SMTC)는 네트워크가
+    /// 없어 거의 즉시 오고, 서버가 이미 가진 커버도 한 번의 왕복이면 온다. 둘을 나란히 띄워
+    /// 먼저 도착한 쪽을 건다. 다만 <b>SMTC 표지가 오면 그쪽이 이긴다</b> — 지금 나오는 음원과
+    /// 정확히 같은 앨범이라 리마스터·싱글 버전까지 맞는다(검색은 엉뚱한 앨범을 집을 수 있다).
+    ///
+    /// 그 사이 곡이 또 바뀌면 늦게 온 응답은 버린다.
     /// </summary>
-    private async void FetchExtras()
+    private void FetchExtras()
+    {
+        var epoch = ++_extrasEpoch;
+        _hasThumbnail = false;
+        _hasMeaning = false;
+        ApplyExtras(null);
+
+        FetchThumbnail(epoch);
+        FetchServerExtras(epoch);
+        FetchMeaning(epoch);
+    }
+
+    private async void FetchThumbnail(int epoch)
+    {
+        if (_a.GetThumbnail is not { } thumb) return;
+
+        var bytes = await thumb();
+        if (epoch != _extrasEpoch) return;
+        // 서버 커버가 먼저 걸려 있어도 덮는다 — 이쪽이 정확하다.
+        _hasThumbnail = ShowThumbnail(bytes);
+    }
+
+    private async void FetchServerExtras(int epoch)
     {
         if (_a.GetExtras is not { } get) return;
 
-        var epoch = ++_extrasEpoch;
-        ApplyExtras(null);
-
         var extras = await get();
-        if (epoch == _extrasEpoch) ApplyExtras(extras);
+        if (epoch != _extrasEpoch) return;
+        ApplyExtras(extras);
     }
+
+    private async void FetchMeaning(int epoch)
+    {
+        if (_a.GetMeaning is not { } getMeaning) return;
+
+        var meaning = await getMeaning();
+        if (epoch != _extrasEpoch) return;
+        _hasMeaning = meaning is not null;
+        ApplyMeaningLabel();
+    }
+
+    /// <summary>
+    /// 의미 버튼을 누른다. 있으면 창을 열고, <b>없으면 그 자리에서 만든다</b> —
+    /// 궁금해서 누른 것이니 "없습니다"로 끝내고 다시 누르게 할 이유가 없다.
+    /// </summary>
+    private async void OnMeaningClick()
+    {
+        if (_hasMeaning || _a.MakeMeaning is not { } make)
+        {
+            _a.OpenMeaning?.Invoke();
+            return;
+        }
+
+        var epoch = _extrasEpoch;
+        _meaning.IsEnabled = false;
+        _meaning.Content = Loc.T("mini.meaning.making");
+
+        var result = await make();
+        if (epoch != _extrasEpoch) return;
+
+        _meaning.IsEnabled = true;
+        _hasMeaning = result.Status == MeaningRequestStatus.Created;
+        ApplyMeaningLabel();
+
+        // 만들었으면 바로 보여 준다 — 누른 사람이 원한 것은 글이지 버튼 상태가 아니다.
+        if (_hasMeaning) _a.OpenMeaning?.Invoke();
+        else _source.Text = MeaningFailureText(result.Status);
+    }
+
+    /// <summary>만들지 못한 이유를 상태 줄에 적는다 — 이유마다 다시 누를 만한지가 갈린다.</summary>
+    private static string MeaningFailureText(MeaningRequestStatus status) => status switch
+    {
+        MeaningRequestStatus.NoSource => Loc.T("mini.meaning.noSource"),
+        MeaningRequestStatus.Insufficient => Loc.T("mini.meaning.insufficient"),
+        MeaningRequestStatus.Retry => Loc.T("mini.meaning.retry"),
+        MeaningRequestStatus.Unavailable => Loc.T("mini.meaning.unavailable"),
+        _ => Loc.T("mini.meaning.failed"),
+    };
+
+    private void ApplyMeaningLabel() =>
+        _meaning.Content = Loc.T(_hasMeaning ? "mini.meaning" : "mini.meaning.find");
 
     private async void ToggleLove()
     {
@@ -361,7 +447,8 @@ public sealed class MiniWindow : Window
     private void ApplyExtras(SongExtras? extras)
     {
         _extras = extras;
-        LoadCover(extras?.CoverUrl);
+        // 재생 앱이 준 표지가 이미 걸려 있으면 서버 커버로 덮지 않는다 — 그쪽이 더 정확하다.
+        if (!_hasThumbnail) LoadCover(extras?.CoverUrl);
 
         // 연결돼 있지 않으면 좋아요 자리를 아예 비운다 — 눌러도 안 되는 버튼은 헷갈리게 한다.
         var connected = extras is { LoveConnected: true };
@@ -377,31 +464,64 @@ public sealed class MiniWindow : Window
         _meaning.Visibility = _a.OpenMeaning is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    /// <summary>원격 커버를 건다. 실패하면 조용히 대체 배경으로 돌아간다(창이 깨지면 안 된다).</summary>
-    private void LoadCover(string? url)
+    /// <summary>재생 앱이 준 표지 바이트를 건다. 성공하면 true(서버 커버를 부르지 않아도 된다).</summary>
+    private bool ShowThumbnail(byte[]? bytes)
     {
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            _cover.Source = null;
-            return;
-        }
+        if (bytes is not { Length: > 0 }) return false;
 
+        var bitmap = Decode(new MemoryStream(bytes, writable: false));
+        if (bitmap is null) return false;
+
+        _cover.Source = bitmap;
+        return true;
+    }
+
+    /// <summary>
+    /// 서버가 알려 준 커버 주소를 건다(표지를 못 받았을 때의 폴백).
+    ///
+    /// <b>바이트를 직접 받아 디코드한다.</b> <see cref="BitmapImage.UriSource"/>에 http 주소를
+    /// 그대로 주면 WPF가 제 방식으로 내려받는데, 실패가 조용히 묻혀 "왜 커버가 안 뜨지"로
+    /// 끝나고 UI 스레드를 붙잡을 수도 있다. 실패는 여기서 확실히 잡아 대체 배경으로 돌아간다.
+    /// </summary>
+    private async void LoadCover(string? url)
+    {
+        _cover.Source = null;
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        var epoch = _extrasEpoch;
+        try
+        {
+            var bytes = await Http.GetByteArrayAsync(url);
+            if (epoch != _extrasEpoch) return;
+            ShowThumbnail(bytes);
+        }
+        catch (Exception)
+        {
+            // 대체 배경이 이미 깔려 있다 — 창이 깨지지 않는다.
+        }
+    }
+
+    /// <summary>스트림 → 즉시 디코드한 비트맵. 깨진 데이터면 null.</summary>
+    private static BitmapImage? Decode(Stream stream)
+    {
         try
         {
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
-            bitmap.UriSource = new Uri(url);
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = stream;
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;   // 스트림을 닫아도 되게 즉시 읽는다
             bitmap.EndInit();
-            bitmap.DownloadFailed += (_, _) => _cover.Source = null;
-            bitmap.DecodeFailed += (_, _) => _cover.Source = null;
-            _cover.Source = bitmap;
+            bitmap.Freeze();
+            return bitmap;
         }
         catch (Exception)
         {
-            _cover.Source = null;
+            return null;
         }
     }
+
+    /// <summary>커버 내려받기 전용. 표지를 못 받은 곡에만 쓰이므로 짧게 끊는다.</summary>
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(8) };
 
     // ---- 버튼 ----
 

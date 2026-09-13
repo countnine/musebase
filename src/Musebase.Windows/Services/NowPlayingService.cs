@@ -338,6 +338,40 @@ public sealed class NowPlayingService : INowPlayingSource, IDisposable
     private void OnPlaybackInfoChanged(Session sender, PlaybackInfoChangedEventArgs args) =>
         RefreshPlayback();
 
+    /// <summary>
+    /// 지금 재생 중인 곡의 앨범 표지를 <b>재생 앱이 준 그대로</b> 가져온다.
+    ///
+    /// Spotify·Apple Music 등은 SMTC에 표지를 함께 실어 보낸다. 외부 검색(iTunes·Deezer)보다
+    /// 이게 나은 이유는 분명하다 — 네트워크도 키도 필요 없고, <b>검색으로 다른 앨범을 집을 일이
+    /// 없다</b>(리마스터·싱글 버전 구분, 한국 인디처럼 iTunes에 아예 없는 곡까지 맞는다).
+    /// 표지를 안 주는 앱도 있으니 못 받으면 null이고, 그때 서버 쪽 커버로 물러난다.
+    /// </summary>
+    public async Task<byte[]?> GetThumbnailAsync()
+    {
+        Session? session;
+        lock (_lock) session = _session;
+        if (session is null) return null;
+
+        try
+        {
+            var props = await session.TryGetMediaPropertiesAsync();
+            if (props.Thumbnail is not { } reference) return null;
+
+            using var stream = await reference.OpenReadAsync();
+            if (stream.Size is 0 or > 8 * 1024 * 1024) return null; // 비정상 크기는 건너뛴다
+
+            var bytes = new byte[stream.Size];
+            using var reader = new global::Windows.Storage.Streams.DataReader(stream);
+            await reader.LoadAsync((uint)stream.Size);
+            reader.ReadBytes(bytes);
+            return bytes;
+        }
+        catch (Exception)
+        {
+            return null; // 세션이 사라지는 레이스 등 — 표지 없음으로 처리
+        }
+    }
+
     private async Task RefreshTrackAsync()
     {
         Session? session;

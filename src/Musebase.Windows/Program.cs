@@ -700,7 +700,16 @@ internal static class Program
                 OpenMeaning: OpenMeaning,
                 GetExtras: () => WithTrack(t => coordinator.RemoteCache?.GetExtrasAsync(t.Title, t.Artist)),
                 SetLoved: loved => WithTrack(t => coordinator.RemoteCache?.SetLovedAsync(t.Title, t.Artist, loved)),
-                RefreshCover: () => WithTrack(t => coordinator.RemoteCache?.RefreshCoverAsync(t.Title, t.Artist))));
+                RefreshCover: () => WithTrack(t => coordinator.RemoteCache?.RefreshCoverAsync(t.Title, t.Artist)),
+                // 재생 앱이 SMTC에 실어 보낸 표지 — 키도 네트워크도 필요 없고 음원과 정확히 맞는다.
+                GetThumbnail: () => nowPlaying.GetThumbnailAsync(),
+                GetMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
+                    ? rc.GetMeaningAsync(t.Title, t.Artist)
+                    : Task.FromResult<Musebase.Core.Search.SongMeaningView?>(null),
+                MakeMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
+                    ? rc.RequestMeaningAsync(t.Title, t.Artist)
+                    : Task.FromResult(Musebase.Core.Search.MeaningRequestResult.Of(
+                        Musebase.Core.Search.MeaningRequestStatus.Unavailable))));
 
             // 재생 중인 곡이 없거나 서버가 없으면 물어보지 않는다.
             Task<Musebase.Core.Search.SongExtras?> WithTrack(
