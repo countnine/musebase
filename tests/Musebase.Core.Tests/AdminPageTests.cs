@@ -565,6 +565,37 @@ public class AdminPageTests
         Assert.DoesNotContain("/admin/song/love", SongPage());
     }
 
+    /// <summary>
+    /// 예전에는 삭제·광고·커버가 가사 편집창 <b>아래</b>에 있어, 뭘 하려면 긴 가사를 지나
+    /// 스크롤해야 했다. 이제 곡 머리말 옆 한 줄에 모인다 — 편집 영역보다 앞이어야 한다.
+    /// </summary>
+    [Fact]
+    public void 기능_버튼은_가사_편집창보다_위에_모여_있다()
+    {
+        var html = SongPage();
+
+        var actions = html.IndexOf("class=\"actions\"", StringComparison.Ordinal);
+        var edit = html.IndexOf("/admin/song/edit", StringComparison.Ordinal);
+
+        Assert.True(actions > 0 && edit > 0);
+        Assert.True(actions < edit, "기능 버튼이 편집 폼보다 위에 있어야 한다");
+
+        foreach (var action in new[] { "/admin/song/cover", "/admin/song/ad", "/admin/song/delete" })
+            Assert.True(html.IndexOf(action, StringComparison.Ordinal) is var i && i > actions && i < edit,
+                $"{action}이 기능 줄 안에 있어야 한다");
+    }
+
+    [Fact]
+    public void 되돌릴_수_없는_것만_danger로_칠한다()
+    {
+        // 버튼 넉 줄을 같은 색으로 늘어놓으면 무엇이 위험한지 구분이 안 된다.
+        var html = SongPage(love: new LoveState(true, true, false));
+
+        Assert.Contains("<button class=\"danger\" type=\"submit\">광고로 표시</button>", html);
+        Assert.Contains("<button class=\"danger\" type=\"submit\">이 곡 삭제</button>", html);
+        Assert.Contains("<button type=\"submit\">커버 다시 찾기</button>", html);
+    }
+
     [Fact]
     public void 좋아요를_켠_곡은_끄는_쪽으로_보여_준다()
     {

@@ -303,9 +303,10 @@ public static class AdminPages
                     : $"<tr><td>{Esc(l.Content)}</td><td>{Esc(l.Translation)}</td></tr>"));
 
         // 커버가 없으면 자리를 아예 그리지 않는다 — 깨진 이미지 아이콘이 더 나쁘다.
+        // 크기는 CSS가 정한다 — 오른쪽 정보 단의 높이에 맞춰 늘어난다(정사각 유지).
         var cover = string.IsNullOrWhiteSpace(links?.CoverUrl)
             ? ""
-            : $"""<img class="cover" src="{Esc(links!.CoverUrl)}" alt="{Esc(entry.Title)} 커버" width="96" height="96">""";
+            : $"""<img class="cover" src="{Esc(links!.CoverUrl)}" alt="{Esc(entry.Title)} 커버">""";
 
         return Layout($"{entry.Title} — {entry.Artist}", $"""
             {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
@@ -325,7 +326,7 @@ public static class AdminPages
                   타임태그 {(showTags ? "숨기기" : "보기")}</a>
               · <a href="/admin/raw?key={Url(key)}">원문(.lrc)</a></p>
             <p class="meta">{ExternalLinks(entry, meaning, links)}</p>
-            {LoveForm(key, csrf, love ?? LoveState.NotConnected)}
+            {SongActions(key, csrf, love ?? LoveState.NotConnected, links)}
             </div>
             </div>
             {MeaningCard(entry, meaning, csrf, meaningEnabled, meaningSources ?? [])}
@@ -341,30 +342,6 @@ public static class AdminPages
               <div class="inline" style="margin-top:.5rem"><button type="submit">저장</button></div>
             </form>
 
-            <form method="post" action="/admin/song/delete" style="margin-top:1rem"
-                  onsubmit="return true">
-              <input type="hidden" name="key" value="{Esc(key)}">
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <input type="hidden" name="confirm" value="1">
-              <button class="danger" type="submit">이 곡 삭제</button>
-              <span class="meta">삭제하면 다음에 어느 기기든 재생할 때 다시 검색해 새로 채웁니다.</span>
-            </form>
-
-            <form method="post" action="/admin/song/ad" style="margin-top:.6rem">
-              <input type="hidden" name="key" value="{Esc(key)}">
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <button class="danger" type="submit">광고로 표시</button>
-              <span class="meta">이 <b>제목</b>을 차단합니다 — 가사를 지우고, 앞으로 어느 기기가
-              올려도 등록하지 않으며 검색도 하지 않습니다. 되돌리기는 대시보드에서.</span>
-            </form>
-
-            <form method="post" action="/admin/song/cover" style="margin-top:.6rem" data-busy>
-              <input type="hidden" name="key" value="{Esc(key)}">
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <button type="submit">커버 다시 찾기</button>
-              <span class="meta">한 번 못 찾으면 다시 찾지 않습니다{(links?.CoverSource is { } src ? $" (지금: {Esc(src)})" : "")} —
-              곡명·아티스트를 고친 뒤에는 여기서 다시 시켜 주세요.</span>
-            </form>
             """, "search");
     }
 
@@ -415,6 +392,39 @@ public static class AdminPages
 
         return string.Join(" · ", targets.Select(t =>
             $"<a href=\"{Esc(t.Url)}\" target=\"_blank\" rel=\"noopener noreferrer\">{Esc(t.Label)}</a>"));
+    }
+
+    /// <summary>
+    /// 곡에 대해 할 수 있는 일을 <b>한 줄에 모은다</b> — 좋아요 · 삭제 · 광고 표시 · 커버 다시 찾기.
+    ///
+    /// 예전에는 가사 편집창 <b>아래</b>에 흩어져 있어, 곡을 보다가 뭘 하려면 긴 가사를 지나
+    /// 스크롤해야 했다. 곡 머리말 옆이 이것들이 있을 자리다.
+    ///
+    /// 위험한 둘(삭제·광고)은 <c>danger</c>로 칠하고 설명을 아래 한 줄에 붙인다 —
+    /// 버튼만 넉 줄로 늘어놓으면 무엇이 되돌릴 수 없는 것인지 구분이 안 된다.
+    /// </summary>
+    private static string SongActions(string key, string csrf, LoveState love, SongLinks? links)
+    {
+        string Form(string action, string label, string cls = "", string extra = "") => $"""
+            <form method="post" action="{action}" class="inline" style="margin:0"{extra}>
+              <input type="hidden" name="key" value="{Esc(key)}">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button{(cls.Length == 0 ? "" : $" class=\"{cls}\"")} type="submit">{label}</button>
+            </form>
+            """;
+
+        var source = links?.CoverSource is { } src ? $" (지금: {Esc(src)})" : "";
+        return $"""
+            <div class="actions">
+              {LoveForm(key, csrf, love)}
+              {Form("/admin/song/cover", "커버 다시 찾기", extra: " data-busy")}
+              {Form("/admin/song/ad", "광고로 표시", "danger")}
+              {Form("/admin/song/delete", "이 곡 삭제", "danger")}
+            </div>
+            <p class="meta"><b>광고로 표시</b>는 이 제목을 차단합니다(가사를 지우고 이후 등록·검색도 막음 —
+            되돌리기는 대시보드에서). <b>삭제</b>는 이 곡만 지우며, 다음에 재생하면 다시 검색해 채웁니다.
+            <b>커버</b>는 한 번 못 찾으면 다시 찾지 않으니{source} 곡명을 고친 뒤 여기서 다시 시켜 주세요.</p>
+            """;
     }
 
     /// <summary>

@@ -81,7 +81,7 @@ public static class AdminEndpoints
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
         Musebase.Core.Meaning.SongMeaningService meanings, MeaningOptions meaningOptions,
-        MeaningGenerator generator)
+        MeaningGenerator generator, SongExtrasService extras)
     {
         // 스크립트는 딱 하나(제출 스피너)뿐이라 'unsafe-inline' 대신 **그 해시만** 허용한다 —
         // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
@@ -102,7 +102,6 @@ public static class AdminEndpoints
         static IResult SeeOther(string location) => new SeeOtherResult(location);
 
         var lastfm = meaningOptions.LastFmAccount();
-        var covers = new CoverArt();
 
         string? Cookie(HttpRequest req) => req.Cookies.TryGetValue(CookieName, out var v) ? v : null;
 
@@ -235,8 +234,8 @@ public static class AdminEndpoints
             var selected = string.IsNullOrWhiteSpace(lang) ? langs.FirstOrDefault() : lang;
             var showTags = tags != "0";
 
-            var links = await ResolveLinksAsync(entry);
-            var love = await LoveStateOf(entry);
+            var links = await extras.ResolveAsync(entry);
+            var love = await extras.LoveAsync(entry);
 
             return Html(AdminPages.SongPage(
                 entry, AdminLrc.ToDisplayLines(entry.Lrc, selected), langs, selected, showTags,
@@ -334,7 +333,7 @@ public static class AdminEndpoints
             if (entry is null) return SeeOther("/admin/search");
 
             store.ForgetCover(entry.Key ?? key);
-            var found = await FindCoverAsync(entry);
+            var found = await extras.RefindCoverAsync(entry);
             var notice = found is null ? "커버를 찾지 못했습니다." : $"커버를 찾았습니다({found.Source}).";
             return SeeOther($"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
         });
@@ -409,51 +408,19 @@ public static class AdminEndpoints
             var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
             if (entry is null) return SeeOther("/admin/search");
 
-            var session = store.GetSetting(LastFmAccount.SessionSetting);
-            var notice = string.IsNullOrEmpty(session)
-                ? "Last.fm 계정이 연결돼 있지 않습니다."
-                : await SetLovedAsync(entry, form["on"].ToString() != "0", session!);
+            var notice = extras.LoveConnected
+                ? await SetLovedAsync(entry, form["on"].ToString() != "0")
+                : "Last.fm 계정이 연결돼 있지 않습니다.";
 
             return SeeOther($"/admin/song?key={Uri.EscapeDataString(key)}&notice={Uri.EscapeDataString(notice)}");
         });
 
-        async Task<string> SetLovedAsync(LyricsEntry entry, bool loved, string session)
+        // 커버·좋아요의 실제 규칙은 SongExtrasService에 있다 — 앱용 `/v1`과 같은 코드를 쓴다.
+        async Task<string> SetLovedAsync(LyricsEntry entry, bool loved)
         {
-            var ok = await lastfm.SetLovedAsync(entry.Title, entry.Artist, loved, session);
+            var ok = await extras.SetLovedAsync(entry, loved);
             if (!ok) return "Last.fm에 반영하지 못했습니다(연결이 끊겼을 수 있습니다).";
             return loved ? "Last.fm 좋아요를 켰습니다." : "Last.fm 좋아요를 껐습니다.";
-        }
-
-        /// 커버를 찾아 저장한다. **못 찾아도 저장한다** — 그래야 화면을 열 때마다 다시 부르지 않는다.
-        async Task<CoverImage?> FindCoverAsync(LyricsEntry entry)
-        {
-            var found = await covers.FindAsync(entry.Title, entry.Artist);
-            store.SetCover(entry.Key ?? "", found?.Url, found?.Source);
-            return found;
-        }
-
-        async Task<SongLinks> ResolveLinksAsync(LyricsEntry entry)
-        {
-            var links = store.GetSongLinks(entry.Key ?? "");
-            if (links.CoverTried) return links;
-
-            var found = await FindCoverAsync(entry);
-            return links with { CoverUrl = found?.Url, CoverSource = found?.Source, CoverAt = "now" };
-        }
-
-        /// 좋아요 여부. **모르면 Known=false다** — 모르는 것을 "안 함"으로 그리면 이미 켜 둔 곡을 끄게 된다.
-        async Task<LoveState> LoveStateOf(LyricsEntry entry)
-        {
-            var session = store.GetSetting(LastFmAccount.SessionSetting);
-            var user = store.GetSetting(LastFmAccount.UserSetting);
-            if (string.IsNullOrEmpty(session) || string.IsNullOrEmpty(user)) return LoveState.NotConnected;
-
-            var state = await lastfm.GetStateAsync(entry.Title, entry.Artist, user!);
-            if (state is null) return new LoveState(true, false, false);
-
-            // 정식 곡 주소는 알아낸 김에 기억해 둔다 — 다음부터는 규칙으로 만든 주소를 쓰지 않는다.
-            if (state.Url is not null) store.SetLastFmUrl(entry.Key ?? "", state.Url);
-            return new LoveState(true, true, state.Loved);
         }
 
         // ---- 곡의 의미 ----

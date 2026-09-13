@@ -23,6 +23,11 @@ internal static class Program
         // 개명(LyricsX→Musebase) 데이터 이전 — 설정/캐시/로그를 읽기 전에 수행해야 한다.
         MigrateLegacyAppData();
 
+        // 작업표시줄 우클릭(점프 목록)은 **새 프로세스**를 인자와 함께 띄운다. 이미 돌고 있으면
+        // 그 명령만 넘기고 이 프로세스는 끝낸다 — 그러지 않으면 앱이 두 개가 된다.
+        var command = TaskbarCommands.ParseCommand(args);
+        if (!TaskbarCommands.ClaimInstance(command)) return;
+
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Startup += async (_, _) =>
         {
@@ -138,12 +143,17 @@ internal static class Program
             var overlay = new OverlayWindow(settings);
             overlay.SetUserVisible(settings.OverlayVisible);
 
-            // 전체화면 앱(게임/영상) 활성 시 오버레이 자동 숨김
-            var fullscreenDetector = new FullscreenDetector(app.Dispatcher);
+            // 전체화면 앱(게임/영상) 활성 시 오버레이 자동 숨김.
+            // **오버레이가 있는 모니터만** 본다 — 듀얼 모니터에서 옆 화면의 전체화면 때문에
+            // 가사창이 사라지면(가리지도 않는데) 고장으로 보인다. 사람이 오버레이를 다른
+            // 모니터로 옮길 수 있으므로 핸들을 캐시하지 않고 그때그때 읽는다.
+            var fullscreenDetector = new FullscreenDetector(
+                app.Dispatcher,
+                () => new System.Windows.Interop.WindowInteropHelper(overlay).Handle);
             fullscreenDetector.FullscreenChanged += full =>
             {
                 overlay.SetFullscreenSuppressed(full);
-                Log.Write($"[fullscreen] {(full ? "감지 → 오버레이 숨김" : "해제 → 오버레이 복원")}");
+                Log.Write($"[fullscreen] {(full ? "같은 모니터에서 감지 → 오버레이 숨김" : "해제 → 오버레이 복원")}");
             };
 
             // 재생 소스 선택 적용 (자동/특정 플레이어, 브라우저 제외 기본)
@@ -690,16 +700,65 @@ internal static class Program
                 OpenLyricsEditor: OpenLyricsEditor,
                 MarkWrong: MarkWrong,
                 HasLyrics: HasLyrics,
-                CloseToTray: () => settings.MiniWindowCloseToTray));
+                CloseToTray: () => settings.MiniWindowCloseToTray,
+                // 가사 서버가 없으면 전부 null이라 커버·좋아요 자리가 조용히 비워진다.
+                OpenMeaning: OpenMeaning,
+                GetExtras: () => WithTrack(t => coordinator.RemoteCache?.GetExtrasAsync(t.Title, t.Artist)),
+                SetLoved: loved => WithTrack(t => coordinator.RemoteCache?.SetLovedAsync(t.Title, t.Artist, loved)),
+                RefreshCover: () => WithTrack(t => coordinator.RemoteCache?.RefreshCoverAsync(t.Title, t.Artist)),
+                // 재생 앱이 SMTC에 실어 보낸 표지 — 키도 네트워크도 필요 없고 음원과 정확히 맞는다.
+                GetThumbnail: () => nowPlaying.GetThumbnailAsync(),
+                GetMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
+                    ? rc.GetMeaningAsync(t.Title, t.Artist)
+                    : Task.FromResult<Musebase.Core.Search.SongMeaningView?>(null),
+                MakeMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
+                    ? rc.RequestMeaningAsync(t.Title, t.Artist)
+                    : Task.FromResult(Musebase.Core.Search.MeaningRequestResult.Of(
+                        Musebase.Core.Search.MeaningRequestStatus.Unavailable))));
+
+            // 재생 중인 곡이 없거나 서버가 없으면 물어보지 않는다.
+            Task<Musebase.Core.Search.SongExtras?> WithTrack(
+                Func<Musebase.Engine.TrackInfo, Task<Musebase.Core.Search.SongExtras?>?> ask) =>
+                coordinator.CurrentTrack is { } track
+                    ? ask(track) ?? Task.FromResult<Musebase.Core.Search.SongExtras?>(null)
+                    : Task.FromResult<Musebase.Core.Search.SongExtras?>(null);
             miniWindow.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
             if (coordinator.CurrentStatus is { } cs) miniWindow.SetStatus(LocalizeStatus(cs));
             miniWindow.RefreshLyricsFeatures();
-            // 포커스를 뺏지 않도록 최소화 상태로 작업표시줄에 상주(오버레이는 별도로 표시됨).
-            miniWindow.WindowState = WindowState.Minimized;
+            // 앨범 커버 창이므로 시작할 때 바로 보여 준다(예전에는 최소화 상태로 숨어 있었다).
+            miniWindow.WindowState = WindowState.Normal;
             miniWindow.Show();
 
             // 트레이 아이콘 더블클릭 → 미니창 복귀(닫기→트레이 옵션 사용 시 필수 경로).
             tray.TrayLeftMouseDoubleClick += (_, _) => miniWindow?.ShowFromTray();
+
+            // ---- 작업표시줄 우클릭(점프 목록) ----
+            // 트레이 메뉴와 **같은 로컬 함수**로 보낸다 — 동작이 갈라지지 않게.
+            TaskbarCommands.InstallJumpList();
+            TaskbarCommands.Listen(cmd => app.Dispatcher.BeginInvoke(() =>
+            {
+                switch (cmd)
+                {
+                    case TaskbarCommands.Panel: miniWindow?.ShowFromTray(); break;
+                    case TaskbarCommands.Overlay: SetOverlayVisible(!settings.OverlayVisible); break;
+                    case TaskbarCommands.Search: OpenSearch(); break;
+                    case TaskbarCommands.Meaning: OpenMeaning(); break;
+                    case TaskbarCommands.Settings: OpenSettings(); break;
+                    case TaskbarCommands.Exit: ExitApp(); break;
+                    default: Log.Write($"[taskbar] 모르는 명령: {cmd}"); break;
+                }
+            }));
+
+            // 앱이 꺼져 있는 동안 점프 목록으로 들어온 첫 명령도 처리한다(제어판은 어차피 뜬다).
+            if (command is { Length: > 0 })
+            {
+                _ = app.Dispatcher.BeginInvoke(() =>
+                {
+                    if (command == TaskbarCommands.Exit) ExitApp();
+                    else if (command == TaskbarCommands.Settings) OpenSettings();
+                    else if (command == TaskbarCommands.Search) OpenSearch();
+                });
+            }
 
             app.Exit += (_, _) =>
             {
