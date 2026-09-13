@@ -150,6 +150,10 @@
   "mini.search": "가사 검색",
   "mini.openLyrics": "가사 열기",
   "mini.wrong": "틀린 가사",
+  "mini.love.off": "♡ 좋아요",
+  "mini.love.on": "♥ 좋아요",
+  "mini.meaning": "이 곡의 의미",
+  "mini.cover": "커버 다시 찾기",
   "mini.open": "제어판 열기",
   "settings.mini.closeToTray": "닫기 시 트레이로 숨기기(작업표시줄에서 제거)",
 

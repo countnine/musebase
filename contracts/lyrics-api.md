@@ -31,6 +31,9 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | GET | `/v1/stats` | 곡 수·최근 갱신(검증·디버깅용) |
 | GET | `/v1/meaning?title=&artist=` | 곡의 의미 1건. 히트 `200 MeaningEntry`, 없으면 `404` |
 | POST | `/v1/meaning?title=&artist=` | 의미를 **지금 만든다**. 성공 `200 MeaningEntry`, 못 만들면 `202 {status}` |
+| GET | `/v1/song?title=&artist=` | 곡에 딸린 것들(커버·좋아요). 없는 곡은 `404` |
+| POST | `/v1/song/cover?title=&artist=` | 커버를 다시 찾는다 |
+| POST | `/v1/song/love?title=&artist=&on=1\|0` | Last.fm 좋아요를 켜거나 끈다 |
 
 광고로 표시된 제목은 조회·등록이 모두 막힌다(아래 "광고 차단").
 
@@ -195,6 +198,30 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 같은 곡에 요청이 겹치면 서버가 한 번만 만들고 결과를 나눠 준다.
 
 운영자는 `MUSEBASE_MEANING_ALLOW_CLIENT=0`으로 이 엔드포인트만 막을 수 있다(조회는 그대로).
+
+## 곡에 딸린 것들 (`GET /v1/song`)
+
+앨범 커버와 Last.fm 좋아요. 가사가 아니라 **가사 옆에 붙는 것**이라, 없어도 아무것도 깨지지 않는다.
+앱 제어판이 곡 하나에 필요한 값을 한 번에 받아 가라고 묶어 두었다.
+
+| 필드 | 형 | 설명 |
+|---|---|---|
+| `coverUrl` | string? | 앨범 커버 주소. 없으면 null |
+| `coverSource` | string? | `itunes` \| `deezer` |
+| `lastFmUrl` | string? | Last.fm이 알려 준 정식 곡 주소 |
+| `loveConnected` | bool | 서버에 Last.fm 계정이 연결돼 있는가. false면 좋아요 UI를 감춘다 |
+| `loveKnown` | bool | 좋아요 여부를 **실제로 확인했는가** — 아래 주의 |
+| `loved` | bool | 좋아요 상태 |
+
+> ⚠️ **`loveKnown`이 false면 `loved`를 믿으면 안 된다.** 조회가 실패했다는 뜻이라 값은 기본값일
+> 뿐이다. 이걸 꺼진 하트로 그리면 사람이 눌러서 **이미 켜 둔 좋아요를 끈다.**
+
+**커버는 이 호출에서 찾을 수 있다.** 서버가 아직 안 찾아본 곡이면 여기서 외부 API를 한 번 부르므로
+가사 조회보다 느릴 수 있다(곡당 한 번, 못 찾은 것도 기억한다). 화면을 막지 말고 받는 대로 채운다.
+
+`POST /v1/song/cover`는 기억해 둔 결과를 버리고 다시 찾는다(곡명을 고친 뒤). `POST /v1/song/love`는
+`on=1|0`으로 켜고 끄며, 계정이 없으면 `503`, Last.fm 쓰기가 실패하면 `502`다. 둘 다 성공하면
+`GET`과 같은 본문을 돌려주므로 앱이 확인차 다시 묻지 않아도 된다.
 
 ### Musixmatch 주소를 직접 만들지 말 것
 

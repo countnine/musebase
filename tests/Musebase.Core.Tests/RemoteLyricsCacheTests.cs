@@ -250,6 +250,86 @@ public class RemoteLyricsCacheTests
         Assert.Equal(callsAfterOpen + 1, handler.Calls);
     }
 
+    // ---- 곡에 딸린 것들(커버·좋아요) ----
+
+    [Fact]
+    public async Task 커버와_좋아요를_한_번에_받는다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK, """
+            {"coverUrl":"https://is1-ssl.mzstatic.com/a/600x600bb.jpg","coverSource":"itunes",
+             "lastFmUrl":"https://www.last.fm/music/MGMT/_/Kids",
+             "loveConnected":true,"loveKnown":true,"loved":true}
+            """))));
+
+        var extras = await cache.GetExtrasAsync("Kids", "MGMT");
+
+        Assert.EndsWith("600x600bb.jpg", extras!.CoverUrl);
+        Assert.True(extras.LoveConnected);
+        Assert.True(extras.ShowLoved);
+    }
+
+    /// <summary>
+    /// 확인하지 못한 좋아요를 켜서 그리면, 사람이 눌러 <b>이미 켜 둔 것을 끈다</b>.
+    /// 그래서 Loved가 true여도 Known이 false면 하트를 켜지 않는다.
+    /// </summary>
+    [Fact]
+    public async Task 확인하지_못한_좋아요는_켜서_그리지_않는다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK,
+            """{"loveConnected":true,"loveKnown":false,"loved":true}"""))));
+
+        var extras = await cache.GetExtrasAsync("Kids", "MGMT");
+
+        Assert.True(extras!.Loved);        // 서버가 보낸 값은 그대로 두되
+        Assert.False(extras.ShowLoved);    // 화면에는 켜지 않는다
+    }
+
+    [Fact]
+    public async Task 커버가_없는_곡은_빈_문자열이_아니라_null이다()
+    {
+        var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK,
+            """{"coverUrl":"","loveConnected":false,"loveKnown":false,"loved":false}"""))));
+
+        Assert.Null((await cache.GetExtrasAsync("Kids", "MGMT"))!.CoverUrl);
+    }
+
+    [Fact]
+    public async Task 좋아요_토글은_POST로_on을_실어_보낸다()
+    {
+        string? url = null;
+        HttpMethod? method = null;
+        var cache = Create(new StubHandler(req =>
+        {
+            url = req.RequestUri!.ToString();
+            method = req.Method;
+            return Task.FromResult(Json(HttpStatusCode.OK,
+                """{"loveConnected":true,"loveKnown":true,"loved":false}"""));
+        }));
+
+        var extras = await cache.SetLovedAsync("Kids", "MGMT", loved: false);
+
+        Assert.Equal(HttpMethod.Post, method);
+        Assert.Contains("v1/song/love", url);
+        Assert.Contains("on=0", url);
+        Assert.False(extras!.ShowLoved);
+    }
+
+    [Fact]
+    public async Task 곡에_딸린_조회가_실패해도_가사_조회는_살아_있다()
+    {
+        // 부가 정보라 실패를 서킷 브레이커에 세지 않는다(의미 조회와 같은 원칙).
+        var handler = new StubHandler(req =>
+            req.RequestUri!.AbsolutePath.Contains("song")
+                ? Task.FromException<HttpResponseMessage>(new HttpRequestException("down"))
+                : Task.FromResult(Json(HttpStatusCode.OK,
+                    $$"""{"title":"Kids","artist":"MGMT","lrc":{{System.Text.Json.JsonSerializer.Serialize(Lrc)}},"service":"LRCLIB"}""")));
+        var cache = Create(handler);
+
+        for (var i = 0; i < 5; i++) Assert.Null(await cache.GetExtrasAsync("Kids", "MGMT"));
+
+        Assert.NotNull((await cache.GetAsync("Kids", "MGMT")).Lyrics);
+    }
+
     private static HttpRemoteLyricsCache Create(StubHandler handler) =>
         new("http://localhost:9/", "token", timeoutMs: 500, log: null, handler: handler);
 

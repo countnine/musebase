@@ -219,6 +219,67 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     /// <summary>생성은 외부 자료 수집 + LLM이라 조회 타임아웃(수 초)으로는 늘 끊긴다.</summary>
     private static readonly TimeSpan GenerateTimeout = TimeSpan.FromSeconds(90);
 
+    // ---- 곡에 딸린 것들(커버·좋아요) ----
+
+    /// <summary>
+    /// 서버가 아직 커버를 안 찾아본 곡이면 그쪽에서 외부 API를 한 번 부르므로 가사 조회보다 느리다.
+    /// 그래서 <b>가사와 같은 타임아웃을 쓰지 않고</b> 넉넉히 잡되, 실패는 조용히 null이다.
+    /// 부가 정보라 회로 차단기에 세지 않는다 — 이것 때문에 가사가 막히면 손해가 크다.
+    /// </summary>
+    public Task<SongExtras?> GetExtrasAsync(string title, string artist, CancellationToken ct = default) =>
+        ExtrasAsync(HttpMethod.Get, "v1/song", title, artist, null, ct);
+
+    public Task<SongExtras?> RefreshCoverAsync(string title, string artist, CancellationToken ct = default) =>
+        ExtrasAsync(HttpMethod.Post, "v1/song/cover", title, artist, null, ct);
+
+    public Task<SongExtras?> SetLovedAsync(
+        string title, string artist, bool loved, CancellationToken ct = default) =>
+        ExtrasAsync(HttpMethod.Post, "v1/song/love", title, artist, loved ? "1" : "0", ct);
+
+    private async Task<SongExtras?> ExtrasAsync(
+        HttpMethod method, string path, string title, string artist, string? on, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return null;
+        try
+        {
+            var query = $"?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist ?? "")}"
+                      + (on is null ? "" : $"&on={on}");
+            using var request = new HttpRequestMessage(method, new Uri(_baseUri, path + query));
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(ExtrasTimeout);
+
+            using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var body = await response.Content
+                .ReadFromJsonAsync<RemoteSongExtras>(Json, cts.Token).ConfigureAwait(false);
+            return body is null
+                ? null
+                : new SongExtras(
+                    string.IsNullOrWhiteSpace(body.CoverUrl) ? null : body.CoverUrl,
+                    body.CoverSource, body.LastFmUrl,
+                    body.LoveConnected, body.LoveKnown, body.Loved);
+        }
+        catch (Exception)
+        {
+            return null; // 부가 정보 — 가사 조회에 영향을 주지 않는다
+        }
+    }
+
+    /// <summary>서버가 커버를 처음 찾는 곡이면 외부 API 한 번이 끼어든다(iTunes 2.5초 + 여유).</summary>
+    private static readonly TimeSpan ExtrasTimeout = TimeSpan.FromSeconds(12);
+
+    private sealed record RemoteSongExtras
+    {
+        public string? CoverUrl { get; init; }
+        public string? CoverSource { get; init; }
+        public string? LastFmUrl { get; init; }
+        public bool LoveConnected { get; init; }
+        public bool LoveKnown { get; init; }
+        public bool Loved { get; init; }
+    }
+
     public async Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)
     {
         if (IsCircuitOpen()) return;

@@ -113,3 +113,22 @@ public sealed record NotFoundBody(
 /// </summary>
 public sealed record MeaningNotMade(
     [property: JsonPropertyName("status")] string Status);
+
+/// <summary>
+/// <c>GET /v1/song</c> — 곡 하나에 딸린 것들. 앱 제어판이 한 번에 받아 간다.
+/// </summary>
+/// <param name="LoveKnown">
+/// 좋아요 여부를 <b>실제로 확인했는가</b>. false면 <paramref name="Loved"/>를 믿으면 안 된다 —
+/// 모르는 것을 "좋아요 안 함"으로 그리면 사람이 눌러서 이미 켜 둔 것을 끈다.
+/// </param>
+public sealed record SongExtrasBody(
+    string? CoverUrl,
+    string? CoverSource,
+    string? LastFmUrl,
+    bool LoveConnected,
+    bool LoveKnown,
+    bool Loved)
+{
+    public static SongExtrasBody From(SongLinks links, LoveState love) =>
+        new(links.CoverUrl, links.CoverSource, links.LastFmUrl, love.Connected, love.Known, love.Loved);
+}

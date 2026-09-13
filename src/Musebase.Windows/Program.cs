@@ -695,7 +695,19 @@ internal static class Program
                 OpenLyricsEditor: OpenLyricsEditor,
                 MarkWrong: MarkWrong,
                 HasLyrics: HasLyrics,
-                CloseToTray: () => settings.MiniWindowCloseToTray));
+                CloseToTray: () => settings.MiniWindowCloseToTray,
+                // 가사 서버가 없으면 전부 null이라 커버·좋아요 자리가 조용히 비워진다.
+                OpenMeaning: OpenMeaning,
+                GetExtras: () => WithTrack(t => coordinator.RemoteCache?.GetExtrasAsync(t.Title, t.Artist)),
+                SetLoved: loved => WithTrack(t => coordinator.RemoteCache?.SetLovedAsync(t.Title, t.Artist, loved)),
+                RefreshCover: () => WithTrack(t => coordinator.RemoteCache?.RefreshCoverAsync(t.Title, t.Artist))));
+
+            // 재생 중인 곡이 없거나 서버가 없으면 물어보지 않는다.
+            Task<Musebase.Core.Search.SongExtras?> WithTrack(
+                Func<Musebase.Engine.TrackInfo, Task<Musebase.Core.Search.SongExtras?>?> ask) =>
+                coordinator.CurrentTrack is { } track
+                    ? ask(track) ?? Task.FromResult<Musebase.Core.Search.SongExtras?>(null)
+                    : Task.FromResult<Musebase.Core.Search.SongExtras?>(null);
             miniWindow.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
             if (coordinator.CurrentStatus is { } cs) miniWindow.SetStatus(LocalizeStatus(cs));
             miniWindow.RefreshLyricsFeatures();

@@ -74,8 +74,9 @@ var admin = AdminOptions.FromEnvironment(token!);
 var meaningOptions = MeaningOptions.FromEnvironment();
 var meanings = meaningOptions.BuildService();
 var meaningGenerator = new MeaningGenerator(store, meanings, meaningOptions);
+var extras = new SongExtrasService(store, new CoverArt(), meaningOptions.LastFmAccount());
 
-app.MapAdmin(store, admin, meanings, meaningOptions, meaningGenerator);
+app.MapAdmin(store, admin, meanings, meaningOptions, meaningGenerator, extras);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -231,6 +232,59 @@ app.MapPost("/v1/meaning", async (HttpRequest request, string? title, string? ar
 
     // 만들지 못한 이유는 앱이 사람에게 그대로 설명해야 하므로 상태를 실어 보낸다.
     return Results.Json(new MeaningNotMade(status), statusCode: StatusCodes.Status202Accepted);
+});
+
+// ---- 곡에 딸린 것들(커버·좋아요) ----
+// 앱 제어판이 재생 중인 곡 하나에 대해 필요한 값을 **한 번에** 받아 가는 자리다.
+// 커버는 아직 안 찾아본 곡이면 여기서 찾는다 — 관리자 화면을 열어 본 곡에만 커버가 생기면
+// 앱에서는 거의 늘 비어 보인다. 한 곡당 한 번이고 못 찾은 것도 기억하므로 값이 싸다.
+
+/// title·artist로 저장된 곡을 찾는다. 없으면 null(만들 자리가 없다).
+LyricsEntry? Locate(string? title, string? artist) =>
+    string.IsNullOrWhiteSpace(title) ? null : store.Get(title!, artist ?? "");
+
+app.MapGet("/v1/song", async (HttpRequest request, string? title, string? artist) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
+
+    var entry = Locate(title, artist);
+    if (entry is null) return Results.NotFound();
+
+    var links = await extras.ResolveAsync(entry);
+    var love = await extras.LoveAsync(entry);
+    return Results.Ok(SongExtrasBody.From(links, love));
+});
+
+app.MapPost("/v1/song/cover", async (HttpRequest request, string? title, string? artist) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    var entry = Locate(title, artist);
+    if (entry is null) return Results.NotFound();
+
+    // 곡명을 고친 뒤 다시 시키는 경로다 — 기억해 둔 "없음"을 먼저 지운다.
+    store.ForgetCover(entry.Key ?? "");
+    await extras.RefindCoverAsync(entry);
+
+    var links = await extras.ResolveAsync(entry);
+    return Results.Ok(SongExtrasBody.From(links, await extras.LoveAsync(entry)));
+});
+
+app.MapPost("/v1/song/love", async (HttpRequest request, string? title, string? artist, string? on) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    var entry = Locate(title, artist);
+    if (entry is null) return Results.NotFound();
+
+    if (!extras.LoveConnected)
+        return Results.Json(new ApiError("lastfm not connected"), statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    var loved = on != "0";
+    if (!await extras.SetLovedAsync(entry, loved))
+        return Results.Json(new ApiError("lastfm write failed"), statusCode: StatusCodes.Status502BadGateway);
+
+    // 방금 쓴 값을 그대로 돌려준다 — 앱이 확인차 다시 묻지 않아도 되게.
+    return Results.Ok(SongExtrasBody.From(store.GetSongLinks(entry.Key ?? ""), new LoveState(true, true, loved)));
 });
 
 app.Run();

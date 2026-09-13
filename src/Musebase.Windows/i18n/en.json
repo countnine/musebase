@@ -150,6 +150,10 @@
   "mini.search": "Search lyrics",
   "mini.openLyrics": "Open lyrics",
   "mini.wrong": "Wrong lyrics",
+  "mini.love.off": "♡ Love",
+  "mini.love.on": "♥ Loved",
+  "mini.meaning": "Song meaning",
+  "mini.cover": "Find cover again",
   "mini.open": "Open control panel",
   "settings.mini.closeToTray": "Hide to tray on close (remove from taskbar)",
 

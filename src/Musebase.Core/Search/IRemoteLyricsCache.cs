@@ -55,6 +55,41 @@ public interface IRemoteLyricsCache
     /// 서킷 브레이커에 세지 않는다(부가 기능 때문에 가사 조회가 막히면 손해가 크다).
     /// </summary>
     Task<MeaningRequestResult> RequestMeaningAsync(string title, string artist, CancellationToken ct = default);
+
+    /// <summary>
+    /// 곡에 딸린 것들(커버 주소·좋아요 상태)을 한 번에 받는다. 서버가 없거나 그 곡이 없으면 null.
+    ///
+    /// 서버는 아직 커버를 안 찾아본 곡이면 <b>이 호출에서 찾는다</b>(한 곡당 한 번). 그래서
+    /// 가사 조회보다 느릴 수 있으니 화면을 막지 말고 받는 대로 채워 넣어야 한다.
+    /// </summary>
+    Task<SongExtras?> GetExtrasAsync(string title, string artist, CancellationToken ct = default);
+
+    /// <summary>커버를 처음부터 다시 찾게 한다(곡명을 고친 뒤). 사람이 눌렀을 때만 부른다.</summary>
+    Task<SongExtras?> RefreshCoverAsync(string title, string artist, CancellationToken ct = default);
+
+    /// <summary>Last.fm 좋아요를 켜거나 끈다. 실패하면 null — 화면을 바꾸지 말아야 한다.</summary>
+    Task<SongExtras?> SetLovedAsync(string title, string artist, bool loved, CancellationToken ct = default);
+}
+
+/// <summary>
+/// 곡 하나에 딸린 것들. 가사가 아니라 <b>가사 옆에 붙는 것</b>이라 없어도 아무것도 깨지지 않는다.
+/// </summary>
+/// <param name="CoverUrl">앨범 커버 주소(없으면 null — 찾아봤지만 없는 곡도 많다).</param>
+/// <param name="LoveConnected">서버에 Last.fm 계정이 연결돼 있는가. false면 좋아요 UI를 감춘다.</param>
+/// <param name="LoveKnown">
+/// 좋아요 여부를 실제로 확인했는가. false면 <paramref name="Loved"/>를 믿으면 안 된다 —
+/// 모르는 것을 꺼진 하트로 그리면 사람이 눌러서 이미 켜 둔 것을 끈다.
+/// </param>
+public sealed record SongExtras(
+    string? CoverUrl,
+    string? CoverSource,
+    string? LastFmUrl,
+    bool LoveConnected,
+    bool LoveKnown,
+    bool Loved)
+{
+    /// <summary>하트를 켜서 그려도 되는가 — 확인한 값일 때만.</summary>
+    public bool ShowLoved => LoveKnown && Loved;
 }
 
 /// <summary>의미 생성 요청의 결과.</summary>
