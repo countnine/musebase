@@ -23,6 +23,11 @@ internal static class Program
         // 개명(LyricsX→Musebase) 데이터 이전 — 설정/캐시/로그를 읽기 전에 수행해야 한다.
         MigrateLegacyAppData();
 
+        // 작업표시줄 우클릭(점프 목록)은 **새 프로세스**를 인자와 함께 띄운다. 이미 돌고 있으면
+        // 그 명령만 넘기고 이 프로세스는 끝낸다 — 그러지 않으면 앱이 두 개가 된다.
+        var command = TaskbarCommands.ParseCommand(args);
+        if (!TaskbarCommands.ClaimInstance(command)) return;
+
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Startup += async (_, _) =>
         {
@@ -720,12 +725,40 @@ internal static class Program
             miniWindow.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
             if (coordinator.CurrentStatus is { } cs) miniWindow.SetStatus(LocalizeStatus(cs));
             miniWindow.RefreshLyricsFeatures();
-            // 포커스를 뺏지 않도록 최소화 상태로 작업표시줄에 상주(오버레이는 별도로 표시됨).
-            miniWindow.WindowState = WindowState.Minimized;
+            // 앨범 커버 창이므로 시작할 때 바로 보여 준다(예전에는 최소화 상태로 숨어 있었다).
+            miniWindow.WindowState = WindowState.Normal;
             miniWindow.Show();
 
             // 트레이 아이콘 더블클릭 → 미니창 복귀(닫기→트레이 옵션 사용 시 필수 경로).
             tray.TrayLeftMouseDoubleClick += (_, _) => miniWindow?.ShowFromTray();
+
+            // ---- 작업표시줄 우클릭(점프 목록) ----
+            // 트레이 메뉴와 **같은 로컬 함수**로 보낸다 — 동작이 갈라지지 않게.
+            TaskbarCommands.InstallJumpList();
+            TaskbarCommands.Listen(cmd => app.Dispatcher.BeginInvoke(() =>
+            {
+                switch (cmd)
+                {
+                    case TaskbarCommands.Panel: miniWindow?.ShowFromTray(); break;
+                    case TaskbarCommands.Overlay: SetOverlayVisible(!settings.OverlayVisible); break;
+                    case TaskbarCommands.Search: OpenSearch(); break;
+                    case TaskbarCommands.Meaning: OpenMeaning(); break;
+                    case TaskbarCommands.Settings: OpenSettings(); break;
+                    case TaskbarCommands.Exit: ExitApp(); break;
+                    default: Log.Write($"[taskbar] 모르는 명령: {cmd}"); break;
+                }
+            }));
+
+            // 앱이 꺼져 있는 동안 점프 목록으로 들어온 첫 명령도 처리한다(제어판은 어차피 뜬다).
+            if (command is { Length: > 0 })
+            {
+                _ = app.Dispatcher.BeginInvoke(() =>
+                {
+                    if (command == TaskbarCommands.Exit) ExitApp();
+                    else if (command == TaskbarCommands.Settings) OpenSettings();
+                    else if (command == TaskbarCommands.Search) OpenSearch();
+                });
+            }
 
             app.Exit += (_, _) =>
             {

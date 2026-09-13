@@ -162,6 +162,8 @@
   "mini.meaning.failed": "Could not create the meaning.",
   "mini.cover": "Find cover again",
   "mini.open": "Open control panel",
+  "taskbar.category": "Musebase",
+  "taskbar.overlay": "Toggle lyrics overlay",
   "settings.mini.closeToTray": "Hide to tray on close (remove from taskbar)",
 
   "translate.fail.quota": "Translation quota exceeded — pick a free engine or choose LibreTranslate in Settings.",

@@ -66,8 +66,14 @@ public sealed record MiniWindowActions(
 /// </summary>
 public sealed class MiniWindow : Window
 {
-    /// <summary>커버는 정사각이다 — 창 너비가 곧 커버 한 변이다.</summary>
+    /// <summary>시작 크기. 커버는 정사각이라 창 한 변이 곧 커버 한 변이다.</summary>
     private const double ArtSize = 360;
+
+    /// <summary>이보다 작아지면 버튼 줄이 접혀 쓸 수 없다(실측으로 잡은 하한).</summary>
+    private const double MinSize = 260;
+
+    /// <summary>이보다 커지면 늘 띄워 두는 창으로서 자리를 너무 차지한다.</summary>
+    private const double MaxSize = 600;
 
     private static readonly Color Ink = Color.FromRgb(0xE7, 0xEA, 0xF0);
     private static readonly Color Dim = Color.FromRgb(0x8A, 0x93, 0xA2);
@@ -83,6 +89,7 @@ public sealed class MiniWindow : Window
 
     private readonly TextBlock _restTitle;
     private readonly TextBlock _restArtist;
+    private readonly TextBlock _restMeaning;
     private readonly TextBlock _title;
     private readonly TextBlock _artist;
     private readonly TextBlock _source;
@@ -103,21 +110,31 @@ public sealed class MiniWindow : Window
     private readonly Button _love;
     private readonly Button _meaning;
     private readonly Button _coverRetry;
+    private readonly Button _minimize;
+    private readonly Button _close;
 
     private bool _closingToExit;   // "종료" 경로에서만 실제 닫힘 허용
     private SongExtras? _extras;
     private int _extrasEpoch;      // 곡이 바뀌면 늦게 도착한 응답을 버린다
     private bool _hasThumbnail;    // 재생 앱이 준 표지를 이미 걸었는가(서버 커버로 덮지 않는다)
     private bool _hasMeaning;      // 의미가 이미 있는가 — 버튼 글자가 이것으로 갈린다
+    private bool _resizing;        // 정사각 맞추는 중(SizeChanged 되풀이 방지)
 
     public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions)
     {
         _a = actions;
 
         Title = Loc.T("mini.title");
-        Width = ArtSize;
-        Height = ArtSize + 39;      // 제목 표시줄 몫
-        ResizeMode = ResizeMode.CanMinimize;
+
+        // **제목 표시줄을 없앤다.** 두 가지를 한 번에 푼다 — ① 커버가 창 끝까지 닿아 타이틀바가
+        // 커버를 가리지 않고, ② 창 크기와 내용 크기가 같아져 정사각이 정말 정사각이 된다.
+        // 예전에는 타이틀바 몫을 추측해 더하다가 창이 세로로 길어졌다.
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.CanResize;
+        Width = Height = ArtSize;
+        MinWidth = MinHeight = MinSize;
+        MaxWidth = MaxHeight = MaxSize;
+        Topmost = true;             // 가사창과 같이 쓰는 창이라 뒤로 숨으면 쓸모가 없다
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0E, 0x13));
@@ -156,10 +173,34 @@ public sealed class MiniWindow : Window
             TextTrimming = TextTrimming.CharacterEllipsis,
             Margin = new Thickness(0, 1, 0, 0),
         };
-        var restStack = new StackPanel { Margin = new Thickness(14, 12, 14, 12) };
+        var restStack = new StackPanel
+        {
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(14, 12, 14, 12),
+        };
         restStack.Children.Add(_restTitle);
         restStack.Children.Add(_restArtist);
-        _rest = new Grid { VerticalAlignment = VerticalAlignment.Bottom, Background = Scrim(0.0, 0.88) };
+
+        // 의미가 있으면 가운데에 보여 준다 — 커버만 있는 시간이 대부분인데, 그 자리에
+        // 곡에 대한 글이 한 단락 있으면 창이 그냥 장식이 아니게 된다. 길면 잘라낸다(전문은 의미 창).
+        _restMeaning = new TextBlock
+        {
+            FontSize = 12,
+            LineHeight = 18,
+            Foreground = new SolidColorBrush(Ink),
+            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(18, 40, 18, 70),
+            Visibility = Visibility.Collapsed,
+        };
+
+        _rest = new Grid();
+        // 위는 거의 투명하게 두고(커버가 보여야 한다) 아래로 갈수록 어둡게 — 글자가 읽히도록.
+        _rest.Children.Add(new Border { Background = Scrim(0.0, 0.62) });
+        _rest.Children.Add(_restMeaning);
         _rest.Children.Add(restStack);
 
         // ---- 3) 호버 층: 모든 컨트롤 ----
@@ -235,13 +276,27 @@ public sealed class MiniWindow : Window
         bottom.Children.Add(offsetRow);
         bottom.Children.Add(featureRow);
 
+        // 제목 표시줄이 없으니 최소화·닫기를 직접 둔다(호버할 때만 보인다).
+        _minimize = Chip(() => WindowState = WindowState.Minimized);
+        _close = Chip(() => Close());
+        var windowButtons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        windowButtons.Children.Add(_minimize);
+        windowButtons.Children.Add(_close);
+
         var veilGrid = new Grid { Margin = new Thickness(12) };
         veilGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         veilGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         veilGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Grid.SetRow(top, 0);
         Grid.SetRow(bottom, 2);
+        Grid.SetRow(windowButtons, 0);
         veilGrid.Children.Add(top);
+        veilGrid.Children.Add(windowButtons);
         veilGrid.Children.Add(bottom);
 
         _veil = new Grid
@@ -261,6 +316,25 @@ public sealed class MiniWindow : Window
 
         root.MouseEnter += (_, _) => Reveal(true);
         root.MouseLeave += (_, _) => Reveal(false);
+
+        // 제목 표시줄이 없으니 커버를 끌어 창을 옮긴다. 버튼 위에서 시작한 드래그는
+        // 버튼이 먼저 먹으므로(Handled) 여기까지 오지 않는다.
+        root.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ClickCount == 1) DragMove();
+        };
+
+        // 정사각을 유지한다 — 한 변만 끌어도 나머지가 따라온다(최대 600x600).
+        SizeChanged += (_, e) =>
+        {
+            if (_resizing) return;
+            var side = Math.Clamp(Math.Max(e.NewSize.Width, e.NewSize.Height), MinSize, MaxSize);
+            if (Math.Abs(Width - side) < 0.5 && Math.Abs(Height - side) < 0.5) return;
+
+            _resizing = true;
+            Width = Height = side;
+            _resizing = false;
+        };
         // 키보드로도 닿아야 한다 — 탭으로 들어오면 열어 둔다.
         _veil.GotKeyboardFocus += (_, _) => Reveal(true);
         _veil.LostKeyboardFocus += (_, _) => { if (!IsMouseOver) Reveal(false); };
@@ -340,7 +414,7 @@ public sealed class MiniWindow : Window
     {
         var epoch = ++_extrasEpoch;
         _hasThumbnail = false;
-        _hasMeaning = false;
+        ApplyMeaning(null);
         ApplyExtras(null);
 
         FetchThumbnail(epoch);
@@ -373,7 +447,15 @@ public sealed class MiniWindow : Window
 
         var meaning = await getMeaning();
         if (epoch != _extrasEpoch) return;
+        ApplyMeaning(meaning);
+    }
+
+    /// <summary>의미 본문을 평상시 층 가운데에 건다(없으면 감춘다).</summary>
+    private void ApplyMeaning(SongMeaningView? meaning)
+    {
         _hasMeaning = meaning is not null;
+        _restMeaning.Text = meaning?.Summary ?? "";
+        _restMeaning.Visibility = _hasMeaning ? Visibility.Visible : Visibility.Collapsed;
         ApplyMeaningLabel();
     }
 
@@ -397,12 +479,9 @@ public sealed class MiniWindow : Window
         if (epoch != _extrasEpoch) return;
 
         _meaning.IsEnabled = true;
-        _hasMeaning = result.Status == MeaningRequestStatus.Created;
-        ApplyMeaningLabel();
-
-        // 만들었으면 바로 보여 준다 — 누른 사람이 원한 것은 글이지 버튼 상태가 아니다.
-        if (_hasMeaning) _a.OpenMeaning?.Invoke();
-        else _source.Text = MeaningFailureText(result.Status);
+        // 만들었으면 본문을 바로 가운데에 건다 — 누른 사람이 원한 것은 글이지 버튼 상태가 아니다.
+        ApplyMeaning(result.Meaning);
+        if (!_hasMeaning) _source.Text = MeaningFailureText(result.Status);
     }
 
     /// <summary>만들지 못한 이유를 상태 줄에 적는다 — 이유마다 다시 누를 만한지가 갈린다.</summary>
@@ -472,8 +551,37 @@ public sealed class MiniWindow : Window
         var bitmap = Decode(new MemoryStream(bytes, writable: false));
         if (bitmap is null) return false;
 
-        _cover.Source = bitmap;
+        _cover.Source = SquareTop(bitmap);
         return true;
+    }
+
+    /// <summary>
+    /// 표지를 <b>위쪽 정사각</b>으로 잘라낸다.
+    ///
+    /// Spotify가 SMTC에 주는 표지는 정사각이 아니라 아래에 로고 띠가 붙어 온다 — 그대로 걸면
+    /// 앨범 아트 밑에 Spotify 로고가 드러난다. 앨범 아트는 정사각이므로 너비만큼만 위에서
+    /// 잘라내면 띠가 사라진다. 이미 정사각이면(다른 앱) 손대지 않는다.
+    /// </summary>
+    private static BitmapSource SquareTop(BitmapSource source)
+    {
+        var width = source.PixelWidth;
+        var height = source.PixelHeight;
+        Log.Write($"[cover] 재생 앱 표지 {width}x{height}");
+
+        // 2% 여유 — 1~2픽셀 차이로 멀쩡한 정사각을 건드리지 않는다.
+        if (width <= 0 || height <= width * 1.02) return source;
+
+        try
+        {
+            var cropped = new CroppedBitmap(source, new Int32Rect(0, 0, width, width));
+            cropped.Freeze();
+            Log.Write($"[cover] 아래 띠 {height - width}px 잘라냄");
+            return cropped;
+        }
+        catch (Exception)
+        {
+            return source; // 자르기 실패는 원본 그대로(로고가 보이는 편이 빈 창보다 낫다)
+        }
     }
 
     /// <summary>
@@ -644,8 +752,10 @@ public sealed class MiniWindow : Window
         _offsetMinus.Content = Loc.T("mini.offset.minus");
         _offsetPlus.Content = Loc.T("mini.offset.plus");
         _offsetReset.Content = Loc.T("mini.offset.reset");
-        _meaning.Content = Loc.T("mini.meaning");
         _coverRetry.Content = Loc.T("mini.cover");
+        _minimize.Content = "—";
+        _close.Content = "✕";
+        ApplyMeaningLabel();
         _love.Content = Loc.T(_extras is { } e && e.ShowLoved ? "mini.love.on" : "mini.love.off");
         RefreshOffset();
         RefreshPlayback();
