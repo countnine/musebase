@@ -45,7 +45,7 @@ public sealed record MiniWindowActions(
     Func<Task<SongExtras?>>? GetExtras = null,
     Func<bool, Task<SongExtras?>>? SetLoved = null,
     Func<Task<SongExtras?>>? RefreshCover = null,
-    // 재생 앱(SMTC)이 준 앨범 표지 — 서버 커버보다 우선한다
+    // 재생 앱(SMTC)이 준 앨범 표지 — 서버 커버가 없을 때의 폴백
     Func<Task<byte[]?>>? GetThumbnail = null,
     // 의미: 있으면 창을 열고, 없으면 그 자리에서 만든다
     Func<Task<SongMeaningView?>>? GetMeaning = null,
@@ -117,7 +117,7 @@ public sealed class MiniWindow : Window
     private bool _closingToExit;   // "종료" 경로에서만 실제 닫힘 허용
     private SongExtras? _extras;
     private int _extrasEpoch;      // 곡이 바뀌면 늦게 도착한 응답을 버린다
-    private bool _hasThumbnail;    // 재생 앱이 준 표지를 이미 걸었는가(서버 커버로 덮지 않는다)
+    private bool _hasServerCover;  // 서버 커버를 걸었는가 — 재생 앱 표지로 덮지 않는다(그쪽이 더 선명하다)
     private bool _hasMeaning;      // 의미가 이미 있는가 — 버튼 글자가 이것으로 갈린다
 
     public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions)
@@ -460,7 +460,8 @@ public sealed class MiniWindow : Window
     private void FetchExtras()
     {
         var epoch = ++_extrasEpoch;
-        _hasThumbnail = false;
+        _hasServerCover = false;
+        _cover.Source = null;      // 곡이 바뀌었다 — 앞 곡 표지를 남겨 두지 않는다
         ApplyMeaning(null);
         ApplyExtras(null);
 
@@ -474,9 +475,9 @@ public sealed class MiniWindow : Window
         if (_a.GetThumbnail is not { } thumb) return;
 
         var bytes = await thumb();
-        if (epoch != _extrasEpoch) return;
-        // 서버 커버가 먼저 걸려 있어도 덮는다 — 이쪽이 정확하다.
-        _hasThumbnail = ShowThumbnail(bytes);
+        if (epoch != _extrasEpoch || _hasServerCover) return;
+        // 서버 커버가 없을 때만 쓴다 — 재생 앱 표지는 작고(300px) 로고 띠·여백이 붙어 온다.
+        ShowThumbnail(bytes);
     }
 
     private async void FetchServerExtras(int epoch)
@@ -573,8 +574,7 @@ public sealed class MiniWindow : Window
     private void ApplyExtras(SongExtras? extras)
     {
         _extras = extras;
-        // 재생 앱이 준 표지가 이미 걸려 있으면 서버 커버로 덮지 않는다 — 그쪽이 더 정확하다.
-        if (!_hasThumbnail) LoadCover(extras?.CoverUrl);
+        LoadCover(extras?.CoverUrl);
 
         // 연결돼 있지 않으면 좋아요 자리를 아예 비운다 — 눌러도 안 되는 버튼은 헷갈리게 한다.
         var connected = extras is { LoveConnected: true };
@@ -705,9 +705,12 @@ public sealed class MiniWindow : Window
         }
     }
 
-    /// <summary>두 색이 눈으로 같은가(채널별 차이 합으로 본다).</summary>
+    /// <summary>
+    /// 두 색이 <b>사실상 같은가</b>(채널별 차이 합). 넉넉하게 잡으면 앨범 아트의 어두운
+    /// 가장자리까지 테두리로 오인해 그림을 깎는다 — 실측에서 오른쪽·아래가 조금 잘렸다.
+    /// </summary>
     private static bool Near((byte B, byte G, byte R) a, (byte B, byte G, byte R) b) =>
-        Math.Abs(a.B - b.B) + Math.Abs(a.G - b.G) + Math.Abs(a.R - b.R) <= 12;
+        Math.Abs(a.B - b.B) + Math.Abs(a.G - b.G) + Math.Abs(a.R - b.R) <= 6;
 
     /// <summary>픽셀을 좌표로 읽기 위한 최소 래퍼(한 번만 복사한다).</summary>
     private sealed class BitmapImageConverter
@@ -739,7 +742,6 @@ public sealed class MiniWindow : Window
     /// </summary>
     private async void LoadCover(string? url)
     {
-        _cover.Source = null;
         if (string.IsNullOrWhiteSpace(url)) return;
 
         var epoch = _extrasEpoch;
@@ -747,11 +749,17 @@ public sealed class MiniWindow : Window
         {
             var bytes = await Http.GetByteArrayAsync(url);
             if (epoch != _extrasEpoch) return;
-            ShowThumbnail(bytes);
+
+            var bitmap = Decode(new MemoryStream(bytes, writable: false));
+            if (bitmap is null) return;
+
+            // 서버 커버는 자르지 않는다 — iTunes·Deezer는 정사각 원본(600px)을 그대로 준다.
+            _cover.Source = bitmap;
+            _hasServerCover = true;
         }
         catch (Exception)
         {
-            // 대체 배경이 이미 깔려 있다 — 창이 깨지지 않는다.
+            // 재생 앱 표지나 대체 배경이 남아 있다 — 창이 깨지지 않는다.
         }
     }
 
