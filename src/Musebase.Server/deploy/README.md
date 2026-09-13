@@ -353,10 +353,47 @@ MUSEBASE_LASTFM_SECRET=...    # 같은 페이지의 Shared secret — 이게 있
 > 뜻이다. 지우려면 대시보드의 **[Last.fm 연결 해제]**, 또는 last.fm 설정 > Applications에서
 > 권한 자체를 회수한다.
 
+## 13. Spotify 좋아요 함께 반영 (선택)
+
+연결해 두면 관리 화면·앱에서 좋아요를 켜고 끌 때 **Last.fm과 Spotify 라이브러리 양쪽에** 반영된다.
+안 걸어 두면 예전처럼 Last.fm만 쓴다.
+
+> ⚠ **Spotify Premium 구독이 필요하다.** 2026년 2월부터 Development Mode 앱은 **소유자에게 활성
+> Premium 구독**을 요구하고 인가 사용자를 5명으로 제한한다. Extended quota는 법인·250K MAU 요건이라
+> 개인에게는 열리지 않으므로 Development Mode가 사실상 유일한 길이다.
+> **구독이 끊기면 키가 그대로여도 호출이 막힌다.**
+
+### 앱 등록
+
+1. <https://developer.spotify.com/dashboard> → Create app
+2. **Redirect URI**에 관리 화면이 알려 주는 주소를 그대로 넣는다(대시보드 Spotify 카드에 떠 있다):
+   `https://oracle.<tailnet>.ts.net/musebase/spotify/callback`
+   — Last.fm과 달리 **미리 등록하지 않으면 승인이 실패한다**(요청할 때 넘길 수 없다).
+3. 앱의 Client ID / Client secret을 `server.env`에 넣고 재시작한다.
+
+```
+MUSEBASE_SPOTIFY_CLIENT_ID=...
+MUSEBASE_SPOTIFY_CLIENT_SECRET=...
+```
+
+4. 대시보드 → **[Spotify 계정 연결]** → 승인 → `연결됨: 아이디`
+
+### 알아 둘 것
+
+- 가사에는 트랙 ID가 없어 **제목·아티스트로 검색해 찾는다.** 커버 아트와 같은 판정을 통과한
+  결과만 쓰므로 리믹스·노래방 음원을 담지 않는다. 찾은 URI는 `song_links.spotify_uri`에 기억하고,
+  **못 찾은 것도 기억해서**(`spotify_at`) 곡을 열 때마다 검색을 되풀이하지 않는다.
+- **한쪽만 실패할 수 있다.** 그때는 어느 쪽이 안 됐는지 그대로 알린다 — 절반만 반영된 것을
+  성공으로 말하면 저쪽도 됐다고 믿게 된다. Last.fm이 되고 Spotify만 실패하면 API 응답은
+  `200`에 `spotifyKnown: false`다(`502`로 만들면 앱이 화면을 되돌려 오히려 사실과 멀어진다).
+- **갱신 토큰은 DB(`app_settings`)에 저장된다** — Last.fm 세션 키와 같은 자리이므로 백업 파일에
+  Spotify 라이브러리 쓰기 자격증명이 함께 들어간다. 지우려면 대시보드의 **[Spotify 연결 해제]**,
+  또는 Spotify 계정 설정 > 앱에서 권한 자체를 회수한다.
+
 ## 업데이트
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
 따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
-(현재 8 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`,
-8에서 `song_links`에 `loved`·`loved_at` 컬럼 추가).
+(현재 9 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`,
+8에서 `song_links`에 `loved`·`loved_at`, 9에서 `spotify_uri`·`spotify_at` 컬럼 추가).
 컬럼·테이블 추가뿐이라 **구 버전 바이너리로 롤백해도 안전하다.**

@@ -68,5 +68,6 @@ public class MeaningOptionsTests
         Engine: "none", Lang: "ko",
         GeminiApiKey: null, GeminiModel: null, OpenRouterApiKey: null, OpenRouterModel: null,
         GeniusToken: null, LastFmKey: null, LastFmSecret: null, MusixmatchKey: null,
+        SpotifyClientId: null, SpotifyClientSecret: null,
         Sources: [], BackfillLimit: 50, BackfillDelayMs: 0);
 }

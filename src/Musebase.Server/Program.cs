@@ -74,7 +74,10 @@ var admin = AdminOptions.FromEnvironment(token!);
 // 환경변수 위에 DB 설정을 덮는다 — 관리 화면에서 엔진·모델을 바꾸면 재시작 없이 반영된다.
 var meaningSettings = new MeaningSettings(store, MeaningOptions.FromEnvironment());
 var meaningGenerator = new MeaningGenerator(store, meaningSettings);
-var extras = new SongExtrasService(store, new CoverArt(), meaningSettings.Current.LastFmAccount());
+var extras = new SongExtrasService(
+    store, new CoverArt(),
+    meaningSettings.Current.LastFmAccount(),
+    meaningSettings.Current.SpotifyAccount());
 
 app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras);
 
@@ -253,7 +256,7 @@ app.MapGet(Routes.Api + "/song", async (HttpRequest request, string? title, stri
 
     var links = await extras.ResolveAsync(entry);
     var love = await extras.LoveAsync(entry);
-    return Results.Ok(SongExtrasBody.From(links, love));
+    return Results.Ok(SongExtrasBody.From(links, love, await extras.SpotifyAsync(entry)));
 });
 
 app.MapPost(Routes.Api + "/song/cover", async (HttpRequest request, string? title, string? artist) =>
@@ -267,7 +270,7 @@ app.MapPost(Routes.Api + "/song/cover", async (HttpRequest request, string? titl
     await extras.RefindCoverAsync(entry);
 
     var links = await extras.ResolveAsync(entry);
-    return Results.Ok(SongExtrasBody.From(links, await extras.LoveAsync(entry)));
+    return Results.Ok(SongExtrasBody.From(links, await extras.LoveAsync(entry), await extras.SpotifyAsync(entry)));
 });
 
 app.MapPost(Routes.Api + "/song/love", async (HttpRequest request, string? title, string? artist, string? on) =>
@@ -280,11 +283,23 @@ app.MapPost(Routes.Api + "/song/love", async (HttpRequest request, string? title
         return Results.Json(new ApiError("lastfm not connected"), statusCode: StatusCodes.Status503ServiceUnavailable);
 
     var loved = on != "0";
-    if (!await extras.SetLovedAsync(entry, loved))
+    var result = await extras.SetLovedAsync(entry, loved);
+
+    // Last.fm이 실패하면 실패다. Spotify만 실패한 경우는 아래 본문의 spotifyKnown=false로 알린다 —
+    // 절반이라도 반영된 것을 통째로 오류로 만들면 앱이 화면을 되돌려 더 헷갈린다.
+    if (!result.LastFm)
         return Results.Json(new ApiError("lastfm write failed"), statusCode: StatusCodes.Status502BadGateway);
 
     // 방금 쓴 값을 그대로 돌려준다 — 앱이 확인차 다시 묻지 않아도 되게.
-    return Results.Ok(SongExtrasBody.From(store.GetSongLinks(entry.Key ?? ""), new LoveState(true, true, loved)));
+    return Results.Ok(SongExtrasBody.From(
+        store.GetSongLinks(entry.Key ?? ""),
+        new LoveState(true, true, loved),
+        result.Spotify switch
+        {
+            null => SpotifyState.NotConnected,
+            true => new SpotifyState(true, true, loved),
+            false => new SpotifyState(true, false, false),   // 반영 못 했다 — 상태를 모른다
+        }));
 });
 
 app.Run();

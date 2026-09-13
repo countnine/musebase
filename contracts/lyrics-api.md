@@ -216,6 +216,9 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | `loveKnown` | bool | 좋아요 여부를 **실제로 확인했는가** — 아래 주의 |
 | `loved` | bool | 좋아요 상태 |
 | `key` | string? | 서버가 이 곡에 붙인 키 — 아래 |
+| `spotifyConnected` | bool | 서버에 Spotify 계정이 연결돼 있는가. false면 그 표시를 감춘다 |
+| `spotifyKnown` | bool | 라이브러리 저장 여부를 **실제로 확인했는가** — `loveKnown`과 같은 주의 |
+| `spotifySaved` | bool | Spotify 라이브러리에 담겨 있는가 |
 
 > ⚠️ **`loveKnown`이 false면 `loved`를 믿으면 안 된다.** 조회가 실패했다는 뜻이라 값은 기본값일
 > 뿐이다. 이걸 꺼진 하트로 그리면 사람이 눌러서 **이미 켜 둔 좋아요를 끈다.**
@@ -229,7 +232,10 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 가사 조회보다 느릴 수 있다(곡당 한 번, 못 찾은 것도 기억한다). 화면을 막지 말고 받는 대로 채운다.
 
 `POST /musebase/v1/song/cover`는 기억해 둔 결과를 버리고 다시 찾는다(곡명을 고친 뒤). `POST /musebase/v1/song/love`는
-`on=1|0`으로 켜고 끄며, 계정이 없으면 `503`, Last.fm 쓰기가 실패하면 `502`다. 둘 다 성공하면
+`on=1|0`으로 켜고 끄며, 계정이 없으면 `503`, Last.fm 쓰기가 실패하면 `502`다.
+**Spotify가 연결돼 있으면 같은 호출이 그쪽 라이브러리에도 반영된다.** 다만 Spotify만 실패한 경우는
+`502`가 아니라 `200`에 `spotifyKnown: false`로 알린다 — Last.fm에는 반영됐으므로 앱이 화면을
+되돌리면 오히려 사실과 멀어진다. 둘 다 성공하면
 `GET`과 같은 본문을 돌려주므로 앱이 확인차 다시 묻지 않아도 된다.
 
 ### Musixmatch 주소를 직접 만들지 말 것
