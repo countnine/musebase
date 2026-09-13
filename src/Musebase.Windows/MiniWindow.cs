@@ -619,17 +619,16 @@ public sealed class MiniWindow : Window
         var height = source.PixelHeight;
         if (width <= 0 || height <= 0) return source;
 
-        var band = BottomBandHeight(source);
-        // 정사각보다 높으면(다른 앱) 남는 높이도 함께 잘라 정사각으로 맞춘다.
-        var overflow = Math.Max(0, height - width);
-        var cut = Math.Max(band, overflow);
+        var art = ArtRect(source);
+        Log.Write($"[cover] 재생 앱 표지 {width}x{height} → 아트 {art.Width}x{art.Height}"
+                  + $" (왼{art.X} 위{art.Y} 오른{width - art.X - art.Width} 아래{height - art.Y - art.Height})");
 
-        Log.Write($"[cover] 재생 앱 표지 {width}x{height}, 아래 띠 {band}px");
-        if (cut <= 0 || cut >= height) return source;
+        if (art.Width <= 0 || art.Height <= 0
+            || (art.Width == width && art.Height == height)) return source;
 
         try
         {
-            var cropped = new CroppedBitmap(source, new Int32Rect(0, 0, width, height - cut));
+            var cropped = new CroppedBitmap(source, art);
             cropped.Freeze();
             return cropped;
         }
@@ -640,34 +639,69 @@ public sealed class MiniWindow : Window
     }
 
     /// <summary>
-    /// 아래쪽 단색 띠의 높이(없으면 0). 각 행의 <b>양쪽 끝</b> 픽셀만 본다 — 로고가 가운데
-    /// 있어도 끝은 배경색이기 때문이다.
+    /// 단색 테두리를 걷어 낸 <b>실제 그림 영역</b>.
+    ///
+    /// Spotify 표지는 정사각 판(300×300) 안에 아트를 넣고 남는 자리를 검게 채운다 —
+    /// 아래에는 로고 띠, 좌우에는 여백이 생긴다. 그래서 한쪽만 보면 안 되고 네 변을 모두 본다.
+    ///
+    /// 좌·우·위 테두리는 <b>줄 전체</b>가 배경색이어야 인정한다. 아래는 다르다 —
+    /// 로고가 가운데에 그려져 있으므로 <b>양쪽 끝 픽셀</b>만 본다.
+    ///
+    /// 한 변에서 최대 30%까지만 걷어 낸다(단색 배경의 앨범 아트를 통째로 깎지 않도록).
     /// </summary>
-    private static int BottomBandHeight(BitmapSource source)
+    private static Int32Rect ArtRect(BitmapSource source)
     {
+        var width = source.PixelWidth;
+        var height = source.PixelHeight;
+        var whole = new Int32Rect(0, 0, width, height);
+        if (width < 8 || height < 8) return whole;
+
         try
         {
-            var width = source.PixelWidth;
-            var height = source.PixelHeight;
-            var limit = height / 4;              // 높이의 25%까지만 띠로 인정한다
-            if (width < 8 || limit < 2) return 0;
+            var px = new BitmapImageConverter(source);
+            var bg = px.At(0, height - 1);   // 아래쪽 모서리 — 띠·여백이 있으면 그 색이다
 
-            var bgra = new BitmapImageConverter(source);
-            var corner = bgra.At(0, height - 1);
+            var maxX = width * 3 / 10;
+            var maxY = height * 3 / 10;
 
-            var band = 0;
-            for (var y = height - 1; y >= height - limit; y--)
+            bool Column(int x)
             {
-                if (!Near(bgra.At(0, y), corner) || !Near(bgra.At(width - 1, y), corner)) break;
-                band++;
+                for (var y = 0; y < height; y++) if (!Near(px.At(x, y), bg)) return false;
+                return true;
+            }
+            bool Row(int y)
+            {
+                for (var x = 0; x < width; x++) if (!Near(px.At(x, y), bg)) return false;
+                return true;
             }
 
-            // 맨 아래 한두 줄이 같은 건 흔하다 — 띠라고 부를 만한 두께가 아니면 0.
-            return band >= height / 50 && band >= 4 ? band : 0;
+            var left = 0;
+            while (left < maxX && Column(left)) left++;
+
+            var right = 0;
+            while (right < maxX && Column(width - 1 - right)) right++;
+
+            var top = 0;
+            while (top < maxY && Row(top)) top++;
+
+            // 아래 띠: 로고가 끼어 있어 줄 전체가 같을 수 없다 — 양 끝만 본다.
+            var bottom = 0;
+            while (bottom < maxY
+                   && Near(px.At(0, height - 1 - bottom), bg)
+                   && Near(px.At(width - 1, height - 1 - bottom), bg)) bottom++;
+
+            // 한두 줄 같은 것은 흔하다 — 테두리라고 부를 두께가 아니면 무시한다.
+            if (left < 3) left = 0;
+            if (right < 3) right = 0;
+            if (top < 3) top = 0;
+            if (bottom < 3) bottom = 0;
+
+            var rect = new Int32Rect(left, top, width - left - right, height - top - bottom);
+            return rect.Width > width / 2 && rect.Height > height / 2 ? rect : whole;
         }
         catch (Exception)
         {
-            return 0;
+            return whole;
         }
     }
 
