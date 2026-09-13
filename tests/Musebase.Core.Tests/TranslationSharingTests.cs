@@ -205,8 +205,8 @@ public class TranslationSharingTests
             Task.FromResult(MeaningRequestResult.Of(MeaningRequestStatus.Unavailable));
 
         /// <summary>커버·좋아요도 가사 흐름 밖이다 — 항상 없음.</summary>
-        public Task<SongExtras?> GetExtrasAsync(string title, string artist, CancellationToken ct = default) =>
-            Task.FromResult<SongExtras?>(null);
+        public Task<SongExtrasResult> GetExtrasAsync(string title, string artist, CancellationToken ct = default) =>
+            Task.FromResult(SongExtrasResult.NotFound);
 
         public Task<SongExtras?> RefreshCoverAsync(string title, string artist, CancellationToken ct = default) =>
             Task.FromResult<SongExtras?>(null);

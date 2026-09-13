@@ -43,7 +43,7 @@ public sealed record MiniWindowActions(
     Func<bool> CloseToTray,
     // 곡에 딸린 것들(가사 서버) — 서버가 없으면 전부 null이고 그 자리는 조용히 비워진다
     Action? OpenMeaning = null,
-    Func<Task<SongExtras?>>? GetExtras = null,
+    Func<Task<SongExtrasResult>>? GetExtras = null,
     Func<bool, Task<SongExtras?>>? SetLoved = null,
     Func<Task<SongExtras?>>? RefreshCover = null,
     // 재생 앱(SMTC)이 준 앨범 표지 — 서버 커버가 없을 때의 폴백
@@ -535,10 +535,14 @@ public sealed class MiniWindow : Window
             await Task.Delay(wait);
             if (epoch != _extrasEpoch || _hasServerCover) return;
 
-            var extras = await get();
+            var result = await get();
             if (epoch != _extrasEpoch) return;
-            if (extras is null) continue;          // 아직 서버에 없는 곡 — 다음 차례에 다시
-            ApplyExtras(extras);
+
+            // 아직 서버에 없는 곡(404)이면 다음 차례에 다시 — 그 사이 이 기기가 올린다.
+            // 못 닿은 경우도 같이 넘기되, 화면 표시는 ApplyResult가 맞춰 준다.
+            if (result.Extras is null) { ApplyResult(result); continue; }
+
+            ApplyResult(result);
             if (_hasServerCover) return;
         }
     }
@@ -561,13 +565,24 @@ public sealed class MiniWindow : Window
     {
         if (_a.GetExtras is not { } get) return;
 
-        var extras = await get();
+        var result = await get();
         if (epoch != _extrasEpoch) return;
+        ApplyResult(result);
+    }
 
-        // 곡이 서버에 아직 없으면(404)도 null이라 이것만으로 "오류"라고 할 수는 없다.
-        // 다만 좋아요·커버가 통째로 비는 이유를 사람이 알 수 있어야 해서 표시는 남긴다.
-        _extrasFailed = extras is null;
-        ApplyExtras(extras);
+    /// <summary>
+    /// 서버 응답을 화면에 반영한다.
+    ///
+    /// <b>"그 곡을 모른다"(404)는 오류가 아니다.</b> 처음 트는 곡은 아직 아무도 올리지 않았을 뿐이고
+    /// 몇 초 뒤 이 기기가 올린다 — 그걸 경고로 그리면 <b>새 곡마다 빨간 표시가 뜬다</b>.
+    /// 실제로 못 닿았을 때만 알린다.
+    /// </summary>
+    private void ApplyResult(SongExtrasResult result)
+    {
+        // 뒤늦게 성공하면 앞서 띄운 경고를 반드시 내린다 — 안 내리면 곡이 끝날 때까지 남는다.
+        _extrasFailed = result.Reach == ExtrasReach.Failed;
+
+        ApplyExtras(result.Extras);
         if (_extrasFailed) _source.Text = Loc.T("mini.extras.failed");
     }
 

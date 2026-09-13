@@ -226,8 +226,28 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     /// 그래서 <b>가사와 같은 타임아웃을 쓰지 않고</b> 넉넉히 잡되, 실패는 조용히 null이다.
     /// 부가 정보라 회로 차단기에 세지 않는다 — 이것 때문에 가사가 막히면 손해가 크다.
     /// </summary>
-    public Task<SongExtras?> GetExtrasAsync(string title, string artist, CancellationToken ct = default) =>
-        ExtrasAsync(HttpMethod.Get, "v1/song", title, artist, null, ct);
+    public async Task<SongExtrasResult> GetExtrasAsync(
+        string title, string artist, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return SongExtrasResult.NotFound;
+        try
+        {
+            using var response = await SendExtrasAsync(
+                HttpMethod.Get, "v1/song", title, artist, null, ct).ConfigureAwait(false);
+
+            // 404는 "서버가 그 곡을 모른다"일 뿐이다 — 아직 아무도 올리지 않은 새 곡이면 정상이고,
+            // 몇 초 뒤 이 기기가 올린다. 오류로 올리면 새 곡마다 경고가 뜬다.
+            if (response.StatusCode == HttpStatusCode.NotFound) return SongExtrasResult.NotFound;
+            if (!response.IsSuccessStatusCode) return SongExtrasResult.Failed;
+
+            var extras = await ReadExtrasAsync(response, ct).ConfigureAwait(false);
+            return extras is null ? SongExtrasResult.Failed : SongExtrasResult.Ok(extras);
+        }
+        catch (Exception)
+        {
+            return SongExtrasResult.Failed;   // 주소·네트워크·타임아웃 — 이건 알려야 한다
+        }
+    }
 
     public Task<SongExtras?> RefreshCoverAsync(string title, string artist, CancellationToken ct = default) =>
         ExtrasAsync(HttpMethod.Post, "v1/song/cover", title, artist, null, ct);
@@ -236,37 +256,55 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         string title, string artist, bool loved, CancellationToken ct = default) =>
         ExtrasAsync(HttpMethod.Post, "v1/song/love", title, artist, loved ? "1" : "0", ct);
 
+    /// <summary>요청 한 번. 상태 코드를 호출자가 봐야 하므로 응답을 그대로 돌려준다.</summary>
+    private async Task<HttpResponseMessage> SendExtrasAsync(
+        HttpMethod method, string path, string title, string artist, string? on, CancellationToken ct)
+    {
+        var query = $"?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist ?? "")}"
+                  + (on is null ? "" : $"&on={on}");
+        using var request = new HttpRequestMessage(method, new Uri(_baseUri, path + query));
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(ExtrasTimeout);
+
+        return await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
+    }
+
     private async Task<SongExtras?> ExtrasAsync(
         HttpMethod method, string path, string title, string artist, string? on, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(title)) return null;
         try
         {
-            var query = $"?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist ?? "")}"
-                      + (on is null ? "" : $"&on={on}");
-            using var request = new HttpRequestMessage(method, new Uri(_baseUri, path + query));
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(ExtrasTimeout);
-
-            using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
+            using var response = await SendExtrasAsync(method, path, title, artist, on, ct)
+                .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return null;
 
-            var body = await response.Content
-                .ReadFromJsonAsync<RemoteSongExtras>(Json, cts.Token).ConfigureAwait(false);
-            return body is null
-                ? null
-                : new SongExtras(
-                    string.IsNullOrWhiteSpace(body.CoverUrl) ? null : body.CoverUrl,
-                    body.CoverSource, body.LastFmUrl,
-                    body.LoveConnected, body.LoveKnown, body.Loved,
-                    string.IsNullOrWhiteSpace(body.Key) ? null : body.Key,
-                    body.SpotifyConnected, body.SpotifyKnown, body.SpotifySaved);
+            return await ReadExtrasAsync(response, ct).ConfigureAwait(false);
         }
         catch (Exception)
         {
             return null; // 부가 정보 — 가사 조회에 영향을 주지 않는다
         }
+    }
+
+    /// <summary>성공 응답의 본문을 <see cref="SongExtras"/>로. 본문이 비면 null.</summary>
+    private static async Task<SongExtras?> ReadExtrasAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(ExtrasTimeout);
+
+        var body = await response.Content
+            .ReadFromJsonAsync<RemoteSongExtras>(Json, cts.Token).ConfigureAwait(false);
+
+        return body is null
+            ? null
+            : new SongExtras(
+                string.IsNullOrWhiteSpace(body.CoverUrl) ? null : body.CoverUrl,
+                body.CoverSource, body.LastFmUrl,
+                body.LoveConnected, body.LoveKnown, body.Loved,
+                string.IsNullOrWhiteSpace(body.Key) ? null : body.Key,
+                body.SpotifyConnected, body.SpotifyKnown, body.SpotifySaved);
     }
 
     /// <summary>서버가 커버를 처음 찾는 곡이면 외부 API 한 번이 끼어든다(iTunes 2.5초 + 여유).</summary>
