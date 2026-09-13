@@ -138,12 +138,17 @@ internal static class Program
             var overlay = new OverlayWindow(settings);
             overlay.SetUserVisible(settings.OverlayVisible);
 
-            // 전체화면 앱(게임/영상) 활성 시 오버레이 자동 숨김
-            var fullscreenDetector = new FullscreenDetector(app.Dispatcher);
+            // 전체화면 앱(게임/영상) 활성 시 오버레이 자동 숨김.
+            // **오버레이가 있는 모니터만** 본다 — 듀얼 모니터에서 옆 화면의 전체화면 때문에
+            // 가사창이 사라지면(가리지도 않는데) 고장으로 보인다. 사람이 오버레이를 다른
+            // 모니터로 옮길 수 있으므로 핸들을 캐시하지 않고 그때그때 읽는다.
+            var fullscreenDetector = new FullscreenDetector(
+                app.Dispatcher,
+                () => new System.Windows.Interop.WindowInteropHelper(overlay).Handle);
             fullscreenDetector.FullscreenChanged += full =>
             {
                 overlay.SetFullscreenSuppressed(full);
-                Log.Write($"[fullscreen] {(full ? "감지 → 오버레이 숨김" : "해제 → 오버레이 복원")}");
+                Log.Write($"[fullscreen] {(full ? "같은 모니터에서 감지 → 오버레이 숨김" : "해제 → 오버레이 복원")}");
             };
 
             // 재생 소스 선택 적용 (자동/특정 플레이어, 브라우저 제외 기본)
