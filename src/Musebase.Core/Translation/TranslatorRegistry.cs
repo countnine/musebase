@@ -6,7 +6,10 @@ public sealed record TranslatorOptions(
     string? LibreEndpoint = null,
     string? LibreApiKey = null,
     string? MyMemoryEmail = null,
-    string? GoogleApiKey = null);
+    string? GoogleApiKey = null,
+    string? OpenRouterApiKey = null,
+    /// <summary>비우면 <see cref="OpenRouterTranslator.DefaultModel"/>. 예: <c>anthropic/claude-opus-5</c>.</summary>
+    string? OpenRouterModel = null);
 
 /// <summary>
 /// 번역 엔진 설명자. 키 필요 여부·무료 여부(UI/기본값 판단)와 생성 팩토리.
@@ -63,6 +66,11 @@ public static class TranslatorRegistry
         new("google", "Google Cloud Translation (API 키)", RequiresApiKey: true, IsFree: false,
             o => string.IsNullOrWhiteSpace(o.GoogleApiKey) ? null : new GoogleTranslateTranslator(o.GoogleApiKey!),
             ShortName: "Google Cloud Translation"),
+        new("openrouter", "OpenRouter (LLM·모델 자유 선택)", RequiresApiKey: true, IsFree: false,
+            o => string.IsNullOrWhiteSpace(o.OpenRouterApiKey)
+                ? null
+                : new OpenRouterTranslator(o.OpenRouterApiKey!, o.OpenRouterModel),
+            ShortName: "OpenRouter"),
     };
 
     public static TranslatorDescriptor? Find(string id) =>
