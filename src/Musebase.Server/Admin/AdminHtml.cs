@@ -57,9 +57,14 @@ public static class AdminHtml
     /// 제출 전에 끄면 폼이 전송되지 않는 브라우저가 있다). 리다이렉트가 아니면(예: CSRF 실패)
     /// 같은 자리를 다시 읽어 실제 상태를 보여 준다.
     /// </summary>
+    /// <c>data-confirm</c>이 붙은 폼은 먼저 묻는다 — 되돌릴 수 없는 것(삭제·광고 표시)이
+    /// 한 번의 클릭으로 실행되던 것을 막는다. 취소하면 아무 일도 일어나지 않는다.
     public const string BusyScript =
         "document.addEventListener('submit',function(e){" +
-        "var f=e.target;if(!f.hasAttribute('data-busy'))return;" +
+        "var f=e.target;" +
+        "var c=f.getAttribute('data-confirm');" +
+        "if(c&&!confirm(c)){e.preventDefault();return;}" +
+        "if(!f.hasAttribute('data-busy'))return;" +
         "var b=f.querySelector('button[type=submit]');" +
         "var busy=function(){if(b){b.disabled=true;b.classList.add('busy');}};" +
         "if(!window.fetch||!window.FormData){setTimeout(busy,0);return;}" +
@@ -151,14 +156,24 @@ public static class AdminHtml
             pre{background:var(--panel);border:1px solid var(--line);border-radius:.4rem;padding:.75rem;
                  overflow:auto;font-size:.8rem;white-space:pre-wrap}
             .nowrap{white-space:nowrap}
+            /* 필터 칩 — 드롭다운과 달리 무엇이 있는지, 각각 몇 곡인지 열지 않고 보인다. */
+            .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin:.25rem 0 .75rem}
+            .chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;
+                   padding:.25rem .7rem;font-size:.82rem;color:var(--dim);text-decoration:none}
+            .chip:hover{background:#243447;color:var(--text);text-decoration:none}
+            .chip b{color:var(--text);font-weight:600;margin-left:.15rem}
+            .chip.on{background:#243447;color:var(--text);border-color:var(--accent)}
+            /* 곡·아티스트만 폭을 제한한다 — 나머지 열은 nowrap이라 한 줄에 들어온다. */
+            td.ell{max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+            .pager{margin-top:.75rem} .dim{color:var(--dim)}
             </style>
             </head>
             <body>
             <h1>Musebase 가사 서버</h1>
             <nav>
-              {{Nav("/admin", "대시보드", "home")}}
-              {{Nav("/admin/search", "가사 검색", "search")}}
-              {{Nav("/admin/logout", "로그아웃", "logout", "out")}}
+              {{Nav(Routes.Base, "대시보드", "home")}}
+              {{Nav(Routes.Base + "/search", "가사 검색", "search")}}
+              {{Nav(Routes.Base + "/logout", "로그아웃", "logout", "out")}}
             </nav>
             {{body}}
             <script>{{BusyScript}}</script>

@@ -479,4 +479,94 @@ public class LyricsStoreMergeTests : IDisposable
         foreach (var path in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
             try { if (File.Exists(path)) File.Delete(path); } catch { /* 정리 실패는 무시 */ }
     }
+
+    // ---- 칩 건수 · Last.fm 좋아요 ----
+
+    [Fact]
+    public void 칩_건수는_서로_겹치지_않는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "PC", out _);
+        store.Upsert(Entry("Go!", "M83", Plain), "PC", out _);
+        store.Upsert(Entry("Alive", "Pearl Jam", Plain), "PC", out _);
+
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "kids|mgmt", Title = "Kids", Artist = "MGMT", Lang = "ko", Sources = "[]",
+            Summary = "무엇에 대한 곡", Status = MeaningEntry.StatusOk, UpdatedAt = "2026-09-01T00:00:00Z",
+        });
+        store.UpsertMeaning(new MeaningEntry
+        {
+            Key = "go!|m83", Title = "Go!", Artist = "M83", Lang = "ko", Sources = "[]",
+            Status = MeaningEntry.StatusNoSource, UpdatedAt = "2026-09-01T00:00:00Z",
+        });
+
+        var counts = store.SearchCounts(null);
+
+        Assert.Equal(3, counts.All);
+        Assert.Equal(1, counts.Ok);
+        Assert.Equal(1, counts.NoSource);
+        Assert.Equal(1, counts.Pending);          // Alive는 아직 만들어 본 적이 없다
+        Assert.Equal(0, counts.Insufficient);
+
+        // 겹치지 않으므로 합이 전체를 넘지 않는다 — 넘으면 사람이 숫자를 믿지 않게 된다.
+        Assert.Equal(counts.All, counts.Ok + counts.Pending + counts.Insufficient + counts.NoSource + counts.Failed);
+    }
+
+    [Fact]
+    public void 건수는_검색어를_따르되_필터는_따르지_않는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "PC", out _);
+        store.Upsert(Entry("Go!", "M83", Plain), "PC", out _);
+
+        Assert.Equal(2, store.SearchCounts(null).All);
+        Assert.Equal(1, store.SearchCounts("kids").All);
+    }
+
+    [Fact]
+    public void 좋아요_동기화가_서버_곡에_붙는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "PC", out _);
+        store.Upsert(Entry("Go!", "M83", Plain), "PC", out _);
+
+        // 세 번째는 서버에 없는 곡 — 맞출 수 없고, 그래도 실패가 아니다.
+        var (matched, total) = store.SyncLoved([("Kids", "MGMT"), ("없는 곡", "누군가")]);
+
+        Assert.Equal(1, matched);
+        Assert.Equal(2, total);
+        Assert.Equal(1, store.SearchCounts(null).Loved);
+
+        var loved = store.Search(null, meaning: LyricsStore.FilterLoved);
+        Assert.Equal("Kids", Assert.Single(loved).Title);
+    }
+
+    [Fact]
+    public void 저쪽에서_좋아요를_풀면_여기서도_풀린다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "PC", out _);
+        store.SyncLoved([("Kids", "MGMT")]);
+        Assert.Equal(1, store.SearchCounts(null).Loved);
+
+        // 동기화는 "지금의 전부"다 — 목록에서 빠진 곡은 여기서도 내려가야 한다.
+        store.SyncLoved([]);
+        Assert.Equal(0, store.SearchCounts(null).Loved);
+        Assert.Empty(store.Search(null, meaning: LyricsStore.FilterLoved));
+    }
+
+    [Fact]
+    public void 좋아요_동기화가_커버_정보를_지우지_않는다()
+    {
+        using var store = NewStore();
+        store.Upsert(Entry("Kids", "MGMT", Plain), "PC", out _);
+        store.SetCover("kids|mgmt", "https://example.test/cover.jpg", "itunes");
+
+        store.SyncLoved([("Kids", "MGMT")]);
+
+        var links = store.GetSongLinks("kids|mgmt");
+        Assert.Equal("https://example.test/cover.jpg", links.CoverUrl);
+        Assert.True(links.CoverTried);
+    }
 }

@@ -136,6 +136,68 @@ public sealed class LastFmAccount
         return new LastFmTrackState(loved, string.IsNullOrWhiteSpace(url) ? null : url);
     }
 
+
+    /// <summary>
+    /// 그 사람이 좋아요한 곡 전부(<c>user.getLovedTracks</c>). 읽기 전용이라 API 키만 있으면 된다.
+    ///
+    /// 한 곡씩 <c>track.getInfo</c>로 물으면 목록 한 화면에 수백 번을 부르게 된다 — 통째로 받아
+    /// DB에 적어 두고 화면은 DB만 보게 하려는 것이다. 한 페이지 상한은 1000이고, 그 이상이면
+    /// <c>totalPages</c>를 보고 이어 받는다(<paramref name="maxPages"/>로 상한을 둔다 — 계정이
+    /// 아무리 커도 관리 화면 한 번의 클릭이 무한정 돌면 안 된다).
+    ///
+    /// 실패는 예외가 아니라 <c>null</c>이다 — 부분만 받아 저장하면 <b>안 받은 곡이 좋아요 해제로
+    /// 보인다</b>(동기화가 먼저 전부 0으로 내리기 때문). 그래서 도중에 실패하면 통째로 버린다.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Title, string Artist)>?> GetLovedTracksAsync(
+        string user, int maxPages = 10, CancellationToken ct = default)
+    {
+        if (!CanRead || string.IsNullOrWhiteSpace(user)) return null;
+
+        var all = new List<(string, string)>();
+
+        for (var page = 1; page <= maxPages; page++)
+        {
+            var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["api_key"] = _apiKey,
+                ["method"] = "user.getLovedTracks",
+                ["user"] = user,
+                ["limit"] = "1000",
+                ["page"] = page.ToString(),
+            };
+
+            var json = await GetAsync(parameters, ct, sign: false).ConfigureAwait(false);
+            if (json is null) return null;
+            if (!json.Value.TryGetProperty("lovedtracks", out var loved)) return null;
+
+            // 곡이 하나뿐이면 `track`이 배열이 아니라 객체로 오는 API다 — 둘 다 받는다.
+            if (loved.TryGetProperty("track", out var tracks))
+            {
+                if (tracks.ValueKind == JsonValueKind.Array)
+                    foreach (var t in tracks.EnumerateArray()) Add(t);
+                else if (tracks.ValueKind == JsonValueKind.Object) Add(tracks);
+            }
+
+            var totalPages = 1;
+            if (loved.TryGetProperty("@attr", out var attr)
+                && attr.TryGetProperty("totalPages", out var tp)
+                && int.TryParse(tp.GetString(), out var parsed))
+                totalPages = parsed;
+
+            if (page >= totalPages) break;
+        }
+
+        return all;
+
+        void Add(JsonElement track)
+        {
+            var title = track.TryGetProperty("name", out var n) ? n.GetString() : null;
+            var artist = track.TryGetProperty("artist", out var a)
+                && a.TryGetProperty("name", out var an) ? an.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(title)) all.Add((title!, artist ?? ""));
+        }
+    }
+
     /// <summary>좋아요를 켜거나 끈다. 세션 키가 없으면 아무 일도 하지 않는다.</summary>
     public async Task<bool> SetLovedAsync(
         string title, string artist, bool loved, string sessionKey, CancellationToken ct = default)

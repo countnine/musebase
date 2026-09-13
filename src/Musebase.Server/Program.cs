@@ -62,7 +62,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     o.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
 });
-// 요청줄에는 쿼리스트링이 포함된다 — 관리자 부트스트랩 URL(`/admin?token=…`)의 토큰이
+// 요청줄에는 쿼리스트링이 포함된다 — 관리자 부트스트랩 URL(`/musebase?token=…`)의 토큰이
 // journalctl에 그대로 남지 않도록 Hosting 로그를 Warning으로 낮춘다.
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", LogLevel.Warning);
 
@@ -71,12 +71,12 @@ using var store = new LyricsStore(dbPath);
 var admin = AdminOptions.FromEnvironment(token!);
 
 // 곡의 의미 — 키가 없으면 서비스가 꺼진 상태로 만들어지고 아무 데도 영향을 주지 않는다.
-var meaningOptions = MeaningOptions.FromEnvironment();
-var meanings = meaningOptions.BuildService();
-var meaningGenerator = new MeaningGenerator(store, meanings, meaningOptions);
-var extras = new SongExtrasService(store, new CoverArt(), meaningOptions.LastFmAccount());
+// 환경변수 위에 DB 설정을 덮는다 — 관리 화면에서 엔진·모델을 바꾸면 재시작 없이 반영된다.
+var meaningSettings = new MeaningSettings(store, MeaningOptions.FromEnvironment());
+var meaningGenerator = new MeaningGenerator(store, meaningSettings);
+var extras = new SongExtrasService(store, new CoverArt(), meaningSettings.Current.LastFmAccount());
 
-app.MapAdmin(store, admin, meanings, meaningOptions, meaningGenerator, extras);
+app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -101,9 +101,9 @@ bool Authorized(HttpRequest request)
 
 IResult Unauthorized() => Results.Json(new ApiError("unauthorized"), statusCode: StatusCodes.Status401Unauthorized);
 
-app.MapGet("/v1/healthz", () => Results.Text("ok"));
+app.MapGet(Routes.Api + "/healthz", () => Results.Text("ok"));
 
-app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
+app.MapGet(Routes.Api + "/lyrics", (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
@@ -147,7 +147,7 @@ app.MapGet("/v1/lyrics", (HttpRequest request, string? title, string? artist) =>
         : Results.NotFound();
 });
 
-app.MapPut("/v1/lyrics", async (HttpRequest request) =>
+app.MapPut(Routes.Api + "/lyrics", async (HttpRequest request) =>
 {
     if (!Authorized(request)) return Unauthorized();
     if (request.ContentType is null || !request.ContentType.Contains("application/json", StringComparison.OrdinalIgnoreCase))
@@ -181,11 +181,11 @@ app.MapPut("/v1/lyrics", async (HttpRequest request) =>
         : Results.Ok(saved);
 });
 
-app.MapGet("/v1/stats", (HttpRequest request) =>
+app.MapGet(Routes.Api + "/stats", (HttpRequest request) =>
     !Authorized(request) ? Unauthorized() : Results.Ok(store.Stats()));
 
 // 곡의 의미 — 앱은 조회만 한다. 생성은 관리자 화면에서만 일어난다(쿼타·비용을 사람이 통제).
-app.MapGet("/v1/meaning", (HttpRequest request, string? title, string? artist) =>
+app.MapGet(Routes.Api + "/meaning", (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
@@ -205,12 +205,12 @@ app.MapGet("/v1/meaning", (HttpRequest request, string? title, string? artist) =
 // 앱에서 의미 만들기. **사람이 누를 때만 일어난다**는 원칙은 그대로고(자동 생성은 여전히 없다),
 // 누르는 자리가 관리자 화면 하나에서 각 기기로 늘어난 것이다(ADR-0007 결정 4 참고).
 // 비용이 드는 유일한 쓰기 경로라 `MUSEBASE_MEANING_ALLOW_CLIENT=0`으로 막을 수 있다.
-app.MapPost("/v1/meaning", async (HttpRequest request, string? title, string? artist) =>
+app.MapPost(Routes.Api + "/meaning", async (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
 
-    if (!meaningOptions.AllowClientGeneration)
+    if (!meaningSettings.Current.AllowClientGeneration)
         return Results.Json(new ApiError("client generation disabled"), statusCode: StatusCodes.Status403Forbidden);
     if (!meaningGenerator.IsEnabled)
         return Results.Json(new ApiError("meaning engine not configured"), statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -243,7 +243,7 @@ app.MapPost("/v1/meaning", async (HttpRequest request, string? title, string? ar
 LyricsEntry? Locate(string? title, string? artist) =>
     string.IsNullOrWhiteSpace(title) ? null : store.Get(title!, artist ?? "");
 
-app.MapGet("/v1/song", async (HttpRequest request, string? title, string? artist) =>
+app.MapGet(Routes.Api + "/song", async (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
@@ -256,7 +256,7 @@ app.MapGet("/v1/song", async (HttpRequest request, string? title, string? artist
     return Results.Ok(SongExtrasBody.From(links, love));
 });
 
-app.MapPost("/v1/song/cover", async (HttpRequest request, string? title, string? artist) =>
+app.MapPost(Routes.Api + "/song/cover", async (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
     var entry = Locate(title, artist);
@@ -270,7 +270,7 @@ app.MapPost("/v1/song/cover", async (HttpRequest request, string? title, string?
     return Results.Ok(SongExtrasBody.From(links, await extras.LoveAsync(entry)));
 });
 
-app.MapPost("/v1/song/love", async (HttpRequest request, string? title, string? artist, string? on) =>
+app.MapPost(Routes.Api + "/song/love", async (HttpRequest request, string? title, string? artist, string? on) =>
 {
     if (!Authorized(request)) return Unauthorized();
     var entry = Locate(title, artist);

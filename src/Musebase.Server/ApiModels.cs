@@ -127,8 +127,14 @@ public sealed record SongExtrasBody(
     string? LastFmUrl,
     bool LoveConnected,
     bool LoveKnown,
-    bool Loved)
+    bool Loved,
+    /// <summary>
+    /// 이 곡의 서버 키. 앱이 <c>{서버 주소}/song?key=…</c>로 관리 화면을 바로 열 수 있게 준다 —
+    /// 키를 만드는 규칙은 전적으로 서버 몫이라 클라이언트가 조립할 수 없다.
+    /// </summary>
+    string? Key = null)
 {
     public static SongExtrasBody From(SongLinks links, LoveState love) =>
-        new(links.CoverUrl, links.CoverSource, links.LastFmUrl, love.Connected, love.Known, love.Loved);
+        new(links.CoverUrl, links.CoverSource, links.LastFmUrl,
+            love.Connected, love.Known, love.Loved, links.Key);
 }

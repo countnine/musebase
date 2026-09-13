@@ -13,16 +13,19 @@ namespace Musebase.Server;
 /// <b>같은 곡을 동시에 두 번 만들지 않는다.</b> 앱 버튼은 여러 기기에서 동시에 눌릴 수 있고
 /// 생성 한 번은 외부 API 여러 개 + LLM 호출이라 비싸다. 진행 중인 것이 있으면 그 결과를 같이 받는다.
 /// </summary>
-public sealed class MeaningGenerator(
-    LyricsStore store, SongMeaningService defaultService, MeaningOptions options)
+public sealed class MeaningGenerator(LyricsStore store, MeaningSettings settings)
 {
+    // 구성은 관리 화면에서 바뀔 수 있다 — 붙잡아 두지 말고 쓸 때마다 읽는다.
+    private SongMeaningService Service => settings.Service;
+    private MeaningOptions Options => settings.Current;
+
     private readonly ConcurrentDictionary<string, Task<string>> _inFlight = new(StringComparer.Ordinal);
 
     /// <summary>엔진과 자료원이 갖춰져 실제로 만들 수 있는가.</summary>
-    public bool IsEnabled => defaultService.IsEnabled;
+    public bool IsEnabled => Service.IsEnabled;
 
     /// <summary>지금 켜져 있는 자료원 이름(화면 표시용).</summary>
-    public IReadOnlyList<string> SourceNames => defaultService.SourceNames;
+    public IReadOnlyList<string> SourceNames => Service.SourceNames;
 
     /// <summary>
     /// 결과를 저장하고 <see cref="SongMeaning"/>의 status만 돌려준다.
@@ -48,16 +51,16 @@ public sealed class MeaningGenerator(
     private async Task<string> RunAsync(
         string key, string title, string artist, IReadOnlyList<string>? only)
     {
-        var service = only is { Count: > 0 } ? options.BuildService(only) : defaultService;
+        var service = only is { Count: > 0 } ? Options.BuildService(only) : Service;
 
-        var result = await service.BuildAsync(title, artist, options.Lang).ConfigureAwait(false);
+        var result = await service.BuildAsync(title, artist, Options.Lang).ConfigureAwait(false);
         if (result.Status == SongMeaning.Retry) return result.Status;
 
         // 곡 페이지 주소는 의미 자료원과 별개다 — Musixmatch를 자료로 쓰지 않아도 링크는 정확해야 한다.
-        var musixmatch = await options.MusixmatchApi().FindAsync(title, artist).ConfigureAwait(false);
+        var musixmatch = await Options.MusixmatchApi().FindAsync(title, artist).ConfigureAwait(false);
 
         store.UpsertMeaning(
-            MeaningMapper.ToEntry(key, title, artist, options.Lang, result)
+            MeaningMapper.ToEntry(key, title, artist, Options.Lang, result)
             with { MusixmatchUrl = musixmatch?.ShareUrl });
         return result.Status;
     }

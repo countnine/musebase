@@ -53,6 +53,28 @@ public sealed record SongLinks(
 }
 
 /// <summary>
+/// 검색 화면 칩에 붙는 건수. <see cref="All"/>을 뺀 나머지는 서로 겹치지 않으므로 합이 전체를
+/// 넘지 않는다(<see cref="Loved"/>만 다른 축이라 예외다).
+/// </summary>
+/// <param name="Pending">한 번도 의미를 만들어 보지 않은 곡 — 일괄 생성이 실제로 처리할 대상.</param>
+public sealed record SongCounts(
+    int All, int Ok, int Pending, int Insufficient, int NoSource, int Failed, int Loved)
+{
+    public int For(string? filter) => filter switch
+    {
+        LyricsStore.MeaningFilterOk => Ok,
+        // none은 칩에 없는 넓은 값(ok가 아닌 곡 전부) — 옛 주소로 들어오면 합으로 답한다.
+        LyricsStore.MeaningFilterNone => Pending + Insufficient + NoSource + Failed,
+        LyricsStore.MeaningFilterPending => Pending,
+        LyricsStore.MeaningFilterInsufficient => Insufficient,
+        LyricsStore.MeaningFilterNoSource => NoSource,
+        LyricsStore.MeaningFilterFailed => Failed,
+        LyricsStore.FilterLoved => Loved,
+        _ => All,
+    };
+}
+
+/// <summary>
 /// 곡 상세가 보여 줄 Last.fm 상태. 계정을 연결하지 않았거나 조회가 실패하면 전부 꺼진 값이다 —
 /// <b>모르는 것을 "좋아요 안 함"으로 그리면 안 된다</b>(꺼진 하트를 보고 다시 누르게 된다).
 /// </summary>
@@ -84,10 +106,36 @@ public sealed record DashboardModel(
     /// <summary>광고로 표시해 차단한 제목들(되돌릴 수 있어야 하므로 화면에 보여 준다).</summary>
     IReadOnlyList<AdTitleRow>? AdTitles = null,
     /// <summary>Last.fm 계정 연결 상태 — 쓸 수 없는 구성이면 <c>null</c>이라 카드를 아예 안 그린다.</summary>
-    LastFmLink? LastFm = null);
+    LastFmLink? LastFm = null,
+    /// <summary>지금 쓰는 의미 생성 엔진·모델(카드에 표시 + 화면에서 변경).</summary>
+    MeaningEngineCard? MeaningEngine = null);
 
 /// <summary>대시보드의 Last.fm 카드 — 연결한 아이디(없으면 미연결).</summary>
 public sealed record LastFmLink(string? User);
+
+/// <summary>
+/// 대시보드의 "의미 생성 엔진" 카드가 그릴 값. <b>API 키 원문은 여기 담지 않는다</b> —
+/// 화면에 흘리지 않으려고 끝 네 글자만 남긴 힌트를 만들어 넘긴다.
+/// </summary>
+/// <param name="Overridden">DB에 저장된 값이 있는가(아니면 <c>server.env</c> 그대로).</param>
+public sealed record MeaningEngineCard(
+    string Engine, string Model, bool HasKey, bool Overridden,
+    string? GeminiKeyHint, string? GeminiModel,
+    string? OpenRouterKeyHint, string? OpenRouterModel)
+{
+    public static MeaningEngineCard From(MeaningOptions options, bool overridden) => new(
+        options.Engine, options.EffectiveModel, options.HasEngineKey, overridden,
+        Hint(options.GeminiApiKey), options.GeminiModel,
+        Hint(options.OpenRouterApiKey), options.OpenRouterModel);
+
+    /// <summary>키가 들어 있다는 것만 알려 준다 — 어느 키인지 알아볼 만큼만 남긴다.</summary>
+    public static string? Hint(string? key)
+    {
+        var k = (key ?? "").Trim();
+        return k.Length == 0 ? null : k.Length <= 4 ? "…" : "…" + k[^4..];
+    }
+}
+
 
 /// <summary>대시보드의 "곡의 의미" 타일 — 만든 것 / 자료 없음 / 자료 부족 / 실패 + 아직 안 해 본 곡 수.</summary>
 public sealed record MeaningSummary(

@@ -149,9 +149,14 @@ sudo chmod +x /usr/local/bin/musebase-backup
 
 ## 8. 관리자 페이지
 
-`https://oracle.<tailnet>.ts.net/admin?token=<관리자토큰>` 을 브라우저로 연다. 토큰이 맞으면
-서명 쿠키를 굽고 **주소창을 `/admin`으로 정리**하므로 토큰이 히스토리에 남지 않는다(30일 유지,
-`/admin/logout`으로 해제). 테일넷 전용이라 밖에서는 접근 자체가 불가능하다.
+`https://oracle.<tailnet>.ts.net/musebase?token=<관리자토큰>` 을 브라우저로 연다. 토큰이 맞으면
+서명 쿠키를 굽고 **주소창을 `/musebase`로 정리**하므로 토큰이 히스토리에 남지 않는다(30일 유지,
+`/musebase/logout`으로 해제). 테일넷 전용이라 밖에서는 접근 자체가 불가능하다.
+
+> **2026-09-13에 경로가 통째로 옮겨졌다** — 관리 화면 `/admin` → `/musebase`, API `/v1` → `/musebase/v1`.
+> 옛 경로는 남기지 않았으므로 **이 버전을 올린 직후 모든 기기가 끊긴다.** 앱 설정의 서버 주소 끝에
+> `/musebase`를 붙이면 된다(앱 업데이트는 필요 없다 — 클라이언트가 `v1/…`을 상대 경로로 붙인다).
+> 관리자 쿠키의 Path도 함께 바뀌므로 브라우저는 한 번 다시 로그인해야 한다.
 
 - **대시보드** — 마지막 조회·오늘 조회·7일 히트율·보관 곡 수 타일, 최근 조회 50건(히트/느슨한 히트/미스),
   미스 상위(서버에 없어 각 기기가 직접 찾은 곡 = 채울 후보), 기기별·일별 통계, 최근 올라온 가사,
@@ -263,9 +268,18 @@ MUSEBASE_MEANING_SOURCES=genius,lastfm,wikipedia,musixmatch
 
 ### 모델을 바꿔 보고 싶다면
 
-`MUSEBASE_MEANING_ENGINE=openrouter` + `MUSEBASE_OPENROUTER_API_KEY`로 바꾸고
-`MUSEBASE_OPENROUTER_MODEL`에 모델 문자열만 넣으면 된다(`anthropic/claude-opus-5`,
-`google/gemini-2.5-flash` …). 같은 곡을 [다시 생성]으로 만들어 문장을 비교할 수 있다.
+**대시보드의 [의미 생성 엔진] 카드에서 바꾸는 것이 가장 빠르다** — 제공자·API 키·모델을 넣고
+저장하면 **다음 생성부터 바로** 적용된다(재시작 불필요). 지금 무엇이 쓰이는지도 거기 적혀 있다.
+같은 곡을 [다시 생성]으로 만들어 문장을 비교할 수 있다.
+
+- 화면에서 저장한 값은 **DB(`app_settings`)에 들어가 환경변수를 덮는다.** [환경변수로 되돌리기]를
+  누르면 지워지고 아래 `server.env` 값으로 돌아간다.
+- ⚠ **화면에 넣은 API 키는 DB에 평문으로 저장되어 백업 파일에도 들어간다**(Last.fm 세션 키와 같다).
+  키를 백업 밖에 두고 싶으면 화면에 넣지 말고 `server.env`만 쓴다 — 모델만 화면에서 바꿔도 된다.
+
+환경변수로만 하려면 `MUSEBASE_MEANING_ENGINE=openrouter` + `MUSEBASE_OPENROUTER_API_KEY`로 바꾸고
+`MUSEBASE_OPENROUTER_MODEL`에 모델 문자열만 넣는다(`anthropic/claude-opus-5`,
+`google/gemini-2.5-flash` …).
 OpenRouter는 Google Cloud 프로젝트가 아예 필요 없어, 프로젝트 한도에 막혔을 때의 우회로이기도 하다.
 
 ### 쓰는 법
@@ -325,6 +339,16 @@ MUSEBASE_LASTFM_SECRET=...    # 같은 페이지의 Shared secret — 이게 있
 콜백 주소는 등록하지 않아도 된다 — 그때 접속한 주소를 그대로 넘긴다. 승인은 **브라우저에서**
 일어나므로 테일넷 안 주소여도 문제없다.
 
+### 좋아요 목록 동기화
+
+대시보드의 **[Last.fm 좋아요 동기화]** 를 누르면 `user.getLovedTracks`로 목록을 통째로 받아
+서버 곡과 맞춰 둔다. 가사 검색 화면의 **♥ 즐겨찾기** 칩이 이 값을 본다.
+
+- 곡마다 Last.fm에 묻지 않는 이유: 목록 한 화면에 수백 번을 부르게 된다.
+- **저쪽에서 해제한 곡은 여기서도 내려간다**(동기화는 "지금의 전부"다). 목록을 받다가 실패하면
+  **아무것도 바꾸지 않는다** — 부분만 반영하면 못 받은 곡이 해제된 것처럼 보인다.
+- 자동으로 돌지 않는다(의미 일괄 생성과 같은 정책) — 바깥을 부르는 일은 사람이 누를 때만.
+
 > **세션 키는 DB(`app_settings`)에 저장된다.** 백업 파일에 Last.fm 쓰기 자격증명이 함께 들어간다는
 > 뜻이다. 지우려면 대시보드의 **[Last.fm 연결 해제]**, 또는 last.fm 설정 > Applications에서
 > 권한 자체를 회수한다.
@@ -333,5 +357,6 @@ MUSEBASE_LASTFM_SECRET=...    # 같은 페이지의 Shared secret — 이게 있
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
 따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
-(현재 7 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`).
+(현재 8 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`,
+8에서 `song_links`에 `loved`·`loved_at` 컬럼 추가).
 컬럼·테이블 추가뿐이라 **구 버전 바이너리로 롤백해도 안전하다.**

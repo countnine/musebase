@@ -68,14 +68,40 @@ public class MeaningLinksTests
     /// 사람이 "Tunefind가 죽었나" 하고 만다.
     /// </summary>
     [Fact]
-    public void Tunefind는_경로형이_아니라_query다()
+    public void Tunefind는_곡_페이지_주소를_규칙으로_만든다()
     {
-        var url = MeaningLinks.Tunefind("Kids", "MGMT");
+        // 실제 페이지: https://www.tunefind.com/song/mazzy-star/look-on-down-from-the-bridge
+        Assert.Equal(
+            "https://www.tunefind.com/song/mazzy-star/look-on-down-from-the-bridge",
+            MeaningLinks.Tunefind("Look on Down from the Bridge", "Mazzy Star"));
+
+        Assert.Equal("https://www.tunefind.com/song/mgmt/kids", MeaningLinks.Tunefind("Kids", "MGMT"));
+    }
+
+    [Theory]
+    [InlineData("Sigur Rós", "sigur-ros")]              // 발음기호는 벗겨 낸다
+    [InlineData("AC/DC", "ac-dc")]
+    [InlineData("  Panic! at the Disco ", "panic-at-the-disco")]
+    [InlineData("Tyler, the Creator", "tyler-the-creator")]
+    public void 슬러그는_소문자_하이픈이다(string input, string expected) =>
+        Assert.Equal(expected, MeaningLinks.Slug(input));
+
+    [Fact]
+    public void 슬러그를_못_만들면_곡명만으로_검색한다()
+    {
+        // 한글 아티스트는 ASCII 슬러그가 나오지 않는다 — 그때는 검색으로 물러난다.
+        var url = MeaningLinks.Tunefind("봄날", "방탄소년단");
 
         Assert.StartsWith("https://www.tunefind.com/search?q=", url);
         Assert.DoesNotContain("/search/site", url);
-        Assert.Contains("MGMT%20Kids", url);
+
+        // 아티스트를 함께 넣으면 검색이 흩어진다 — 곡명만 넣는다.
+        Assert.DoesNotContain("%EB%B0%A9%ED%83%84", url);
     }
+
+    [Fact]
+    public void 아티스트가_없으면_검색으로_간다() =>
+        Assert.StartsWith("https://www.tunefind.com/search?q=", MeaningLinks.Tunefind("Kids", ""));
 
     [Fact]
     public void YouTube는_아티스트와_제목으로_검색한다()

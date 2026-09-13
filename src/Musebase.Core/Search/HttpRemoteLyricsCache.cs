@@ -259,7 +259,8 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
                 : new SongExtras(
                     string.IsNullOrWhiteSpace(body.CoverUrl) ? null : body.CoverUrl,
                     body.CoverSource, body.LastFmUrl,
-                    body.LoveConnected, body.LoveKnown, body.Loved);
+                    body.LoveConnected, body.LoveKnown, body.Loved,
+                    string.IsNullOrWhiteSpace(body.Key) ? null : body.Key);
         }
         catch (Exception)
         {
@@ -278,6 +279,9 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
         public bool LoveConnected { get; init; }
         public bool LoveKnown { get; init; }
         public bool Loved { get; init; }
+
+        /// <summary>구버전 서버는 이 필드를 안 보낸다 — 그러면 null이고 관리 화면 버튼만 사라진다.</summary>
+        public string? Key { get; init; }
     }
 
     public async Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)

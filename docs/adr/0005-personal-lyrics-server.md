@@ -66,10 +66,10 @@ v1 배포 후 두 가지가 부족했다: ① 서버가 실제로 쓰이는지 �
 - **조회 기록**은 `lookups` 테이블에 요청 단위로 남긴다(곡·결과·기기·시각, 기본 90일 후 자동 삭제,
   `MUSEBASE_LOG_LOOKUPS=0`으로 끔). 곡별 누적 카운터가 아니라 요청 단위인 이유는 **미스**(서버에 없는 곡)를
   기록해야 "채울 후보"가 나오기 때문이다. 청취 이력이 남는다는 점은 `deploy/README.md`에 고지한다.
-- 결정 6의 **"삭제 API는 두지 않는다"는 기계 API(`/v1/*`)에 대한 것으로 유지**하고, 사람이 화면에서
+- 결정 6의 **"삭제 API는 두지 않는다"는 기계 API(`/musebase/v1/*`)에 대한 것으로 유지**하고, 사람이 화면에서
   확인하고 지우는 경로만 관리자 UI에 둔다. 한 기기의 자동 판정이 전원의 캐시를 지우는 일은 여전히 없다.
   관리자 편집은 `origin=user`로 저장되어 병합 정책이 자동 검색으로부터 보호한다.
-- `/admin/*`은 **계약 밖**이다(`contracts/lyrics-api.md`에 명시). 브라우저가 `Authorization` 헤더를 붙일 수
+- `/musebase/*`은 **계약 밖**이다(`contracts/lyrics-api.md`에 명시). 브라우저가 `Authorization` 헤더를 붙일 수
   없어 인증도 다르다 — 원 토큰 대신 만료·HMAC만 담은 서명 쿠키를 굽는다.
 - 스키마 변경에 대비해 `PRAGMA user_version` 기반 마이그레이션을 이때 도입했다(`ALTER TABLE`은
   재실행하면 실패하므로 필요해진 뒤에 도입하면 늦다).
@@ -111,6 +111,6 @@ Spotify Connect로 **PC에서 재생하고 폰에서 조작**하면 두 기기�
 
 ## 후속
 
-- v2: 서버가 번역까지 대행(`POST /v1/translate` + `MusebaseServerTranslator : ITranslator`).
+- v2: 서버가 번역까지 대행(`POST /musebase/v1/translate` + `MusebaseServerTranslator : ITranslator`).
   ADR-0002의 번역기 확장 지점을 정석대로 쓰는 것이며, 덤으로 기기가 유료 API 키를 갖지 않아도 된다.
 - v3: 서버가 직접 검색·번역해 자주 듣는 곡을 미리 채우는 CLI(레이트 리밋·예산 상한 필수).
