@@ -145,7 +145,7 @@ public static class AdminPages
               <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.</span>
               """;
 
-        var lastfm = LastFmCard(m.LastFm, m.Csrf);
+        var lastfm = LastFmCard(m.LastFm, m.Csrf) + SpotifyCard(m.Spotify, m.Csrf);
         var engine = MeaningEngineCardHtml(m.MeaningEngine, m.Csrf);
 
         return Layout("대시보드", $"""
@@ -360,7 +360,7 @@ public static class AdminPages
         string? selectedLang, bool showTags, string csrf, TimeZoneInfo tz, string? notice = null,
         MeaningEntry? meaning = null, bool meaningEnabled = false,
         IReadOnlyList<(string Id, string Label, bool Checked)>? meaningSources = null,
-        SongLinks? links = null, LoveState? love = null)
+        SongLinks? links = null, LoveState? love = null, SpotifyState? spotify = null)
     {
         var key = entry.Key ?? "";
         var langLinks = langs.Count == 0
@@ -402,7 +402,7 @@ public static class AdminPages
                   타임태그 {(showTags ? "숨기기" : "보기")}</a>
               · <a href="{Routes.Base}/raw?key={Url(key)}">원문(.lrc)</a></p>
             <p class="meta">{ExternalLinks(entry, meaning, links)}</p>
-            {SongActions(key, csrf, love ?? LoveState.NotConnected, links)}
+            {SongActions(key, csrf, love ?? LoveState.NotConnected, links, spotify)}
             </div>
             </div>
             {MeaningCard(entry, meaning, csrf, meaningEnabled, meaningSources ?? [])}
@@ -487,6 +487,37 @@ public static class AdminPages
             """;
     }
 
+    /// <summary>
+    /// Spotify 카드. Last.fm과 달리 <b>콜백 주소를 앱 대시보드에 미리 등록</b>해야 하므로,
+    /// 넣어야 할 값을 그대로 띄워 복사하게 한다 — 이걸 안 적어 두면 승인이 조용히 실패한다.
+    /// </summary>
+    private static string SpotifyCard(SpotifyLink? link, string csrf)
+    {
+        if (link is null) return "";
+
+        var register = $"""
+            <p class="meta">Spotify 개발자 대시보드의 <b>Redirect URI</b>에 이 주소를 등록해야 합니다:
+            <code>{Esc(link.Callback)}</code><br>
+            Development Mode는 <b>앱 소유자에게 Premium 구독</b>을 요구하고 인가 사용자는 5명까지입니다(2026-02 정책).</p>
+            """;
+
+        if (string.IsNullOrEmpty(link.User))
+            return $"""
+                <p class="meta"><a href="{Routes.Base}/spotify/connect">Spotify 계정 연결 →</a>
+                — 연결하면 좋아요가 Last.fm과 Spotify 양쪽에 반영됩니다.</p>
+                {register}
+                """;
+
+        return $"""
+            <form method="post" action="{Routes.Base}/spotify/disconnect" class="inline" style="margin:0">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit">Spotify 연결 해제</button>
+              <span class="meta">연결됨: <b>{Esc(link.User)}</b></span>
+            </form>
+            {register}
+            """;
+    }
+
     private static string LastFmCard(LastFmLink? link, string csrf)
     {
         if (link is null) return "";
@@ -545,7 +576,8 @@ public static class AdminPages
     /// 위험한 둘(삭제·광고)은 <c>danger</c>로 칠하고 설명을 아래 한 줄에 붙인다 —
     /// 버튼만 넉 줄로 늘어놓으면 무엇이 되돌릴 수 없는 것인지 구분이 안 된다.
     /// </summary>
-    private static string SongActions(string key, string csrf, LoveState love, SongLinks? links)
+    private static string SongActions(
+        string key, string csrf, LoveState love, SongLinks? links, SpotifyState? spotify)
     {
         string Form(string action, string label, string cls = "", string extra = "") => $"""
             <form method="post" action="{action}" class="inline" style="margin:0"{extra}>
@@ -558,7 +590,7 @@ public static class AdminPages
         var source = links?.CoverSource is { } src ? $" (지금: {Esc(src)})" : "";
         return $"""
             <div class="actions">
-              {LoveForm(key, csrf, love)}
+              {LoveForm(key, csrf, love, spotify)}
               {Form(Routes.Base + "/song/cover", "커버 다시 찾기", extra: " data-busy")}
               {Form(Routes.Base + "/song/ad", "광고로 표시", "danger",
                     " data-confirm=\"이 제목을 광고로 표시할까요? 가사를 지우고 앞으로 등록·검색도 막습니다(대시보드에서 되돌릴 수 있습니다).\"")}
@@ -580,7 +612,7 @@ public static class AdminPages
     ///
     /// <c>data-busy</c>라 기존 스크립트가 스피너를 돌리고 히스토리도 늘리지 않는다.
     /// </summary>
-    private static string LoveForm(string key, string csrf, LoveState love)
+    private static string LoveForm(string key, string csrf, LoveState love, SpotifyState? spotify = null)
     {
         if (!love.Connected) return "";
 
@@ -589,6 +621,16 @@ public static class AdminPages
             : ("♡ 좋아요 확인", "1", false);
 
         var note = love.Known ? "" : "<span class=\"meta\">Last.fm 상태를 확인하지 못했습니다.</span>";
+
+        // 좋아요는 Last.fm과 Spotify 양쪽에 반영된다 — 지금 저쪽이 어떤지도 같이 보여 준다.
+        // "모름"과 "저장 안 됨"을 구별한다(Last.fm과 같은 이유).
+        note += spotify switch
+        {
+            null or { Connected: false } => "",
+            { Known: false } => "<span class=\"meta\">Spotify 상태를 확인하지 못했습니다.</span>",
+            { Saved: true } => "<span class=\"meta ok\">Spotify에 저장됨</span>",
+            _ => "<span class=\"meta\">Spotify에 없음</span>",
+        };
         return $"""
             <form method="post" action="{Routes.Base}/song/love" class="inline" style="margin:0" data-busy>
               <input type="hidden" name="key" value="{Esc(key)}">

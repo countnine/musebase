@@ -175,6 +175,16 @@ public sealed class LyricsStore : IDisposable
             AddColumnIfMissing("song_links", "loved_at", "TEXT");
             Execute("PRAGMA user_version = 8;");
         }
+
+        if (version < 9)
+        {
+            // Spotify 트랙 URI. 곡마다 검색으로 찾아야 하는데(가사에는 트랙 ID가 없다) 그 결과를
+            // 기억해 둔다. 커버와 같은 규칙으로 **못 찾은 것도 기억한다** — spotify_at이 있는데
+            // spotify_uri가 NULL이면 "찾아봤지만 없었다"이므로 매번 검색하지 않는다.
+            AddColumnIfMissing("song_links", "spotify_uri", "TEXT");
+            AddColumnIfMissing("song_links", "spotify_at", "TEXT");
+            Execute("PRAGMA user_version = 9;");
+        }
     }
 
     // ---- 곡 바깥 링크(커버·Last.fm) ----
@@ -186,16 +196,14 @@ public sealed class LyricsStore : IDisposable
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText =
-                "SELECT cover_url, cover_source, cover_at, lastfm_url FROM song_links WHERE key = $k;";
+                "SELECT cover_url, cover_source, cover_at, lastfm_url, spotify_uri, spotify_at "
+                + "FROM song_links WHERE key = $k;";
             cmd.Parameters.AddWithValue("$k", key);
             using var reader = cmd.ExecuteReader();
             if (!reader.Read()) return new SongLinks(key);
-            return new SongLinks(
-                key,
-                reader.IsDBNull(0) ? null : reader.GetString(0),
-                reader.IsDBNull(1) ? null : reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3));
+
+            string? At(int i) => reader.IsDBNull(i) ? null : reader.GetString(i);
+            return new SongLinks(key, At(0), At(1), At(2), At(3), At(4), At(5));
         }
     }
 
@@ -234,6 +242,26 @@ public sealed class LyricsStore : IDisposable
                 """;
             cmd.Parameters.AddWithValue("$k", key);
             cmd.Parameters.AddWithValue("$u", url);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Spotify 트랙을 찾은 결과를 확정한다. <b>못 찾았을 때도 부른다</b>(<paramref name="uri"/>=null) —
+    /// <c>spotify_at</c>이 채워져 곡을 열 때마다 검색을 되풀이하지 않는다(커버와 같은 규칙).
+    /// </summary>
+    public void SetSpotifyUri(string key, string? uri)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO song_links (key, spotify_uri, spotify_at, updated_at) VALUES ($k, $u, $at, $at)
+                ON CONFLICT(key) DO UPDATE SET spotify_uri = $u, spotify_at = $at, updated_at = $at;
+                """;
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.Parameters.AddWithValue("$u", (object?)uri ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$at", UtcNow());
             cmd.ExecuteNonQuery();
         }

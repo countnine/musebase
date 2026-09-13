@@ -260,7 +260,8 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
                     string.IsNullOrWhiteSpace(body.CoverUrl) ? null : body.CoverUrl,
                     body.CoverSource, body.LastFmUrl,
                     body.LoveConnected, body.LoveKnown, body.Loved,
-                    string.IsNullOrWhiteSpace(body.Key) ? null : body.Key);
+                    string.IsNullOrWhiteSpace(body.Key) ? null : body.Key,
+                    body.SpotifyConnected, body.SpotifyKnown, body.SpotifySaved);
         }
         catch (Exception)
         {
@@ -282,6 +283,11 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
 
         /// <summary>구버전 서버는 이 필드를 안 보낸다 — 그러면 null이고 관리 화면 버튼만 사라진다.</summary>
         public string? Key { get; init; }
+
+        // 구버전 서버는 안 보낸다 — 전부 false가 되어 Spotify 표시가 그냥 없는 것과 같아진다.
+        public bool SpotifyConnected { get; init; }
+        public bool SpotifyKnown { get; init; }
+        public bool SpotifySaved { get; init; }
     }
 
     public async Task SetAsync(string title, string artist, Lyrics lyrics, CancellationToken ct = default)
