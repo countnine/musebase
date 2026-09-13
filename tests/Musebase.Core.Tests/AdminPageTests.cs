@@ -298,7 +298,7 @@ public class AdminPageTests
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
         Assert.Contains("엔진 미구성", html);
-        Assert.DoesNotContain("/admin/meanings/backfill", html);
+        Assert.DoesNotContain($"{Routes.Base}/meanings/backfill", html);
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public class AdminPageTests
 
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
-        Assert.Contains("/admin/meanings/backfill", html);
+        Assert.Contains($"{Routes.Base}/meanings/backfill", html);
         Assert.Contains("의미 일괄 생성 (30곡)", html);
     }
 
@@ -323,7 +323,7 @@ public class AdminPageTests
             Meanings = new MeaningSummary(5, 1, 0, Pending: 0, Enabled: true),
         };
 
-        Assert.DoesNotContain("/admin/meanings/backfill",
+        Assert.DoesNotContain($"{Routes.Base}/meanings/backfill",
             AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
     }
 
@@ -413,9 +413,9 @@ public class AdminPageTests
     {
         var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
 
-        Assert.Contains("/admin/search\">전체 보기", html);   // 최근 올라온 가사 = 질의 없는 검색 화면
+        Assert.Contains($"{Routes.Base}/search\">전체 보기", html);   // 최근 올라온 가사 = 질의 없는 검색 화면
         foreach (var view in AdminPages.ListViews.Keys)
-            Assert.Contains($"/admin/list?view={view}", html);
+            Assert.Contains($"{Routes.Base}/list?view={view}", html);
     }
 
     [Fact]
@@ -442,7 +442,7 @@ public class AdminPageTests
 
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
-        Assert.Contains("/admin/song?key=kids%7Cmgmt", html);
+        Assert.Contains($"{Routes.Base}/song?key=kids%7Cmgmt", html);
         Assert.Contains("가사 보기", html);
     }
 
@@ -457,7 +457,7 @@ public class AdminPageTests
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
         Assert.DoesNotContain("가사 보기", html);
-        Assert.Contains("/admin/search?q=Kids", html);
+        Assert.Contains($"{Routes.Base}/search?q=Kids", html);
     }
 
     // ---- 검색 화면의 의미 필터 ----
@@ -475,12 +475,53 @@ public class AdminPageTests
     }
 
     [Fact]
-    public void 고른_필터가_폼에_남아_있다()
+    public void 고른_필터_칩이_켜진_채로_남는다()
     {
-        var html = AdminPages.SearchPage(null, [], Kst, LyricsStore.MeaningFilterOk);
+        var counts = new SongCounts(All: 10, Ok: 4, Pending: 3, Insufficient: 2, NoSource: 1, Failed: 0, Loved: 5);
+        var html = AdminPages.SearchPage(null, [], Kst, LyricsStore.MeaningFilterOk, counts, page: 1, total: 4);
 
-        Assert.Contains($"value=\"{LyricsStore.MeaningFilterOk}\" selected", html);
-        Assert.Contains("의미 있음", html);
+        Assert.Contains($"class=\"chip on\" href=\"{Routes.Base}/search?q=&meaning=ok\"", html);
+        Assert.Contains("의미 있음 <b>4</b>", html);
+    }
+
+    [Fact]
+    public void 칩은_각_필터의_건수를_보여_준다()
+    {
+        var counts = new SongCounts(All: 10, Ok: 4, Pending: 3, Insufficient: 2, NoSource: 1, Failed: 0, Loved: 5);
+        var html = AdminPages.SearchPage(null, [], Kst, null, counts, page: 1, total: 10);
+
+        Assert.Contains("전체 <b>10</b>", html);
+        Assert.Contains("아직 안 만듦 <b>3</b>", html);
+        Assert.Contains("자료 부족 <b>2</b>", html);
+        Assert.Contains("♥ 즐겨찾기 <b>5</b>", html);
+
+        // 0건인 칩은 그리지 않는다 — 누를 이유가 없는 칸이 있는 것들을 묻는다.
+        Assert.DoesNotContain("생성 실패", html);
+
+        // 드롭다운은 사라졌다.
+        Assert.DoesNotContain("<select name=\"meaning\"", html);
+    }
+
+    [Fact]
+    public void 건수를_모르면_칩을_그리지_않는다()
+    {
+        // 곡을 못 찾아 검색 화면으로 되돌리는 경로는 건수를 세지 않고 부른다.
+        var html = AdminPages.SearchPage("kids", [], Kst);
+
+        Assert.DoesNotContain("class=\"chip", html);
+    }
+
+    [Fact]
+    public void 여러_쪽이면_이전_다음이_생긴다()
+    {
+        var counts = new SongCounts(All: 100, Ok: 0, Pending: 100, Insufficient: 0, NoSource: 0, Failed: 0, Loved: 0);
+        var rows = Enumerable.Range(0, AdminPages.PageSize).Select(i => Song($"곡{i}", null)).ToList();
+        var html = AdminPages.SearchPage(null, rows, Kst, null, counts, page: 2, total: 100);
+
+        Assert.Contains("31–60 · 전체 100건", html);
+        Assert.Contains($"{Routes.Base}/search?q=&meaning=&page=1", html);
+        Assert.Contains($"{Routes.Base}/search?q=&meaning=&page=3", html);
+        Assert.Contains("2 / 4", html);
     }
 
     // ---- 로그아웃 위치 ----
@@ -491,11 +532,11 @@ public class AdminPageTests
         // 가운데 있으면 잘못 누른다 — `out` 클래스가 오른쪽 끝으로 미는 CSS와 짝이다.
         var html = AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst);
 
-        var search = html.IndexOf("/admin/search\"", StringComparison.Ordinal);
-        var logout = html.IndexOf("/admin/logout", StringComparison.Ordinal);
+        var search = html.IndexOf($"{Routes.Base}/search\"", StringComparison.Ordinal);
+        var logout = html.IndexOf($"{Routes.Base}/logout", StringComparison.Ordinal);
 
         Assert.True(search > 0 && logout > search, "로그아웃이 가사 검색보다 뒤여야 한다");
-        Assert.Contains("<a href=\"/admin/logout\" class=\"out\">", html);
+        Assert.Contains($"<a href=\"{Routes.Base}/logout\" class=\"out\">", html);
         Assert.Contains("nav a.out{margin-left:auto", html);
     }
 
@@ -562,7 +603,7 @@ public class AdminPageTests
     [Fact]
     public void 계정을_연결하지_않으면_좋아요_토글이_없다()
     {
-        Assert.DoesNotContain("/admin/song/love", SongPage());
+        Assert.DoesNotContain($"{Routes.Base}/song/love", SongPage());
     }
 
     /// <summary>
@@ -575,12 +616,12 @@ public class AdminPageTests
         var html = SongPage();
 
         var actions = html.IndexOf("class=\"actions\"", StringComparison.Ordinal);
-        var edit = html.IndexOf("/admin/song/edit", StringComparison.Ordinal);
+        var edit = html.IndexOf($"{Routes.Base}/song/edit", StringComparison.Ordinal);
 
         Assert.True(actions > 0 && edit > 0);
         Assert.True(actions < edit, "기능 버튼이 편집 폼보다 위에 있어야 한다");
 
-        foreach (var action in new[] { "/admin/song/cover", "/admin/song/ad", "/admin/song/delete" })
+        foreach (var action in new[] { $"{Routes.Base}/song/cover", $"{Routes.Base}/song/ad", $"{Routes.Base}/song/delete" })
             Assert.True(html.IndexOf(action, StringComparison.Ordinal) is var i && i > actions && i < edit,
                 $"{action}이 기능 줄 안에 있어야 한다");
     }
@@ -601,7 +642,7 @@ public class AdminPageTests
     {
         var html = SongPage(love: new LoveState(Connected: true, Known: true, Loved: true));
 
-        Assert.Contains("/admin/song/love", html);
+        Assert.Contains($"{Routes.Base}/song/love", html);
         Assert.Contains("♥ 좋아요 해제", html);
         Assert.Contains("name=\"on\" value=\"0\"", html);
         Assert.Contains("data-busy", html);   // 스피너 + 히스토리 안 늘리기가 따라온다
@@ -633,7 +674,7 @@ public class AdminPageTests
     public void 연결할_수_없는_구성이면_LastFm_카드를_숨긴다()
     {
         // 눌러도 안 되는 것을 보여 주면 사람을 헷갈리게 한다(secret이 없는 상태).
-        Assert.DoesNotContain("/admin/lastfm/connect",
+        Assert.DoesNotContain($"{Routes.Base}/lastfm/connect",
             AdminPages.Dashboard(EmptyDashboard(), DateTimeOffset.UtcNow, Kst));
     }
 
@@ -642,12 +683,111 @@ public class AdminPageTests
     {
         var before = AdminPages.Dashboard(
             EmptyDashboard() with { LastFm = new LastFmLink(null) }, DateTimeOffset.UtcNow, Kst);
-        Assert.Contains("<a href=\"/admin/lastfm/connect\">", before);
+        Assert.Contains($"<a href=\"{Routes.Base}/lastfm/connect\">", before);
 
         var after = AdminPages.Dashboard(
             EmptyDashboard() with { LastFm = new LastFmLink("jay") }, DateTimeOffset.UtcNow, Kst);
         Assert.Contains("연결됨: <b>jay</b>", after);
-        Assert.Contains("/admin/lastfm/disconnect", after);
+        Assert.Contains($"{Routes.Base}/lastfm/disconnect", after);
+    }
+
+
+    // ---- 되돌릴 수 없는 동작은 먼저 묻는다 ----
+
+    /// <summary>
+    /// 예전에는 [이 곡 삭제]·[광고로 표시]가 <b>한 번의 클릭으로</b> 실행됐다(소스 전체에 confirm이 0건).
+    /// 스크립트는 하나뿐이라는 규칙을 지키려 기존 제출 핸들러에 붙였다 — CSP 해시가 자동으로 따라온다.
+    /// </summary>
+    [Fact]
+    public void 삭제와_광고_표시는_확인을_먼저_받는다()
+    {
+        var html = SongPage();
+
+        var delete = html.IndexOf($"{Routes.Base}/song/delete", StringComparison.Ordinal);
+        var ad = html.IndexOf($"{Routes.Base}/song/ad", StringComparison.Ordinal);
+        var cover = html.IndexOf($"{Routes.Base}/song/cover", StringComparison.Ordinal);
+
+        Assert.Contains("data-confirm", html[ad..(ad + 200)]);
+        Assert.Contains("data-confirm", html[delete..(delete + 200)]);
+
+        // 되돌릴 수 있는 것까지 물으면 확인창이 의미를 잃는다.
+        Assert.DoesNotContain("data-confirm", html[cover..(cover + 200)]);
+    }
+
+    [Fact]
+    public void 확인_스크립트는_취소하면_제출을_막는다()
+    {
+        // 스크립트는 여전히 하나뿐이고, CSP는 그 해시만 허용한다(두 규칙 다 이미 테스트가 있다).
+        Assert.Contains("data-confirm", AdminHtml.BusyScript);
+        Assert.Contains("preventDefault", AdminHtml.BusyScript);
+    }
+
+    [Fact]
+    public void 좋아요_버튼도_옆_버튼과_같은_높이다()
+    {
+        // .actions가 flex(stretch)라 margin이 붙은 폼만 눌려 작아 보였다.
+        var html = SongPage(love: new LoveState(true, true, false));
+        var love = html.IndexOf($"{Routes.Base}/song/love", StringComparison.Ordinal);
+
+        Assert.Contains("style=\"margin:0\"", html[love..(love + 120)]);
+    }
+
+    // ---- 목록 ----
+
+    [Fact]
+    public void 아티스트를_누르면_그_아티스트로_검색한다()
+    {
+        var html = AdminPages.SearchPage(null, [Song("Kids", "ok")], Kst);
+
+        Assert.Contains($"<a href=\"{Routes.Base}/search?q=%EC%95%84%ED%8B%B0%EC%8A%A4%ED%8A%B8\">아티스트</a>", html);
+    }
+
+    [Fact]
+    public void 기기_이름은_줄바꿈되지_않는다()
+    {
+        // IP(100.x.y.z)나 긴 이름이 두 줄로 접혀 표가 들쭉날쭉했다.
+        var html = AdminPages.SearchPage(null, [Song("Kids", "ok")], Kst);
+
+        var device = html.IndexOf("거실PC", StringComparison.Ordinal);
+        Assert.Contains("nowrap", html[(device - 40)..device]);
+    }
+
+    // ---- 의미 생성 엔진 카드 ----
+
+    [Fact]
+    public void 지금_쓰는_모델을_대시보드에_보여_준다()
+    {
+        var card = new MeaningEngineCard(
+            "openrouter", "anthropic/claude-opus-5", HasKey: true, Overridden: true,
+            GeminiKeyHint: null, GeminiModel: null,
+            OpenRouterKeyHint: "…cdef", OpenRouterModel: "anthropic/claude-opus-5");
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with { MeaningEngine = card }, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("anthropic/claude-opus-5", html);
+        Assert.Contains($"{Routes.Base}/meanings/engine", html);
+        Assert.Contains("환경변수로 되돌리기", html);
+    }
+
+    [Fact]
+    public void 키가_없으면_엔진을_골라도_꺼져_있다고_밝힌다()
+    {
+        var card = new MeaningEngineCard(
+            "openrouter", "google/gemini-2.5-flash", HasKey: false, Overridden: false,
+            null, null, null, null);
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with { MeaningEngine = card }, DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("API 키가 없어 꺼져 있습니다", html);
+        Assert.DoesNotContain("환경변수로 되돌리기", html);   // 저장한 게 없으면 되돌릴 것도 없다
+    }
+
+    [Fact]
+    public void API_키는_끝_네_글자만_보여_준다()
+    {
+        Assert.Equal("…cdef", MeaningEngineCard.Hint("sk-or-v1-0123456789abcdef"));
+        Assert.Null(MeaningEngineCard.Hint(""));
+        Assert.Null(MeaningEngineCard.Hint(null));
     }
 
     private static string SongPage(SongLinks? links = null, LoveState? love = null) =>

@@ -102,6 +102,27 @@ public sealed record MeaningOptions(
     /// </summary>
     public LastFmAccount LastFmAccount() => new(LastFmKey, LastFmSecret);
 
+    /// <summary>
+    /// 지금 실제로 불릴 모델 이름. 모델을 비워 두면 각 라이터의 기본값이 쓰이는데,
+    /// 화면에 빈칸으로 보이면 "설정이 안 된 것"으로 읽혀 사람이 같은 값을 또 넣는다.
+    /// </summary>
+    public string EffectiveModel => Engine switch
+    {
+        "openrouter" => string.IsNullOrWhiteSpace(OpenRouterModel)
+            ? OpenRouterMeaningWriter.DefaultModel : OpenRouterModel!.Trim(),
+        "gemini" => string.IsNullOrWhiteSpace(GeminiModel)
+            ? GeminiMeaningWriter.DefaultModel : GeminiModel!.Trim(),
+        _ => "",
+    };
+
+    /// <summary>고른 엔진에 쓸 API 키가 실제로 있는가 — 없으면 엔진을 골라도 꺼진 상태다.</summary>
+    public bool HasEngineKey => Engine switch
+    {
+        "openrouter" => !string.IsNullOrWhiteSpace(OpenRouterApiKey),
+        "gemini" => !string.IsNullOrWhiteSpace(GeminiApiKey),
+        _ => false,
+    };
+
     /// <summary>화면에 보여 줄 소스 이름.</summary>
     public static string SourceLabel(string id) => id switch
     {

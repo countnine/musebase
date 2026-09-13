@@ -163,6 +163,18 @@ public sealed class LyricsStore : IDisposable
                 """);
             Execute("PRAGMA user_version = 7;");
         }
+
+        if (version < 8)
+        {
+            // Last.fm에서 좋아요한 곡. 한 곡씩 물어보면 목록 한 화면에 수백 번 API를 부르게 되므로,
+            // `user.getLovedTracks`로 통째로 받아 여기 적어 두고 화면은 DB만 본다.
+            // loved_at은 언제 맞춰 본 값인지 — NULL이면 아직 한 번도 동기화하지 않았다는 뜻이다.
+            // ALTER에는 IF NOT EXISTS가 없다 — 다른 마이그레이션처럼 두 번 돌아도 괜찮아야 하므로
+            // (구 버전으로 내렸다 올리거나 user_version을 되감는 경우) 컬럼이 있는지 보고 넣는다.
+            AddColumnIfMissing("song_links", "loved", "INTEGER");
+            AddColumnIfMissing("song_links", "loved_at", "TEXT");
+            Execute("PRAGMA user_version = 8;");
+        }
     }
 
     // ---- 곡 바깥 링크(커버·Last.fm) ----
@@ -1137,16 +1149,110 @@ public sealed class LyricsStore : IDisposable
         + "l.has_inline, l.revision, l.updated_at, l.updated_by, m.status "
         + "FROM lyrics l LEFT JOIN meanings m ON m.key = l.key";
 
-    /// <summary>검색 화면의 의미 필터.</summary>
+    /// <summary>
+    /// 검색 화면의 필터. <b>서로 겹치지 않게</b> 나눈다 — 칩마다 건수를 띄우는데 합이 전체를
+    /// 넘으면 사람이 숫자를 믿지 않게 된다(<see cref="FilterLoved"/>만 예외로 다른 축이다).
+    ///
+    /// <see cref="MeaningFilterNone"/>(= ok가 아닌 곡 전부)만은 예외다. 나머지를 모두 품는 넓은 값이라
+    /// <b>칩으로는 쓰지 않고</b> 예전 주소·북마크를 위해 남겨 둔다. 칩이 쓰는 "아직 안 만듦"은
+    /// <see cref="MeaningFilterPending"/>이다 — 그게 일괄 생성이 실제로 처리할 대상이다.
+    /// </summary>
     public const string MeaningFilterOk = "ok";
     public const string MeaningFilterNone = "none";
+    public const string MeaningFilterPending = "pending";
+    public const string MeaningFilterInsufficient = "insufficient";
+    public const string MeaningFilterNoSource = "no-source";
+    public const string MeaningFilterFailed = "failed";
+
+    /// <summary>Last.fm 좋아요한 곡만. 의미 상태와 다른 축이라 같은 자리에서 배타적으로 고른다.</summary>
+    public const string FilterLoved = "loved";
 
     private static string MeaningWhere(string? filter) => filter switch
     {
         MeaningFilterOk => " m.status = 'ok' ",
         MeaningFilterNone => " (m.status IS NULL OR m.status <> 'ok') ",
+        MeaningFilterPending => " m.key IS NULL ",
+        MeaningFilterInsufficient => " m.status = 'insufficient' ",
+        MeaningFilterNoSource => " m.status = 'no-source' ",
+        MeaningFilterFailed => " m.status = 'failed' ",
+        FilterLoved => " s.loved = 1 ",
         _ => "",
     };
+
+    /// <summary>
+    /// 칩에 띄울 건수. 필터마다 따로 세면 쿼리가 여섯 번 나가므로 <b>한 번에</b> 센다.
+    /// 검색어는 반영하되 필터는 반영하지 않는다 — 지금 고른 칩을 바꿔도 옆 칩의 숫자는 그대로여야 한다.
+    /// </summary>
+    public SongCounts SearchCounts(string? query)
+    {
+        var like = AdminQuery.ToLikePattern(query);
+        var where = like is null ? ""
+            : @" WHERE (lower(l.title) LIKE $like ESCAPE '\' OR lower(l.artist) LIKE $like ESCAPE '\') ";
+
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "SELECT COUNT(*), "
+                + "SUM(CASE WHEN m.status = 'ok' THEN 1 ELSE 0 END), "
+                + "SUM(CASE WHEN m.key IS NULL THEN 1 ELSE 0 END), "
+                + "SUM(CASE WHEN m.status = 'insufficient' THEN 1 ELSE 0 END), "
+                + "SUM(CASE WHEN m.status = 'no-source' THEN 1 ELSE 0 END), "
+                + "SUM(CASE WHEN m.status = 'failed' THEN 1 ELSE 0 END), "
+                + "SUM(CASE WHEN s.loved = 1 THEN 1 ELSE 0 END) "
+                + "FROM lyrics l LEFT JOIN meanings m ON m.key = l.key "
+                + "LEFT JOIN song_links s ON s.key = l.key" + where + ";";
+            if (like is not null) cmd.Parameters.AddWithValue("$like", like);
+
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read()) return new SongCounts(0, 0, 0, 0, 0, 0, 0);
+
+            int At(int i) => reader.IsDBNull(i) ? 0 : reader.GetInt32(i);
+            return new SongCounts(At(0), At(1), At(2), At(3), At(4), At(5), At(6));
+        }
+    }
+
+    /// <summary>
+    /// Last.fm 좋아요 목록을 통째로 받아 <c>song_links.loved</c>를 맞춘다.
+    /// <b>먼저 전부 0으로 내린 뒤</b> 맞은 것만 올린다 — 저쪽에서 해제한 곡이 여기 남으면 안 된다.
+    /// 조회와 같은 규칙(<see cref="Get"/>)으로 대상 행을 찾으므로 표기가 조금 달라도 붙는다.
+    /// </summary>
+    public (int Matched, int Total) SyncLoved(IReadOnlyList<(string Title, string Artist)> loved)
+    {
+        var at = UtcNow();
+        lock (_lock)
+        {
+            using var tx = _conn.BeginTransaction();
+
+            using (var clear = _conn.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "UPDATE song_links SET loved = 0, loved_at = $at;";
+                clear.Parameters.AddWithValue("$at", at);
+                clear.ExecuteNonQuery();
+            }
+
+            var matched = 0;
+            foreach (var (title, artist) in loved)
+            {
+                var entry = Get(title, artist);
+                if (entry?.Key is not { Length: > 0 } key) continue;
+
+                using var set = _conn.CreateCommand();
+                set.Transaction = tx;
+                set.CommandText =
+                    "INSERT INTO song_links (key, loved, loved_at, updated_at) VALUES ($k, 1, $at, $at) "
+                    + "ON CONFLICT(key) DO UPDATE SET loved = 1, loved_at = $at, updated_at = $at;";
+                set.Parameters.AddWithValue("$k", key);
+                set.Parameters.AddWithValue("$at", at);
+                set.ExecuteNonQuery();
+                matched++;
+            }
+
+            tx.Commit();
+            return (matched, loved.Count);
+        }
+    }
 
     /// <summary>
     /// 제목·아티스트 부분 일치 검색(대소문자 무시). 질의가 비면 최근 갱신순 목록.
@@ -1163,11 +1269,14 @@ public sealed class LyricsStore : IDisposable
 
         var where = conditions.Count == 0 ? "" : " WHERE " + string.Join(" AND ", conditions);
 
+        // 좋아요 필터만 song_links를 본다 — 늘 조인하면 목록 쿼리가 이유 없이 무거워진다.
+        var join = meaning == FilterLoved ? " LEFT JOIN song_links s ON s.key = l.key" : "";
+
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText =
-                $"{SongSelect}{where} ORDER BY l.updated_at DESC LIMIT $limit OFFSET $offset;";
+                $"{SongSelect}{join}{where} ORDER BY l.updated_at DESC LIMIT $limit OFFSET $offset;";
             if (like is not null) cmd.Parameters.AddWithValue("$like", like);
             cmd.Parameters.AddWithValue("$limit", limit);
             cmd.Parameters.AddWithValue("$offset", offset);
@@ -1275,6 +1384,19 @@ public sealed class LyricsStore : IDisposable
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         return Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+    }
+
+    /// <summary>없을 때만 컬럼을 더한다 — <c>ALTER TABLE</c>에는 <c>IF NOT EXISTS</c>가 없다.</summary>
+    private void AddColumnIfMissing(string table, string column, string type)
+    {
+        using (var check = _conn.CreateCommand())
+        {
+            check.CommandText = $"SELECT 1 FROM pragma_table_info('{table}') WHERE name = $c;";
+            check.Parameters.AddWithValue("$c", column);
+            if (check.ExecuteScalar() is not null) return;
+        }
+
+        Execute($"ALTER TABLE {table} ADD COLUMN {column} {type};");
     }
 
     private void Execute(string sql)

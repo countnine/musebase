@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text;
+
 namespace Musebase.Server;
 
 /// <summary>
@@ -50,10 +53,43 @@ public static class MeaningLinks
     /// <b>API는 쓸 수 없다</b> — Tunefind는 셀프서비스 가입 창구가 없고 라이선스 계약이 필요하며
     /// 무료 티어가 없다. robots.txt도 AI 크롤러를 전면 차단한다. 그래서 링크만 단다.
     ///
-    /// 반드시 <c>/search?q=</c>다. 검색 결과에 흔히 나오는 <c>/search/site?q=</c>는 실측에서 <b>404</b>다.
+    /// <b>곡 페이지 주소를 규칙으로 만든다</b> — <c>/song/{아티스트}/{곡명}</c>(소문자·하이픈).
+    /// 검색으로 보내면 잘 안 맞는다. 아티스트와 곡명을 한 검색어에 함께 넣으면 결과가 흩어지기
+    /// 때문이다. 규칙 생성이 안전한 이유는 Last.fm과 같다 — 슬러그가 틀리면 "없는 페이지"가 뜰 뿐,
+    /// Musixmatch처럼 조용히 <b>다른 곡</b>으로 넘어가지 않는다.
+    ///
+    /// 슬러그를 못 만드는 이름(한글 등 비ASCII)은 검색으로 물러나되, 그때도 <b>곡명만</b> 넣는다.
+    /// 물러날 때 쓰는 주소는 반드시 <c>/search?q=</c>다 — 흔히 보이는 <c>/search/site?q=</c>는 실측 404.
     /// </summary>
-    public static string Tunefind(string title, string artist) =>
-        "https://www.tunefind.com/search?q=" + Uri.EscapeDataString(Query(title, artist));
+    public static string Tunefind(string title, string artist)
+    {
+        var a = Slug(artist);
+        var t = Slug(title);
+        return a.Length > 0 && t.Length > 0
+            ? $"https://www.tunefind.com/song/{a}/{t}"
+            : "https://www.tunefind.com/search?q=" + Uri.EscapeDataString((title ?? "").Trim());
+    }
+
+    /// <summary>
+    /// 주소에 넣을 슬러그 — 소문자, 영숫자 사이를 하이픈 하나로. 만들 수 없으면 빈 문자열.
+    ///
+    /// 발음기호가 붙은 글자는 분해해서 기본 글자만 남긴다(<c>Sigur Rós</c> → <c>sigur-ros</c>).
+    /// 한글·일본어처럼 분해해도 ASCII가 안 나오는 이름은 빈 문자열이 되어 호출자가 검색으로 돌아간다.
+    /// </summary>
+    public static string Slug(string? value)
+    {
+        var normalized = (value ?? "").Trim().ToLowerInvariant().Normalize(NormalizationForm.FormD);
+
+        var sb = new StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+        {
+            if (char.IsAsciiLetterOrDigit(ch)) sb.Append(ch);
+            else if (CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.NonSpacingMark) continue;
+            else if (sb.Length > 0 && sb[^1] != '-') sb.Append('-');
+        }
+
+        return sb.ToString().Trim('-');
+    }
 
     public static string YouTube(string title, string artist) =>
         "https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(Query(title, artist));

@@ -8,11 +8,14 @@
   설정 파일(`settings.json`)·텔레메트리 Worker와 같은 규칙이다. 혼동 주의.
 - 시각은 ISO-8601 UTC 문자열(`2026-07-28T13:05:00Z`).
 - 오류 응답은 `{"error":"..."}`.
-- 모든 경로에 `/v1` 프리픽스.
+- 모든 경로에 `/musebase/v1` 프리픽스(서버 주소 뒤에 붙는다).
+  - 2026-09-13에 `/v1` → `/musebase/v1`로 **옮겼고 옛 경로는 남기지 않았다**. 한 호스트에 다른
+    서비스를 함께 얹을 수 있게 하려는 것이다. 앱은 코드를 고칠 필요가 없다 — 설정의 서버 주소를
+    `https://호스트/musebase`로 바꾸면 된다(클라이언트가 `v1/…`을 상대 경로로 붙인다).
 
 ## 인증
 
-`/v1/healthz`를 제외한 모든 요청은 공유 토큰을 요구한다.
+`/musebase/v1/healthz`를 제외한 모든 요청은 공유 토큰을 요구한다.
 
 ```
 Authorization: Bearer <서버가 발급한 임의 문자열>
@@ -25,15 +28,15 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/v1/healthz` | 무인증. 본문 `ok` |
-| GET | `/v1/lyrics?title=&artist=` | 가사 1건 조회. 히트 `200 LyricsEntry`, 미스 `404` |
-| PUT | `/v1/lyrics` | 가사 1건 업서트. 본문 `LyricsEntry`(요청 필드만) |
-| GET | `/v1/stats` | 곡 수·최근 갱신(검증·디버깅용) |
-| GET | `/v1/meaning?title=&artist=` | 곡의 의미 1건. 히트 `200 MeaningEntry`, 없으면 `404` |
-| POST | `/v1/meaning?title=&artist=` | 의미를 **지금 만든다**. 성공 `200 MeaningEntry`, 못 만들면 `202 {status}` |
-| GET | `/v1/song?title=&artist=` | 곡에 딸린 것들(커버·좋아요). 없는 곡은 `404` |
-| POST | `/v1/song/cover?title=&artist=` | 커버를 다시 찾는다 |
-| POST | `/v1/song/love?title=&artist=&on=1\|0` | Last.fm 좋아요를 켜거나 끈다 |
+| GET | `/musebase/v1/healthz` | 무인증. 본문 `ok` |
+| GET | `/musebase/v1/lyrics?title=&artist=` | 가사 1건 조회. 히트 `200 LyricsEntry`, 미스 `404` |
+| PUT | `/musebase/v1/lyrics` | 가사 1건 업서트. 본문 `LyricsEntry`(요청 필드만) |
+| GET | `/musebase/v1/stats` | 곡 수·최근 갱신(검증·디버깅용) |
+| GET | `/musebase/v1/meaning?title=&artist=` | 곡의 의미 1건. 히트 `200 MeaningEntry`, 없으면 `404` |
+| POST | `/musebase/v1/meaning?title=&artist=` | 의미를 **지금 만든다**. 성공 `200 MeaningEntry`, 못 만들면 `202 {status}` |
+| GET | `/musebase/v1/song?title=&artist=` | 곡에 딸린 것들(커버·좋아요). 없는 곡은 `404` |
+| POST | `/musebase/v1/song/cover?title=&artist=` | 커버를 다시 찾는다 |
+| POST | `/musebase/v1/song/love?title=&artist=&on=1\|0` | Last.fm 좋아요를 켜거나 끈다 |
 
 광고로 표시된 제목은 조회·등록이 모두 막힌다(아래 "광고 차단").
 
@@ -45,10 +48,10 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 구간에 광고 플래그를 주지 않는 경로가 있어(실측) `광고 없이 음악을 감상하세요.` 같은 행이
 가사로 올라오기 때문이다.
 
-- `GET /v1/lyrics` → `404`, 본문 `{"error":"ad","ad":true}`.
+- `GET /musebase/v1/lyrics` → `404`, 본문 `{"error":"ad","ad":true}`.
   클라이언트는 **제공자 검색을 하지 말아야 한다** — 광고는 곡이 아니라 검색이 늘 헛돌고,
   어쩌다 뭔가 맞으면 광고 위에 엉뚱한 가사가 뜬다.
-- `PUT /v1/lyrics` → `202`, 본문 `{"error":"ad"}`. 저장하지 않는다.
+- `PUT /musebase/v1/lyrics` → `202`, 본문 `{"error":"ad"}`. 저장하지 않는다.
   **차단의 실효는 이쪽에 있다** — 힌트를 모르는 구버전 클라이언트도 여기서 막힌다.
 
 판정은 **제목만** 본다(공백·문장부호·대소문자 무시). 같은 광고가 아티스트를 여러 이름으로
@@ -151,7 +154,7 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 만료(TTL)는 두지 않는다. 삭제 API도 없다 — 한 기기의 "틀린 가사" 판정이 모든 기기의 캐시를
 지우지 않도록, 억제는 로컬에만 남긴다. (사람이 확인하고 지우는 경로는 관리자 UI에만 있다. 아래 참고.)
 
-## 곡의 의미 (`GET /v1/meaning`)
+## 곡의 의미 (`GET /musebase/v1/meaning`)
 
 곡이 무엇에 대한 노래인지 한 문단으로 알려 준다. 서버가 외부 자료(Genius·Last.fm·Wikipedia)를
 모아 요약해 저장해 둔 것을 읽는다. **자동 생성은 없다** — 만드는 일은 사람이 버튼을 눌렀을 때만
@@ -178,7 +181,7 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 > 요구한다. `summary`를 보여 주는 화면은 `attribution`의 이름·링크를 함께 렌더해야 하며,
 > 목록에 Wikipedia가 있으면 CC BY-SA 표기도 함께 붙인다.
 
-### 의미 만들기 (`POST /v1/meaning?title=&artist=`)
+### 의미 만들기 (`POST /musebase/v1/meaning?title=&artist=`)
 
 본문은 없다. 곡은 **서버에 이미 있어야 한다**(의미는 가사 행에 붙는다) — 앱은 방금 그 곡의 가사를
 받아 띄운 상태이므로 정상 경로에서는 늘 있다.
@@ -199,7 +202,7 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 
 운영자는 `MUSEBASE_MEANING_ALLOW_CLIENT=0`으로 이 엔드포인트만 막을 수 있다(조회는 그대로).
 
-## 곡에 딸린 것들 (`GET /v1/song`)
+## 곡에 딸린 것들 (`GET /musebase/v1/song`)
 
 앨범 커버와 Last.fm 좋아요. 가사가 아니라 **가사 옆에 붙는 것**이라, 없어도 아무것도 깨지지 않는다.
 앱 제어판이 곡 하나에 필요한 값을 한 번에 받아 가라고 묶어 두었다.
@@ -212,14 +215,20 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | `loveConnected` | bool | 서버에 Last.fm 계정이 연결돼 있는가. false면 좋아요 UI를 감춘다 |
 | `loveKnown` | bool | 좋아요 여부를 **실제로 확인했는가** — 아래 주의 |
 | `loved` | bool | 좋아요 상태 |
+| `key` | string? | 서버가 이 곡에 붙인 키 — 아래 |
 
 > ⚠️ **`loveKnown`이 false면 `loved`를 믿으면 안 된다.** 조회가 실패했다는 뜻이라 값은 기본값일
 > 뿐이다. 이걸 꺼진 하트로 그리면 사람이 눌러서 **이미 켜 둔 좋아요를 끈다.**
 
+**`key`로 관리 화면을 열 수 있다.** 앱은 `{설정한 서버 주소}/song?key=…`로 그 곡의 관리 화면에
+바로 갈 수 있다. **키를 클라이언트가 조립하면 안 된다** — 정규화 규칙은 전적으로 서버 몫이라
+(위 "키 정규화" 절) 같은 곡이라도 앱이 만든 키는 서버의 것과 다를 수 있다. 구버전 서버는 이
+필드를 보내지 않으므로, 없으면 그 버튼을 감춘다.
+
 **커버는 이 호출에서 찾을 수 있다.** 서버가 아직 안 찾아본 곡이면 여기서 외부 API를 한 번 부르므로
 가사 조회보다 느릴 수 있다(곡당 한 번, 못 찾은 것도 기억한다). 화면을 막지 말고 받는 대로 채운다.
 
-`POST /v1/song/cover`는 기억해 둔 결과를 버리고 다시 찾는다(곡명을 고친 뒤). `POST /v1/song/love`는
+`POST /musebase/v1/song/cover`는 기억해 둔 결과를 버리고 다시 찾는다(곡명을 고친 뒤). `POST /musebase/v1/song/love`는
 `on=1|0`으로 켜고 끄며, 계정이 없으면 `503`, Last.fm 쓰기가 실패하면 `502`다. 둘 다 성공하면
 `GET`과 같은 본문을 돌려주므로 앱이 확인차 다시 묻지 않아도 된다.
 
@@ -234,12 +243,12 @@ Musixmatch의 "Meaning" 섹션 자체는 공개 API에 엔드포인트가 없다
 다루며 기본은 꺼져 있다(사람이 쓴 해설이 아니라 기계 분석 결과다 — ADR-0007). 켜져 있으면
 `attribution`에 `Musixmatch (AI 분석)`이라는 이름으로 나타나므로, 화면은 그 이름을 그대로 보여 준다.
 
-## 관리자 UI (`/admin/*`) — 계약 밖
+## 관리자 UI (`/musebase/*`) — 계약 밖
 
-서버는 사람이 보는 관리자 화면(`/admin`, `/admin/search`, `/admin/song`, `/admin/raw`, 편집·삭제 POST)을
+서버는 사람이 보는 관리자 화면(`/musebase`, `/musebase/search`, `/musebase/song`, `/musebase/raw`, 편집·삭제 POST)을
 함께 제공한다. 이 경로들은 **이 계약의 대상이 아니며 예고 없이 바뀔 수 있다** — 기계가 아니라 사람이
 쓰는 UI라 수명·호환 요구가 다르다. 인증도 다르다(브라우저가 `Authorization` 헤더를 붙일 수 없어
-서명 쿠키를 쓴다). 클라이언트 구현은 `/v1/*`만 사용해야 한다.
+서명 쿠키를 쓴다). 클라이언트 구현은 `/musebase/v1/*`만 사용해야 한다.
 
 ## 예시
 
@@ -248,6 +257,6 @@ Musixmatch의 "Meaning" 섹션 자체는 공개 API에 엔드포인트가 없다
 ## 변경 규칙
 
 - **필드 추가**는 하위 호환: 수신 측은 모르는 필드를 무시하고, 새 필드는 nullable이거나 기본값을 갖는다.
-  이 경우 버전(`/v1`)은 유지한다.
+  이 경우 버전(`/musebase/v1`)은 유지한다.
 - **의미 변경·필드 삭제·경로 변경**은 호환 파괴 → `/v2`로 올리고 ADR에 기록한다.
 - 이 문서와 서버·클라이언트 구현은 **같은 PR에서** 갱신한다.

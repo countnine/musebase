@@ -75,10 +75,17 @@ public interface IRemoteLyricsCache
 /// 곡 하나에 딸린 것들. 가사가 아니라 <b>가사 옆에 붙는 것</b>이라 없어도 아무것도 깨지지 않는다.
 /// </summary>
 /// <param name="CoverUrl">앨범 커버 주소(없으면 null — 찾아봤지만 없는 곡도 많다).</param>
+/// <param name="CoverSource">커버를 준 곳(<c>itunes</c> | <c>deezer</c>). 출처 표기·진단용.</param>
+/// <param name="LastFmUrl">Last.fm이 알려 준 정식 곡 주소(없으면 null).</param>
 /// <param name="LoveConnected">서버에 Last.fm 계정이 연결돼 있는가. false면 좋아요 UI를 감춘다.</param>
 /// <param name="LoveKnown">
 /// 좋아요 여부를 실제로 확인했는가. false면 <paramref name="Loved"/>를 믿으면 안 된다 —
 /// 모르는 것을 꺼진 하트로 그리면 사람이 눌러서 이미 켜 둔 것을 끈다.
+/// </param>
+/// <param name="Loved">좋아요 상태(<paramref name="LoveKnown"/>이 true일 때만 의미가 있다).</param>
+/// <param name="Key">
+/// 서버가 이 곡에 붙인 키. 있으면 <c>{서버 주소}/song?key=…</c>로 관리 화면을 바로 열 수 있다.
+/// 키 규칙은 전적으로 서버 몫이라 <b>클라이언트가 만들어 쓰면 안 된다</b>.
 /// </param>
 public sealed record SongExtras(
     string? CoverUrl,
@@ -86,10 +93,20 @@ public sealed record SongExtras(
     string? LastFmUrl,
     bool LoveConnected,
     bool LoveKnown,
-    bool Loved)
+    bool Loved,
+    string? Key = null)
 {
     /// <summary>하트를 켜서 그려도 되는가 — 확인한 값일 때만.</summary>
     public bool ShowLoved => LoveKnown && Loved;
+
+    /// <summary>
+    /// 이 곡의 관리 화면 주소. 서버 주소를 받아 만든다(앱은 서버가 어디 있는지만 안다).
+    /// 키를 모르거나 서버 주소가 없으면 null — 호출자는 버튼을 감춘다.
+    /// </summary>
+    public string? AdminUrl(string? serverEndpoint) =>
+        string.IsNullOrWhiteSpace(Key) || string.IsNullOrWhiteSpace(serverEndpoint)
+            ? null
+            : $"{serverEndpoint!.TrimEnd('/')}/song?key={Uri.EscapeDataString(Key!)}";
 }
 
 /// <summary>의미 생성 요청의 결과.</summary>

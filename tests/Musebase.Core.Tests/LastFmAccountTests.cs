@@ -138,10 +138,11 @@ public class LastFmAccountTests
     public void 승인_주소에_돌아올_곳을_실어_보낸다()
     {
         // cb를 넘길 수 있어 API 계정에 콜백을 미리 등록하지 않아도 된다.
-        var url = new LastFmAccount("api-key", "secret").AuthorizeUrl("https://box.ts.net/admin/lastfm/callback");
+        var url = new LastFmAccount("api-key", "secret").AuthorizeUrl($"https://box.ts.net{Routes.Base}/lastfm/callback");
 
         Assert.StartsWith("https://www.last.fm/api/auth/?api_key=api-key&cb=", url);
-        Assert.Contains("https%3A%2F%2Fbox.ts.net%2Fadmin%2Flastfm%2Fcallback", url);
+        Assert.Contains(
+            "https%3A%2F%2Fbox.ts.net" + Uri.EscapeDataString($"{Routes.Base}/lastfm/callback"), url);
     }
 
     [Fact]

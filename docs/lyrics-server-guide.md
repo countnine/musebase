@@ -49,8 +49,8 @@ Android는 앱 내부 저장소에 둔다(디스크 암호화는 아님 — 테�
 
 ## 3. 관리자 페이지
 
-브라우저로 연다 — `https://oracle.oryx-skink.ts.net/admin?token=<토큰>`
-한 번 열면 쿠키가 저장되고 주소창이 `/admin`으로 정리된다(30일 유지, `/admin/logout`으로 해제).
+브라우저로 연다 — `https://oracle.oryx-skink.ts.net/musebase?token=<토큰>`
+한 번 열면 쿠키가 저장되고 주소창이 `/musebase`으로 정리된다(30일 유지, `/musebase/logout`으로 해제).
 테일넷 안에서만 열린다.
 
 ### 대시보드에서 보는 것
