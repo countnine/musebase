@@ -454,6 +454,10 @@ public sealed class OverlayWindow : Window
         _originalLine.KaraokeFill = ParseBrush(_settings.KaraokeColor, Color.FromRgb(0xFF, 0xEB, 0x3B));
         _translationLine.Fill = ParseBrush(_settings.TranslationColor, Color.FromRgb(0xE8, 0xE8, 0xE8));
 
+        var font = FontOf(_settings.OverlayFontFamily);
+        _originalLine.FontFamily = font;
+        _translationLine.FontFamily = font;
+
         var outline = ParseBrush(_settings.OutlineColor, Colors.Black, alpha: 0xE0);
         var thickness = Math.Clamp(_settings.OutlineThickness, 0, 8);
         _originalLine.Stroke = outline;
@@ -481,6 +485,17 @@ public sealed class OverlayWindow : Window
         var brush = new SolidColorBrush(color);
         brush.Freeze();
         return brush;
+    }
+
+    /// <summary>
+    /// 설정한 글꼴 이름을 <see cref="FontFamily"/>로. <b>폴백을 함께 넣는다</b> —
+    /// 이름을 직접 칠 수 있게 해 두었으므로 오타나 다른 PC에서 없는 글꼴이 들어올 수 있는데,
+    /// WPF는 그때 글꼴을 못 찾으면 기본 글꼴로 내려간다. 폴백을 명시해 두면 그 결과가 예측 가능하다.
+    /// </summary>
+    public static FontFamily FontOf(string? name)
+    {
+        var wanted = (name ?? "").Trim();
+        return wanted.Length == 0 ? new FontFamily("Segoe UI") : new FontFamily($"{wanted}, Segoe UI");
     }
 
     private static SolidColorBrush ParseBrush(string hex, Color fallback, byte? alpha = null)

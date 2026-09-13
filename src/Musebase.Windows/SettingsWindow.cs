@@ -274,6 +274,26 @@ public sealed class SettingsWindow : Window
             endpointPanel.Children.Add(Header("settings.translation.libre.endpoint"));
             endpointPanel.Children.Add(endpointBox);
 
+            // OpenRouter는 키 하나로 여러 모델을 부르므로 모델 이름을 따로 받는다.
+            var modelBox = new TextBox
+            {
+                Text = settings.OpenRouterModel ?? "",
+                Width = 300,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 2, 0, 6),
+                VerticalContentAlignment = VerticalAlignment.Center,
+            };
+            var modelPanel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left };
+            modelPanel.Children.Add(Header("settings.translation.openrouter.model"));
+            modelPanel.Children.Add(modelBox);
+            modelPanel.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.translation.openrouter.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 8),
+            });
+
             // 키 입력 영역(헤더 문구·표시 여부는 선택된 엔진에 따라 바뀐다)
             var keyHeader = Header("settings.translation.engine.header"); // 문구는 아래에서 엔진에 맞게 교체
             var keyHint = new TextBlock
@@ -308,6 +328,8 @@ public sealed class SettingsWindow : Window
                 }
                 endpointPanel.Visibility = currentEngineId.Equals("libretranslate", StringComparison.OrdinalIgnoreCase)
                     ? Visibility.Visible : Visibility.Collapsed;
+                modelPanel.Visibility = currentEngineId.Equals("openrouter", StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible : Visibility.Collapsed;
             }
             engineBox.SelectionChanged += (_, _) =>
             {
@@ -322,6 +344,7 @@ public sealed class SettingsWindow : Window
             translation.Children.Add(engineBox);
             translation.Children.Add(keyPanel);
             translation.Children.Add(endpointPanel);
+            translation.Children.Add(modelPanel);
             translation.Children.Add(Header("settings.deepl.lang.header"));
             translation.Children.Add(langBox);
 
@@ -520,6 +543,37 @@ public sealed class SettingsWindow : Window
             // ================= [오버레이 스타일] 탭 =================
             var appearance = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
 
+            // 글꼴 — 설치된 것을 고르거나 이름을 직접 칠 수 있다(IsEditable).
+            // 목록에 없는 이름을 넣어도 되게 둔 이유는 글꼴 패밀리 이름이 한글/영문 두 벌인 경우가
+            // 흔해서다. 없는 이름이면 OverlayWindow.FontOf가 Segoe UI로 내려간다.
+            var fontBox = new ComboBox
+            {
+                IsEditable = true,
+                Width = 240,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 2, 0, 6),
+                ItemsSource = Fonts.SystemFontFamilies
+                    .Select(f => f.Source)
+                    .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase)
+                    .ToList(),
+                Text = settings.OverlayFontFamily ?? "",
+            };
+            var fontPreview = new TextBlock
+            {
+                Text = Loc.T("settings.font.preview"),
+                FontSize = 20,
+                Margin = new Thickness(0, 0, 0, 10),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            void ApplyFontPreview() => fontPreview.FontFamily = Musebase.Windows.Overlay.OverlayWindow.FontOf(fontBox.Text);
+            fontBox.AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => ApplyFontPreview()));
+            fontBox.SelectionChanged += (_, _) => ApplyFontPreview();
+            ApplyFontPreview();
+
+            appearance.Children.Add(Header("settings.font.header"));
+            appearance.Children.Add(fontBox);
+            appearance.Children.Add(fontPreview);
+
             appearance.Children.Add(new TextBlock
             {
                 Text = Loc.T("settings.fontHint"),
@@ -685,6 +739,7 @@ public sealed class SettingsWindow : Window
                 settings.TargetLanguage = string.IsNullOrWhiteSpace(langBox.Text) ? AppSettings.DefaultTargetLanguage() : langBox.Text.Trim().ToUpperInvariant();
                 settings.TranslationEngine = currentEngineId;
                 settings.LibreTranslateEndpoint = string.IsNullOrWhiteSpace(endpointBox.Text) ? null : endpointBox.Text.Trim();
+                settings.OpenRouterModel = string.IsNullOrWhiteSpace(modelBox.Text) ? null : modelBox.Text.Trim();
                 settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;
                 settings.EnabledLyricsSources = sourceChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
                 settings.PreferredSources = preferredChecks.Where(s => s.Box.IsChecked == true).Select(s => s.Id).ToList();
@@ -695,6 +750,7 @@ public sealed class SettingsWindow : Window
                 if (int.TryParse(browserPortBox.Text.Trim(), out var browserPort) && browserPort is >= 0 and <= 65535)
                     settings.BrowserDisplayPort = browserPort;
                 settings.BrowserDisplayLan = browserLanCheck.IsChecked == true;
+                settings.OverlayFontFamily = string.IsNullOrWhiteSpace(fontBox.Text) ? null : fontBox.Text.Trim();
                 settings.TextColor = NormalizeHex(textColor.Box.Text, settings.TextColor);
                 settings.KaraokeColor = NormalizeHex(karaokeColor.Box.Text, settings.KaraokeColor);
                 settings.TranslationColor = NormalizeHex(translationColor.Box.Text, settings.TranslationColor);

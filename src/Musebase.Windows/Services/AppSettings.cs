@@ -154,6 +154,18 @@ public sealed class AppSettings
             ? TranslationEngine!.Trim().ToLowerInvariant()
             : (string.IsNullOrWhiteSpace(DeeplApiKey) ? "mymemory" : "deepl");
 
+    /// <summary>
+    /// 오버레이·제어판에 쓸 글꼴 이름. 비면 기본(Segoe UI).
+    /// 설치돼 있지 않은 이름이어도 WPF가 폴백 체인으로 알아서 내려가므로 글자가 사라지지 않는다.
+    /// </summary>
+    public string? OverlayFontFamily { get; set; }
+
+    /// <summary>
+    /// OpenRouter 모델 문자열(예: <c>anthropic/claude-opus-5</c>). 비면 레지스트리 기본값.
+    /// 키가 아니라 그냥 이름이므로 암호화하지 않는다.
+    /// </summary>
+    public string? OpenRouterModel { get; set; }
+
     /// <summary>DeepL API 키(평문) — 앱 내에서만 사용, 파일엔 저장하지 않는다(암호화본만 저장).</summary>
     [JsonIgnore]
     public string? DeeplApiKey { get; set; }
@@ -197,6 +209,14 @@ public sealed class AppSettings
     [JsonPropertyName("lyricsServerTokenEnc")]
     public string? LyricsServerTokenEncrypted { get; set; }
 
+    /// <summary>OpenRouter API 키(평문) — 파일엔 암호화본만 저장한다.</summary>
+    [JsonIgnore]
+    public string? OpenRouterApiKey { get; set; }
+
+    /// <summary>OpenRouter 키의 DPAPI 암호문(base64).</summary>
+    [JsonPropertyName("openRouterApiKeyEnc")]
+    public string? OpenRouterApiKeyEncrypted { get; set; }
+
     /// <summary>
     /// 엔진 id별 API 키 조회(설정 UI가 선택된 엔진의 키를 따라 보여주는 데 쓴다).
     /// 키를 쓰지 않는 엔진(MyMemory 등)은 null.
@@ -206,6 +226,7 @@ public sealed class AppSettings
         "deepl" => DeeplApiKey,
         "google" => GoogleApiKey,
         "libretranslate" => LibreTranslateApiKey,
+        "openrouter" => OpenRouterApiKey,
         _ => null,
     };
 
@@ -218,6 +239,7 @@ public sealed class AppSettings
             case "deepl": DeeplApiKey = value; break;
             case "google": GoogleApiKey = value; break;
             case "libretranslate": LibreTranslateApiKey = value; break;
+            case "openrouter": OpenRouterApiKey = value; break;
         }
     }
 
@@ -296,6 +318,7 @@ public sealed class AppSettings
 
         GoogleApiKey = _secretStore.Unprotect(GoogleApiKeyEncrypted);
         LibreTranslateApiKey = _secretStore.Unprotect(LibreTranslateApiKeyEncrypted);
+        OpenRouterApiKey = _secretStore.Unprotect(OpenRouterApiKeyEncrypted);
         LyricsServerToken = _secretStore.Unprotect(LyricsServerTokenEncrypted);
     }
 
@@ -307,6 +330,7 @@ public sealed class AppSettings
             DeeplApiKeyEncrypted = _secretStore.Protect(DeeplApiKey);
             GoogleApiKeyEncrypted = _secretStore.Protect(GoogleApiKey);
             LibreTranslateApiKeyEncrypted = _secretStore.Protect(LibreTranslateApiKey);
+            OpenRouterApiKeyEncrypted = _secretStore.Protect(OpenRouterApiKey);
             LyricsServerTokenEncrypted = _secretStore.Protect(LyricsServerToken);
             LegacyDeeplApiKey = null;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
