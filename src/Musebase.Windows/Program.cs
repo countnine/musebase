@@ -711,7 +711,7 @@ internal static class Program
                 CloseToTray: () => settings.MiniWindowCloseToTray,
                 // 가사 서버가 없으면 전부 null이라 커버·좋아요 자리가 조용히 비워진다.
                 OpenMeaning: OpenMeaning,
-                GetExtras: () => WithTrack(t => coordinator.RemoteCache?.GetExtrasAsync(t.Title, t.Artist)),
+                GetExtras: GetExtras,
                 SetLoved: loved => WithTrack(t => coordinator.RemoteCache?.SetLovedAsync(t.Title, t.Artist, loved)),
                 RefreshCover: () => WithTrack(t => coordinator.RemoteCache?.RefreshCoverAsync(t.Title, t.Artist)),
                 // 재생 앱이 SMTC에 실어 보낸 표지 — 키도 네트워크도 필요 없고 음원과 정확히 맞는다.
@@ -725,6 +725,13 @@ internal static class Program
                         Musebase.Core.Search.MeaningRequestStatus.Unavailable)),
                 // 이 곡의 서버 화면을 브라우저로 열 때 쓴다(주소가 비면 그 버튼이 사라진다).
                 ServerEndpoint: () => settings.LyricsServerEndpoint));
+
+            // 재생 중인 곡이 없거나 서버 주소를 안 넣었으면 물어보지 않는다 — 그건 오류가 아니라
+            // "쓰지 않는 상태"다. 못 닿은 것(Failed)과 구별해야 화면에 엉뚱한 경고가 뜨지 않는다.
+            Task<Musebase.Core.Search.SongExtrasResult> GetExtras() =>
+                coordinator.CurrentTrack is { } track && coordinator.RemoteCache is { } cache
+                    ? cache.GetExtrasAsync(track.Title, track.Artist)
+                    : Task.FromResult(Musebase.Core.Search.SongExtrasResult.NotFound);
 
             // 재생 중인 곡이 없거나 서버가 없으면 물어보지 않는다.
             Task<Musebase.Core.Search.SongExtras?> WithTrack(

@@ -261,9 +261,11 @@ public class RemoteLyricsCacheTests
              "loveConnected":true,"loveKnown":true,"loved":true}
             """))));
 
-        var extras = await cache.GetExtrasAsync("Kids", "MGMT");
+        var result = await cache.GetExtrasAsync("Kids", "MGMT");
 
-        Assert.EndsWith("600x600bb.jpg", extras!.CoverUrl);
+        Assert.Equal(ExtrasReach.Ok, result.Reach);
+        var extras = result.Extras!;
+        Assert.EndsWith("600x600bb.jpg", extras.CoverUrl);
         Assert.True(extras.LoveConnected);
         Assert.True(extras.ShowLoved);
     }
@@ -278,9 +280,9 @@ public class RemoteLyricsCacheTests
         var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK,
             """{"loveConnected":true,"loveKnown":false,"loved":true}"""))));
 
-        var extras = await cache.GetExtrasAsync("Kids", "MGMT");
+        var extras = (await cache.GetExtrasAsync("Kids", "MGMT")).Extras!;
 
-        Assert.True(extras!.Loved);        // 서버가 보낸 값은 그대로 두되
+        Assert.True(extras.Loved);         // 서버가 보낸 값은 그대로 두되
         Assert.False(extras.ShowLoved);    // 화면에는 켜지 않는다
     }
 
@@ -290,7 +292,7 @@ public class RemoteLyricsCacheTests
         var cache = Create(new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.OK,
             """{"coverUrl":"","loveConnected":false,"loveKnown":false,"loved":false}"""))));
 
-        Assert.Null((await cache.GetExtrasAsync("Kids", "MGMT"))!.CoverUrl);
+        Assert.Null((await cache.GetExtrasAsync("Kids", "MGMT")).Extras!.CoverUrl);
     }
 
     [Fact]
@@ -325,9 +327,38 @@ public class RemoteLyricsCacheTests
                     $$"""{"title":"Kids","artist":"MGMT","lrc":{{System.Text.Json.JsonSerializer.Serialize(Lrc)}},"service":"LRCLIB"}""")));
         var cache = Create(handler);
 
-        for (var i = 0; i < 5; i++) Assert.Null(await cache.GetExtrasAsync("Kids", "MGMT"));
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(ExtrasReach.Failed, (await cache.GetExtrasAsync("Kids", "MGMT")).Reach);
 
         Assert.NotNull((await cache.GetAsync("Kids", "MGMT")).Lyrics);
+    }
+
+    /// <summary>
+    /// <b>처음 트는 곡은 서버에 아직 없다</b> — 그 404를 연결 오류로 올리면 새 곡마다 경고가 뜬다.
+    /// 실측에서 실제로 그랬다: 조회 미스 7초 뒤에 이 기기가 올렸는데, 그 사이 화면에는
+    /// "서버에 연결하지 못했습니다"가 떴다.
+    /// </summary>
+    [Fact]
+    public async Task 서버가_모르는_곡은_오류가_아니다()
+    {
+        var cache = Create(new StubHandler(_ =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+
+        var result = await cache.GetExtrasAsync("My Sharona", "The Knack");
+
+        Assert.Equal(ExtrasReach.NotFound, result.Reach);
+        Assert.Null(result.Extras);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    public async Task 서버가_이상하면_실패로_알린다(HttpStatusCode status)
+    {
+        // 404가 아닌 비정상 응답은 사람이 알아야 한다(주소를 잘못 넣었거나 토큰이 틀렸다).
+        var cache = Create(new StubHandler(_ => Task.FromResult(new HttpResponseMessage(status))));
+
+        Assert.Equal(ExtrasReach.Failed, (await cache.GetExtrasAsync("Kids", "MGMT")).Reach);
     }
 
     private static HttpRemoteLyricsCache Create(StubHandler handler) =>

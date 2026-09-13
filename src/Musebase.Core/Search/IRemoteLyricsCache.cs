@@ -57,18 +57,49 @@ public interface IRemoteLyricsCache
     Task<MeaningRequestResult> RequestMeaningAsync(string title, string artist, CancellationToken ct = default);
 
     /// <summary>
-    /// 곡에 딸린 것들(커버 주소·좋아요 상태)을 한 번에 받는다. 서버가 없거나 그 곡이 없으면 null.
+    /// 곡에 딸린 것들(커버 주소·좋아요 상태)을 한 번에 받는다.
+    ///
+    /// 못 받았을 때 <b>이유를 함께 준다</b>(<see cref="ExtrasReach"/>) — 처음 트는 곡은 아직
+    /// 아무도 올리지 않아 404가 정상인데, 그것을 연결 오류로 그리면 새 곡마다 경고가 뜬다.
     ///
     /// 서버는 아직 커버를 안 찾아본 곡이면 <b>이 호출에서 찾는다</b>(한 곡당 한 번). 그래서
     /// 가사 조회보다 느릴 수 있으니 화면을 막지 말고 받는 대로 채워 넣어야 한다.
     /// </summary>
-    Task<SongExtras?> GetExtrasAsync(string title, string artist, CancellationToken ct = default);
+    Task<SongExtrasResult> GetExtrasAsync(string title, string artist, CancellationToken ct = default);
 
     /// <summary>커버를 처음부터 다시 찾게 한다(곡명을 고친 뒤). 사람이 눌렀을 때만 부른다.</summary>
     Task<SongExtras?> RefreshCoverAsync(string title, string artist, CancellationToken ct = default);
 
     /// <summary>Last.fm 좋아요를 켜거나 끈다. 실패하면 null — 화면을 바꾸지 말아야 한다.</summary>
     Task<SongExtras?> SetLovedAsync(string title, string artist, bool loved, CancellationToken ct = default);
+}
+
+/// <summary>
+/// 서버에 물어본 결과. <b>"서버가 그 곡을 모른다"와 "서버에 못 물어봤다"는 다르다</b> —
+/// 둘 다 값이 비지만 사람에게 할 말이 정반대다.
+///
+/// 처음 트는 곡은 아직 아무도 올리지 않아 <see cref="NotFound"/>가 정상이다(몇 초 뒤 이 기기가
+/// 올린다). 이걸 오류로 그리면 <b>멀쩡한 새 곡마다 경고가 뜬다</b>.
+/// </summary>
+public enum ExtrasReach
+{
+    /// <summary>받아 왔다.</summary>
+    Ok,
+
+    /// <summary>서버는 답했지만 그 곡을 모른다(404). 오류가 아니다 — 아직 안 올라간 곡이다.</summary>
+    NotFound,
+
+    /// <summary>물어봤는데 답을 못 받았다(주소·네트워크·타임아웃·인증). 이건 알려야 한다.</summary>
+    Failed,
+}
+
+/// <summary>곡에 딸린 것들 + 그것을 못 받았다면 왜 못 받았는지.</summary>
+public readonly record struct SongExtrasResult(ExtrasReach Reach, SongExtras? Extras)
+{
+    public static readonly SongExtrasResult NotFound = new(ExtrasReach.NotFound, null);
+    public static readonly SongExtrasResult Failed = new(ExtrasReach.Failed, null);
+
+    public static SongExtrasResult Ok(SongExtras extras) => new(ExtrasReach.Ok, extras);
 }
 
 /// <summary>
