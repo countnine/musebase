@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
+using System.Windows.Shell;
 using Musebase.Core.Search;
 using Musebase.Engine;
 using Musebase.Windows.Services;
@@ -118,7 +119,6 @@ public sealed class MiniWindow : Window
     private int _extrasEpoch;      // 곡이 바뀌면 늦게 도착한 응답을 버린다
     private bool _hasThumbnail;    // 재생 앱이 준 표지를 이미 걸었는가(서버 커버로 덮지 않는다)
     private bool _hasMeaning;      // 의미가 이미 있는가 — 버튼 글자가 이것으로 갈린다
-    private bool _resizing;        // 정사각 맞추는 중(SizeChanged 되풀이 방지)
 
     public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions)
     {
@@ -131,6 +131,16 @@ public sealed class MiniWindow : Window
         // 예전에는 타이틀바 몫을 추측해 더하다가 창이 세로로 길어졌다.
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.CanResize;
+        // WindowStyle.None만으로는 창 위쪽에 DWM 유리 테두리가 흰 줄로 남는다.
+        // GlassFrameThickness=0으로 그 줄을 없애고, 크기 조절은 테두리 두께로 계속 살려 둔다.
+        WindowChrome.SetWindowChrome(this, new WindowChrome
+        {
+            CaptionHeight = 0,                              // 제목 영역 없음(커버를 끌어 옮긴다)
+            GlassFrameThickness = new Thickness(0),
+            ResizeBorderThickness = new Thickness(6),
+            CornerRadius = new CornerRadius(0),
+            UseAeroCaptionButtons = false,
+        });
         Width = Height = ArtSize;
         MinWidth = MinHeight = MinSize;
         MaxWidth = MaxHeight = MaxSize;
@@ -181,8 +191,8 @@ public sealed class MiniWindow : Window
         restStack.Children.Add(_restTitle);
         restStack.Children.Add(_restArtist);
 
-        // 의미가 있으면 가운데에 보여 준다 — 커버만 있는 시간이 대부분인데, 그 자리에
-        // 곡에 대한 글이 한 단락 있으면 창이 그냥 장식이 아니게 된다. 길면 잘라낸다(전문은 의미 창).
+        // 의미는 **마우스를 올렸을 때만** 가운데에 보여 준다 — 평소에는 표지를 가리지 않는다.
+        // 길면 잘라낸다(전문은 의미 창).
         _restMeaning = new TextBlock
         {
             FontSize = 12,
@@ -193,14 +203,13 @@ public sealed class MiniWindow : Window
             TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(18, 40, 18, 70),
+            Margin = new Thickness(6, 8, 6, 8),
             Visibility = Visibility.Collapsed,
         };
 
         _rest = new Grid();
         // 위는 거의 투명하게 두고(커버가 보여야 한다) 아래로 갈수록 어둡게 — 글자가 읽히도록.
         _rest.Children.Add(new Border { Background = Scrim(0.0, 0.62) });
-        _rest.Children.Add(_restMeaning);
         _rest.Children.Add(restStack);
 
         // ---- 3) 호버 층: 모든 컨트롤 ----
@@ -293,10 +302,12 @@ public sealed class MiniWindow : Window
         veilGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         veilGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Grid.SetRow(top, 0);
+        Grid.SetRow(_restMeaning, 1);   // 가운데 빈 칸 — 의미가 있으면 여기에 들어간다
         Grid.SetRow(bottom, 2);
         Grid.SetRow(windowButtons, 0);
         veilGrid.Children.Add(top);
         veilGrid.Children.Add(windowButtons);
+        veilGrid.Children.Add(_restMeaning);
         veilGrid.Children.Add(bottom);
 
         _veil = new Grid
@@ -324,16 +335,14 @@ public sealed class MiniWindow : Window
             if (e.ClickCount == 1) DragMove();
         };
 
-        // 정사각을 유지한다 — 한 변만 끌어도 나머지가 따라온다(최대 600x600).
-        SizeChanged += (_, e) =>
+        // 정사각 유지는 **크기 조절이 일어나는 동안**(WM_SIZING) 한다.
+        // Width/Height를 나중에 대입하면 Windows는 왼쪽·위를 고정한 채 늘리므로,
+        // 우상단을 잡고 끌었을 때 창이 따라 움직였다. 끌고 있는 변을 그대로 두려면
+        // 사각형 자체를 그 자리에서 고쳐야 한다.
+        SourceInitialized += (_, _) =>
         {
-            if (_resizing) return;
-            var side = Math.Clamp(Math.Max(e.NewSize.Width, e.NewSize.Height), MinSize, MaxSize);
-            if (Math.Abs(Width - side) < 0.5 && Math.Abs(Height - side) < 0.5) return;
-
-            _resizing = true;
-            Width = Height = side;
-            _resizing = false;
+            if (PresentationSource.FromVisual(this) is HwndSource source)
+                source.AddHook(KeepSquare);
         };
         // 키보드로도 닿아야 한다 — 탭으로 들어오면 열어 둔다.
         _veil.GotKeyboardFocus += (_, _) => Reveal(true);
@@ -370,6 +379,44 @@ public sealed class MiniWindow : Window
         Loc.CultureChanged += ApplyText;
         Closed += (_, _) => Loc.CultureChanged -= ApplyText;
     }
+
+    // ---- 정사각 유지 (WM_SIZING) ----
+
+    private const int WmSizing = 0x0214;
+    private const int WmszLeft = 1, WmszRight = 2, WmszTop = 3, WmszTopLeft = 4;
+    private const int WmszTopRight = 5, WmszBottom = 6, WmszBottomLeft = 7;
+
+    /// <summary>
+    /// 끌고 있는 변을 고정한 채 사각형을 정사각으로 고친다 — 이게 "창이 움직이지 않는다"의 핵심이다.
+    /// 좌우를 끌면 너비가, 위아래를 끌면 높이가 기준이 되고, 모서리는 너비를 기준으로 한다.
+    /// </summary>
+    private IntPtr KeepSquare(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WmSizing) return IntPtr.Zero;
+
+        var rect = System.Runtime.InteropServices.Marshal.PtrToStructure<Rect32>(lParam);
+        var edge = wParam.ToInt32();
+
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+
+        // 기준 변: 좌우만 끌면 너비, 위아래만 끌면 높이, 모서리는 너비.
+        var side = edge is WmszTop or WmszBottom ? height : width;
+
+        // 끌지 않는 쪽을 움직여 정사각으로 만든다.
+        if (edge is WmszLeft or WmszTopLeft or WmszBottomLeft) rect.Left = rect.Right - side;
+        else rect.Right = rect.Left + side;
+
+        if (edge is WmszTop or WmszTopLeft or WmszTopRight) rect.Top = rect.Bottom - side;
+        else rect.Bottom = rect.Top + side;
+
+        System.Runtime.InteropServices.Marshal.StructureToPtr(rect, lParam, fDeleteOld: false);
+        handled = true;
+        return (IntPtr)1;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Rect32 { public int Left, Top, Right, Bottom; }
 
     // ---- 호버 ----
 
@@ -556,31 +603,96 @@ public sealed class MiniWindow : Window
     }
 
     /// <summary>
-    /// 표지를 <b>위쪽 정사각</b>으로 잘라낸다.
+    /// 표지 아래에 붙어 오는 <b>로고 띠를 찾아 잘라낸다.</b>
     ///
-    /// Spotify가 SMTC에 주는 표지는 정사각이 아니라 아래에 로고 띠가 붙어 온다 — 그대로 걸면
-    /// 앨범 아트 밑에 Spotify 로고가 드러난다. 앨범 아트는 정사각이므로 너비만큼만 위에서
-    /// 잘라내면 띠가 사라진다. 이미 정사각이면(다른 앱) 손대지 않는다.
+    /// Spotify는 표지를 <b>정사각 그대로</b>(실측 300×300) 주면서 그 안의 아래쪽에 로고 띠를
+    /// 그려 넣는다 — 그래서 "세로로 길면 자른다" 같은 규칙으로는 잡히지 않는다. 대신 띠의
+    /// 성질을 쓴다: <b>로고는 가운데에 있고 좌우 끝은 띠 배경색 그대로다.</b> 아래에서 위로
+    /// 올라가며 양쪽 끝 픽셀이 모서리 색과 같은 행을 세면 띠 높이가 나온다.
+    ///
+    /// 앨범 아트의 아래쪽이 우연히 단색일 수 있으므로 자르는 양을 <b>높이의 25%까지</b>로
+    /// 제한한다(그마저도 단색이라 잘려도 그림이 달라지지 않는다). 찾은 값은 로그에 남긴다.
     /// </summary>
     private static BitmapSource SquareTop(BitmapSource source)
     {
         var width = source.PixelWidth;
         var height = source.PixelHeight;
-        Log.Write($"[cover] 재생 앱 표지 {width}x{height}");
+        if (width <= 0 || height <= 0) return source;
 
-        // 2% 여유 — 1~2픽셀 차이로 멀쩡한 정사각을 건드리지 않는다.
-        if (width <= 0 || height <= width * 1.02) return source;
+        var band = BottomBandHeight(source);
+        // 정사각보다 높으면(다른 앱) 남는 높이도 함께 잘라 정사각으로 맞춘다.
+        var overflow = Math.Max(0, height - width);
+        var cut = Math.Max(band, overflow);
+
+        Log.Write($"[cover] 재생 앱 표지 {width}x{height}, 아래 띠 {band}px");
+        if (cut <= 0 || cut >= height) return source;
 
         try
         {
-            var cropped = new CroppedBitmap(source, new Int32Rect(0, 0, width, width));
+            var cropped = new CroppedBitmap(source, new Int32Rect(0, 0, width, height - cut));
             cropped.Freeze();
-            Log.Write($"[cover] 아래 띠 {height - width}px 잘라냄");
             return cropped;
         }
         catch (Exception)
         {
             return source; // 자르기 실패는 원본 그대로(로고가 보이는 편이 빈 창보다 낫다)
+        }
+    }
+
+    /// <summary>
+    /// 아래쪽 단색 띠의 높이(없으면 0). 각 행의 <b>양쪽 끝</b> 픽셀만 본다 — 로고가 가운데
+    /// 있어도 끝은 배경색이기 때문이다.
+    /// </summary>
+    private static int BottomBandHeight(BitmapSource source)
+    {
+        try
+        {
+            var width = source.PixelWidth;
+            var height = source.PixelHeight;
+            var limit = height / 4;              // 높이의 25%까지만 띠로 인정한다
+            if (width < 8 || limit < 2) return 0;
+
+            var bgra = new BitmapImageConverter(source);
+            var corner = bgra.At(0, height - 1);
+
+            var band = 0;
+            for (var y = height - 1; y >= height - limit; y--)
+            {
+                if (!Near(bgra.At(0, y), corner) || !Near(bgra.At(width - 1, y), corner)) break;
+                band++;
+            }
+
+            // 맨 아래 한두 줄이 같은 건 흔하다 — 띠라고 부를 만한 두께가 아니면 0.
+            return band >= height / 50 && band >= 4 ? band : 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>두 색이 눈으로 같은가(채널별 차이 합으로 본다).</summary>
+    private static bool Near((byte B, byte G, byte R) a, (byte B, byte G, byte R) b) =>
+        Math.Abs(a.B - b.B) + Math.Abs(a.G - b.G) + Math.Abs(a.R - b.R) <= 12;
+
+    /// <summary>픽셀을 좌표로 읽기 위한 최소 래퍼(한 번만 복사한다).</summary>
+    private sealed class BitmapImageConverter
+    {
+        private readonly byte[] _pixels;
+        private readonly int _stride;
+
+        public BitmapImageConverter(BitmapSource source)
+        {
+            var converted = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+            _stride = converted.PixelWidth * 4;
+            _pixels = new byte[_stride * converted.PixelHeight];
+            converted.CopyPixels(_pixels, _stride, 0);
+        }
+
+        public (byte B, byte G, byte R) At(int x, int y)
+        {
+            var i = y * _stride + x * 4;
+            return (_pixels[i], _pixels[i + 1], _pixels[i + 2]);
         }
     }
 

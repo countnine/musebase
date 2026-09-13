@@ -110,14 +110,14 @@ public static class TaskbarCommands
             if (string.IsNullOrEmpty(exe)) return;
 
             var list = new JumpList { ShowRecentCategory = false, ShowFrequentCategory = false };
-            foreach (var (command, key) in new[]
+            foreach (var (command, key, glyph) in new[]
             {
-                (Panel, "mini.open"),
-                (Overlay, "taskbar.overlay"),
-                (Search, "tray.search"),
-                (Meaning, "tray.meaning"),
-                (Settings, "tray.settings"),
-                (Exit, "tray.exit"),
+                (Panel, "mini.open", "▣"),
+                (Overlay, "taskbar.overlay", "▤"),
+                (Search, "tray.search", "🔍"),
+                (Meaning, "tray.meaning", "✦"),
+                (Settings, "tray.settings", "⚙"),
+                (Exit, "tray.exit", "✕"),
             })
             {
                 list.JumpItems.Add(new JumpTask
@@ -125,7 +125,9 @@ public static class TaskbarCommands
                     Title = Loc.T(key),
                     ApplicationPath = exe,
                     Arguments = "--command " + command,
-                    IconResourcePath = exe,
+                    // 아이콘은 직접 만든다 — Windows DLL의 아이콘 번호는 버전마다 달라
+                    // 엉뚱한 그림이 붙을 수 있다(shell32.dll,13 같은 값에 기댈 수 없다).
+                    IconResourcePath = JumpIcons.Make(command, glyph) ?? exe,
                     CustomCategory = Loc.T("taskbar.category"),
                 });
             }
