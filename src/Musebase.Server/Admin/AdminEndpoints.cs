@@ -62,6 +62,9 @@ public static class AdminEndpoints
     /// <summary>Last.fm 승인 플로우의 1회용 논스. 관리자 쿠키와 달리 <b>SameSite=Lax</b>여야 한다.</summary>
     private const string StateCookie = "musebase_lastfm_state";
 
+    /// <summary>Spotify 승인 플로우의 1회용 논스(그쪽은 <c>state</c> 값까지 되돌려 준다).</summary>
+    private const string SpotifyStateCookie = "musebase_spotify_state";
+
     private static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(30);
 
     /// <summary>303 See Other — 이 프레임워크에 기본 헬퍼가 없어 직접 만든다.</summary>
@@ -105,6 +108,7 @@ public static class AdminEndpoints
         static IResult SeeOther(string location) => new SeeOtherResult(location);
 
         var lastfm = MeaningOptionsNow().LastFmAccount();
+        var spotify = MeaningOptionsNow().SpotifyAccount();
 
         string? Cookie(HttpRequest req) => req.Cookies.TryGetValue(CookieName, out var v) ? v : null;
 
@@ -251,6 +255,7 @@ public static class AdminEndpoints
 
             var links = await extras.ResolveAsync(entry);
             var love = await extras.LoveAsync(entry);
+            var spotifyState = await extras.SpotifyAsync(entry);
 
             return Html(AdminPages.SongPage(
                 entry, AdminLrc.ToDisplayLines(entry.Lrc, selected), langs, selected, showTags,
@@ -259,7 +264,7 @@ public static class AdminEndpoints
                 MeaningOptionsNow().SelectableSources()
                     .Select(s => (s.Id, MeaningOptions.SourceLabel(s.Id), s.Default))
                     .ToList(),
-                links, love));
+                links, love, spotifyState));
         });
 
         app.MapGet(Routes.Base + "/raw", (HttpRequest req, string? key) =>
@@ -438,6 +443,67 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Last.fm 연결을 해제했습니다.")}");
         });
 
+        // ---- Spotify 계정 연결 ----
+        // Last.fm과 다른 점이 둘 있다.
+        // ① 콜백 주소를 **앱 대시보드에 미리 등록**해야 한다(요청할 때 넘길 수 없다).
+        // ② state를 우리가 만들어 보내고 돌아온 값과 맞춰 봐야 한다(CSRF 방지) — 논스 쿠키에 담는다.
+
+        app.MapGet(Routes.Base + "/spotify/connect", (HttpRequest req, HttpResponse res) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            if (!spotify.CanConnect)
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("MUSEBASE_SPOTIFY_CLIENT_ID와 MUSEBASE_SPOTIFY_CLIENT_SECRET이 필요합니다.")}");
+
+            var nonce = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+            res.Cookies.Append(SpotifyStateCookie, nonce, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Lax,   // Strict면 Spotify에서 돌아올 때 실리지 않는다
+                Path = Routes.Base + "/spotify",
+                Expires = DateTimeOffset.UtcNow.AddMinutes(10),
+            });
+
+            return SeeOther(spotify.AuthorizeUrl(SpotifyCallback(req), nonce));
+        });
+
+        app.MapGet(Routes.Base + "/spotify/callback",
+            async (HttpRequest req, HttpResponse res, string? code, string? state, string? error) =>
+        {
+            var nonce = req.Cookies.TryGetValue(SpotifyStateCookie, out var v) ? v : null;
+            res.Cookies.Delete(SpotifyStateCookie, new CookieOptions { Path = Routes.Base + "/spotify" });
+
+            if (string.IsNullOrEmpty(nonce) || !string.Equals(nonce, state, StringComparison.Ordinal))
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("연결 요청이 만료됐거나 맞지 않습니다 — 다시 눌러 주세요.")}");
+            if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify가 승인을 거절했습니다.")}");
+
+            var session = await spotify.ExchangeCodeAsync(code!, SpotifyCallback(req));
+            if (session is null)
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify 토큰을 받지 못했습니다 — 콜백 주소 등록과 Premium 구독을 확인하세요.")}");
+
+            store.SetSetting(SpotifyAccount.RefreshSetting, session.Value.Refresh);
+            store.SetSetting(SpotifyAccount.UserSetting, session.Value.User);
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString($"Spotify에 연결했습니다: {session.Value.User}")}");
+        });
+
+        app.MapPost(Routes.Base + "/spotify/disconnect", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            store.DeleteSetting(SpotifyAccount.RefreshSetting);
+            store.DeleteSetting(SpotifyAccount.UserSetting);
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify 연결을 해제했습니다.")}");
+        });
+
+        // 등록해야 할 콜백 주소. 화면에도 이 값을 그대로 띄워 사람이 복사해 넣게 한다.
+        string SpotifyCallback(HttpRequest req) => CallbackOrigin(
+            req.Scheme, req.Host.Host, req.Host.ToString(), req.Headers["X-Forwarded-Proto"].ToString())
+            + Routes.Base + "/spotify/callback";
+
         app.MapPost(Routes.Base + "/song/love", async (HttpRequest req) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
@@ -459,9 +525,20 @@ public static class AdminEndpoints
         // 커버·좋아요의 실제 규칙은 SongExtrasService에 있다 — 앱용 `/v1`과 같은 코드를 쓴다.
         async Task<string> SetLovedAsync(LyricsEntry entry, bool loved)
         {
-            var ok = await extras.SetLovedAsync(entry, loved);
-            if (!ok) return "Last.fm에 반영하지 못했습니다(연결이 끊겼을 수 있습니다).";
-            return loved ? "Last.fm 좋아요를 켰습니다." : "Last.fm 좋아요를 껐습니다.";
+            var result = await extras.SetLovedAsync(entry, loved);
+            var what = loved ? "켰습니다" : "껐습니다";
+
+            // 절반만 반영된 것을 성공으로 말하지 않는다 — 사람이 저쪽도 됐다고 믿는다.
+            return (result.LastFm, result.Spotify) switch
+            {
+                (false, null) => "Last.fm에 반영하지 못했습니다(연결이 끊겼을 수 있습니다).",
+                (false, true) => $"Spotify에만 {what} — Last.fm에는 반영하지 못했습니다.",
+                (false, false) => "Last.fm·Spotify 어느 쪽에도 반영하지 못했습니다.",
+                (true, null) => $"Last.fm 좋아요를 {what}.",
+                (true, true) => $"Last.fm과 Spotify 양쪽에 {what}.",
+                (true, false) => $"Last.fm에는 {what} — Spotify에는 반영하지 못했습니다"
+                    + "(그 곡을 Spotify에서 찾지 못했거나 연결이 끊겼습니다).",
+            };
         }
 
         // ---- 곡의 의미 ----
@@ -608,7 +685,11 @@ public static class AdminEndpoints
                 LastFm: lastfm.CanConnect
                     ? new LastFmLink(store.GetSetting(LastFmAccount.UserSetting))
                     : null,
-                MeaningEngine: MeaningEngineCard.From(MeaningOptionsNow(), meaningSettings.Overridden));
+                MeaningEngine: MeaningEngineCard.From(MeaningOptionsNow(), meaningSettings.Overridden),
+                // 쓸 수 없는 구성이면 null — 카드를 아예 그리지 않는다(Last.fm과 같은 규칙).
+                Spotify: spotify.CanConnect
+                    ? new SpotifyLink(store.GetSetting(SpotifyAccount.UserSetting), SpotifyCallback(req))
+                    : null);
         }
 
         MeaningSummary MeaningSummaryOf()

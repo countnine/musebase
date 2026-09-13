@@ -18,6 +18,8 @@ public sealed record MeaningOptions(
     string? LastFmKey,
     string? LastFmSecret,
     string? MusixmatchKey,
+    string? SpotifyClientId,
+    string? SpotifyClientSecret,
     IReadOnlyList<string> Sources,
     int BackfillLimit,
     int BackfillDelayMs,
@@ -36,6 +38,7 @@ public sealed record MeaningOptions(
     /// `MUSEBASE_OPENROUTER_API_KEY` / `MUSEBASE_OPENROUTER_MODEL`,
     /// `MUSEBASE_GENIUS_TOKEN`, `MUSEBASE_LASTFM_KEY`, `MUSEBASE_LASTFM_SECRET`,
     /// `MUSEBASE_MUSIXMATCH_KEY`,
+    /// `MUSEBASE_SPOTIFY_CLIENT_ID` / `MUSEBASE_SPOTIFY_CLIENT_SECRET`(Spotify 라이브러리 동기화),
     /// `MUSEBASE_MEANING_SOURCES`(쉼표 구분, 기본 `genius,lastfm,wikipedia`),
     /// `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔 — 예전 변수, 아래 설명),
     /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50),
@@ -72,6 +75,8 @@ public sealed record MeaningOptions(
             LastFmKey: Env("MUSEBASE_LASTFM_KEY"),
             LastFmSecret: Env("MUSEBASE_LASTFM_SECRET"),
             MusixmatchKey: Env("MUSEBASE_MUSIXMATCH_KEY"),
+            SpotifyClientId: Env("MUSEBASE_SPOTIFY_CLIENT_ID"),
+            SpotifyClientSecret: Env("MUSEBASE_SPOTIFY_CLIENT_SECRET"),
             Sources: sources,
             BackfillLimit: limit,
             BackfillDelayMs: delay,
@@ -101,6 +106,13 @@ public sealed record MeaningOptions(
     /// 키만 있으면 <b>읽기(좋아요 여부)까지만</b> 된다.
     /// </summary>
     public LastFmAccount LastFmAccount() => new(LastFmKey, LastFmSecret);
+
+    /// <summary>
+    /// Spotify 라이브러리 API. 둘 다 없으면 꺼진 상태로 만들어지고 연결 버튼도 뜨지 않는다.
+    /// <b>Development Mode는 앱 소유자에게 Premium 구독을 요구한다</b>(2026-02 정책) — 구독이
+    /// 끊기면 키가 그대로여도 호출이 막힌다.
+    /// </summary>
+    public SpotifyAccount SpotifyAccount() => new(SpotifyClientId, SpotifyClientSecret);
 
     /// <summary>
     /// 지금 실제로 불릴 모델 이름. 모델을 비워 두면 각 라이터의 기본값이 쓰이는데,

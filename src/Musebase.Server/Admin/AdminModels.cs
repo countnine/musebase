@@ -47,9 +47,25 @@ public sealed record DisplayLine(string TimeTag, string Content, string? Transla
 /// </param>
 public sealed record SongLinks(
     string Key, string? CoverUrl = null, string? CoverSource = null,
-    string? CoverAt = null, string? LastFmUrl = null)
+    string? CoverAt = null, string? LastFmUrl = null,
+    string? SpotifyUri = null, string? SpotifyAt = null)
 {
     public bool CoverTried => !string.IsNullOrEmpty(CoverAt);
+
+    /// <summary>Spotify 트랙을 찾아본 적이 있는가(못 찾은 것도 포함 — 커버의 <see cref="CoverTried"/>와 같다).</summary>
+    public bool SpotifyTried => !string.IsNullOrEmpty(SpotifyAt);
+}
+
+/// <summary>
+/// 곡 상세가 보여 줄 Spotify 상태. <see cref="LoveState"/>와 같은 규칙이다 —
+/// <b>모르는 것을 "저장 안 함"으로 그리지 않는다</b>.
+/// </summary>
+public sealed record SpotifyState(bool Connected, bool Known, bool Saved)
+{
+    public static readonly SpotifyState NotConnected = new(false, false, false);
+
+    /// <summary>채운 표시를 그려도 되는가 — 확인한 값일 때만.</summary>
+    public bool ShowSaved => Known && Saved;
 }
 
 /// <summary>
@@ -108,10 +124,18 @@ public sealed record DashboardModel(
     /// <summary>Last.fm 계정 연결 상태 — 쓸 수 없는 구성이면 <c>null</c>이라 카드를 아예 안 그린다.</summary>
     LastFmLink? LastFm = null,
     /// <summary>지금 쓰는 의미 생성 엔진·모델(카드에 표시 + 화면에서 변경).</summary>
-    MeaningEngineCard? MeaningEngine = null);
+    MeaningEngineCard? MeaningEngine = null,
+    /// <summary>Spotify 연결 상태 — 쓸 수 없는 구성이면 <c>null</c>이라 카드를 안 그린다.</summary>
+    SpotifyLink? Spotify = null);
 
 /// <summary>대시보드의 Last.fm 카드 — 연결한 아이디(없으면 미연결).</summary>
 public sealed record LastFmLink(string? User);
+
+/// <summary>
+/// 대시보드의 Spotify 카드 — 연결한 아이디(없으면 미연결)와 <b>등록해야 할 콜백 주소</b>.
+/// Last.fm과 달리 이 주소를 앱 대시보드에 미리 넣어 둬야 승인이 된다.
+/// </summary>
+public sealed record SpotifyLink(string? User, string Callback);
 
 /// <summary>
 /// 대시보드의 "의미 생성 엔진" 카드가 그릴 값. <b>API 키 원문은 여기 담지 않는다</b> —

@@ -83,6 +83,9 @@ public interface IRemoteLyricsCache
 /// 모르는 것을 꺼진 하트로 그리면 사람이 눌러서 이미 켜 둔 것을 끈다.
 /// </param>
 /// <param name="Loved">좋아요 상태(<paramref name="LoveKnown"/>이 true일 때만 의미가 있다).</param>
+/// <param name="SpotifyConnected">서버에 Spotify 계정이 연결돼 있는가(false면 그 표시를 감춘다).</param>
+/// <param name="SpotifyKnown">라이브러리 저장 여부를 실제로 확인했는가 — false면 믿지 말 것.</param>
+/// <param name="SpotifySaved">Spotify 라이브러리에 담겨 있는가.</param>
 /// <param name="Key">
 /// 서버가 이 곡에 붙인 키. 있으면 <c>{서버 주소}/song?key=…</c>로 관리 화면을 바로 열 수 있다.
 /// 키 규칙은 전적으로 서버 몫이라 <b>클라이언트가 만들어 쓰면 안 된다</b>.
@@ -94,10 +97,16 @@ public sealed record SongExtras(
     bool LoveConnected,
     bool LoveKnown,
     bool Loved,
-    string? Key = null)
+    string? Key = null,
+    bool SpotifyConnected = false,
+    bool SpotifyKnown = false,
+    bool SpotifySaved = false)
 {
     /// <summary>하트를 켜서 그려도 되는가 — 확인한 값일 때만.</summary>
     public bool ShowLoved => LoveKnown && Loved;
+
+    /// <summary>Spotify 저장 표시를 켜서 그려도 되는가 — 확인한 값일 때만(좋아요와 같은 규칙).</summary>
+    public bool ShowSpotifySaved => SpotifyKnown && SpotifySaved;
 
     /// <summary>
     /// 이 곡의 관리 화면 주소. 서버 주소를 받아 만든다(앱은 서버가 어디 있는지만 안다).
