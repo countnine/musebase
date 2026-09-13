@@ -37,3 +37,5 @@ publish-singlefile/
 publish-server/
 .wrangler/
 .claude/worktrees/
+# 이 기기에서만 쓰는 Claude Code 권한·설정 — 사람마다 다르고 커밋 대상이 아니다.
+.claude/settings.local.json
