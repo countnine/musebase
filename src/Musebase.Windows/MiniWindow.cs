@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
@@ -81,6 +82,9 @@ public sealed class MiniWindow : Window
 
     private static readonly Color Ink = Color.FromRgb(0xE7, 0xEA, 0xF0);
     private static readonly Color Dim = Color.FromRgb(0x8A, 0x93, 0xA2);
+
+    /// <summary>아티스트처럼 <b>읽으라고 두는</b> 보조 글자. Dim은 상태·설명용이라 너무 흐리다.</summary>
+    private static readonly Color Subtle = Color.FromRgb(0xC3, 0xCA, 0xD6);
     private static readonly Color Accent = Color.FromRgb(0x7C, 0xC4, 0xFF);
     private static readonly Color Heart = Color.FromRgb(0xFF, 0x8F, 0xB1);
 
@@ -112,7 +116,7 @@ public sealed class MiniWindow : Window
     private readonly Button _openLyrics;
     private readonly Button _wrong;
     private readonly Button _overlayToggle;
-    private readonly Button _settings;
+    private readonly Button _settingsButton;
     private readonly Button _exit;
     private readonly Button _love;
     private readonly Button _meaning;
@@ -132,9 +136,21 @@ public sealed class MiniWindow : Window
     private bool _extrasFailed;    // 서버에 못 물어봤다 — "좋아요 없음"과 구별해 알린다
     private string? _fetchedKey;   // 마지막으로 조회한 곡(제목|아티스트) — 상태만 바뀌면 다시 안 받는다
 
-    public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions)
+    private readonly AppSettings _settings;
+
+    /// <summary>평상시 층의 곡명 판 — 창 크기에 따라 너비가 바뀐다(FitTitle).</summary>
+    private readonly Border _restPlate;
+
+    private const double PlateMargin = 12;
+    private const double PlatePadding = 10;
+
+    /// <summary>우상단 최소화·닫기 버튼이 차지하는 폭(30×2 + 바깥 여백).</summary>
+    private const double WindowButtonsWidth = 68;
+
+    public MiniWindow(System.Drawing.Icon? appIcon, MiniWindowActions actions, AppSettings settings)
     {
         _a = actions;
+        _settings = settings;
 
         Title = Loc.T("mini.title");
 
@@ -153,12 +169,15 @@ public sealed class MiniWindow : Window
             CornerRadius = new CornerRadius(0),
             UseAeroCaptionButtons = false,
         });
-        Width = Height = ArtSize;
         MinWidth = MinHeight = MinSize;
         MaxWidth = MaxHeight = MaxSize;
+        Width = Height = Math.Clamp(settings.PanelSize, MinSize, MaxSize);
         Topmost = true;             // 가사창과 같이 쓰는 창이라 뒤로 숨으면 쓸모가 없다
         ShowInTaskbar = true;
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        // 위치는 직접 정한다 — CenterScreen은 매번 화면 한가운데로 되돌리고,
+        // 작업영역이 아니라 화면 전체를 기준으로 잡아 작업표시줄을 고려하지 않는다.
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        RestorePlacement();
         Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0E, 0x13));
 
         if (appIcon is not null)
@@ -183,19 +202,22 @@ public sealed class MiniWindow : Window
         // ---- 2) 평상시 층: 곡명만 ----
         _restTitle = new TextBlock
         {
-            FontSize = 17,
+            FontSize = TitleSizes[0],
             FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(Ink),
+            // 한 줄에 안 들어가면 글꼴을 줄이고, 그래도 넘치면 두 줄까지 간다(FitTitle).
+            // WPF TextBlock에는 MaxLines가 없어 MaxHeight로 줄 수를 제한한다.
+            TextWrapping = TextWrapping.Wrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
             TextAlignment = TextAlignment.Right,
         };
         _restArtist = new TextBlock
         {
-            FontSize = 12,
-            Foreground = new SolidColorBrush(Dim),
+            FontSize = 14,
+            Foreground = new SolidColorBrush(Subtle),
             TextTrimming = TextTrimming.CharacterEllipsis,
             TextAlignment = TextAlignment.Right,
-            Margin = new Thickness(0, 1, 0, 0),
+            Margin = new Thickness(0, 2, 0, 0),
         };
         // 글자가 놓인 자리에만 어두운 판을 깐다. 예전에는 창 아래쪽 전체에 그라데이션을 깔았는데
         // 표지의 아래 절반이 늘 어두워졌다 — 가릴 이유가 없는 데까지 가리는 셈이었다.
@@ -203,15 +225,14 @@ public sealed class MiniWindow : Window
         restStack.Children.Add(_restTitle);
         restStack.Children.Add(_restArtist);
 
-        var restPlate = new Border
+        _restPlate = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(0xC4, 0x06, 0x09, 0x0D)),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10, 6, 10, 7),
-            Margin = new Thickness(12),
+            Padding = new Thickness(PlatePadding, 6, PlatePadding, 7),
+            Margin = new Thickness(PlateMargin),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
-            MaxWidth = 300,
             Child = restStack,
         };
 
@@ -248,7 +269,7 @@ public sealed class MiniWindow : Window
         };
 
         _rest = new Grid();
-        _rest.Children.Add(restPlate);
+        _rest.Children.Add(_restPlate);
         _rest.Children.Add(_restLove);
 
         // ---- 3) 호버 층: 모든 컨트롤 ----
@@ -257,12 +278,16 @@ public sealed class MiniWindow : Window
             FontSize = 15,
             FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(Ink),
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 20,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            MaxHeight = 42,                 // 두 줄까지(WPF에는 MaxLines가 없다)
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         _artist = new TextBlock
         {
-            FontSize = 11,
-            Foreground = new SolidColorBrush(Dim),
+            FontSize = 13,
+            Foreground = new SolidColorBrush(Subtle),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         _source = new TextBlock
@@ -275,14 +300,16 @@ public sealed class MiniWindow : Window
         };
 
         // 글리프는 Segoe Fluent Icons / MDL2의 공통 코드포인트를 쓴다(두 Windows 버전에서 같은 그림).
-        _love = IconButton(() => ToggleLove(), "♡", "mini.love.off");
+        _love = IconButton(() => ToggleLove(), HeartOutline, "mini.love.off");
         _meaning = IconButton(() => OnMeaningClick(), "", "mini.meaning");        // ReadingList
         _coverRetry = IconButton(() => RetryCover(), "", "mini.cover");           // Refresh
         _search = IconButton(() => _a.OpenSearch(), "", "mini.search");           // Search
         _openServer = IconButton(() => OpenOnServer(), "", "mini.openServer");    // OpenInNewWindow
         var songRow = Row(_love, _meaning, _coverRetry, _search, _openServer);
 
-        var top = new StackPanel();
+        // 우상단 창 버튼(30×30 두 개 + 여백)이 이 행을 함께 쓴다 — 그만큼 비워 두지 않으면
+        // 긴 제목이 버튼 밑으로 깔려 글자가 가려진다.
+        var top = new StackPanel { Margin = new Thickness(0, 0, WindowButtonsWidth, 0) };
         top.Children.Add(_title);
         top.Children.Add(_artist);
         top.Children.Add(_source);
@@ -319,9 +346,9 @@ public sealed class MiniWindow : Window
         _wrong = IconButton(() => _a.MarkWrong(), "", "mini.wrong");                    // Warning
         _overlayToggle = IconButton(
             () => _a.SetOverlayVisible(!_a.IsOverlayVisible()), "", "mini.showOverlay"); // Caption
-        _settings = IconButton(() => _a.OpenSettings(), "", "mini.settings");           // Settings
+        _settingsButton = IconButton(() => _a.OpenSettings(), "", "mini.settings");           // Settings
         _exit = IconButton(() => { _closingToExit = true; _a.Exit(); }, "", "mini.exit"); // PowerButton
-        var featureRow = Row(_openLyrics, _wrong, _overlayToggle, _settings, _exit);
+        var featureRow = Row(_openLyrics, _wrong, _overlayToggle, _settingsButton, _exit);
 
         var bottom = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
         bottom.Children.Add(playbackRow);
@@ -368,6 +395,9 @@ public sealed class MiniWindow : Window
         root.Children.Add(_veil);
         Content = root;
 
+        // 창을 키우면 제목이 더 큰 글꼴로 돌아갈 수 있다(줄이기만 하고 끝나면 안 된다).
+        SizeChanged += (_, _) => FitTitle();
+
         root.MouseEnter += (_, _) => Reveal(true);
         root.MouseLeave += (_, _) => Reveal(false);
 
@@ -388,8 +418,24 @@ public sealed class MiniWindow : Window
                 source.AddHook(KeepSquare);
         };
         // 키보드로도 닿아야 한다 — 탭으로 들어오면 열어 둔다.
-        _veil.GotKeyboardFocus += (_, _) => Reveal(true);
+        //
+        // 단 **창을 활성화하는 것만으로는 열리면 안 된다.** WPF는 창이 활성화될 때 첫 포커스 가능
+        // 요소(= 호버 층 안의 버튼)에 포커스를 주는데, 그러면 커버만 보여야 할 창이 컨트롤을 펼친
+        // 채 뜬다. 그래서 **마지막 입력이 키보드였을 때만** 연다 — 탭으로 들어오는 길은 그대로 살고,
+        // 트레이에서 창을 띄우는 경로(마지막 입력이 마우스)는 조용히 지나간다.
+        _veil.GotKeyboardFocus += (_, _) =>
+        {
+            if (InputManager.Current.MostRecentInputDevice is KeyboardDevice) Reveal(true);
+        };
         _veil.LostKeyboardFocus += (_, _) => { if (!IsMouseOver) Reveal(false); };
+
+        // 창이 다시 보일 때는 커버만 보이는 상태로 시작한다. 다만 마우스가 이미 그 자리에 있으면
+        // 열어 두는 편이 맞다 — 지금까지는 커서를 한 번 움직여야 열렸다(MouseEnter가 안 온다).
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is not true) return;
+            Reveal(IsMouseOver);
+        };
 
         ApplyText();
         SyncOverlayVisible(_a.IsOverlayVisible());
@@ -401,6 +447,7 @@ public sealed class MiniWindow : Window
         // 닫기(X): 옵션 켜짐=트레이로 숨김(Hide), 꺼짐(기본)=최소화(작업표시줄 상주). "종료"만 실제 닫힘.
         Closing += (_, e) =>
         {
+            SavePlacement();
             if (_closingToExit) return;
             e.Cancel = true;
             if (_a.CloseToTray())
@@ -426,6 +473,7 @@ public sealed class MiniWindow : Window
     // ---- 정사각 유지 (WM_SIZING) ----
 
     private const int WmSizing = 0x0214;
+    private const int WmExitSizeMove = 0x0232;
     private const int WmszLeft = 1, WmszRight = 2, WmszTop = 3, WmszTopLeft = 4;
     private const int WmszTopRight = 5, WmszBottom = 6, WmszBottomLeft = 7;
 
@@ -435,6 +483,8 @@ public sealed class MiniWindow : Window
     /// </summary>
     private IntPtr KeepSquare(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        // 끌기를 놓는 순간 자리를 적어 둔다(이동·크기 조절 둘 다 이 메시지로 끝난다).
+        if (msg == WmExitSizeMove) { SavePlacement(); return IntPtr.Zero; }
         if (msg != WmSizing) return IntPtr.Zero;
 
         var rect = System.Runtime.InteropServices.Marshal.PtrToStructure<Rect32>(lParam);
@@ -462,6 +512,125 @@ public sealed class MiniWindow : Window
     private struct Rect32 { public int Left, Top, Right, Bottom; }
 
     // ---- 호버 ----
+
+    // ---- 곡 제목 맞추기 ----
+
+    /// <summary>제목 글꼴 후보. 큰 것부터 재 보고 한 줄에 들어가는 첫 값을 쓴다.</summary>
+    private static readonly double[] TitleSizes = [17, 15, 13];
+
+    /// <summary>
+    /// 제목이 판 안에 들어가도록 <b>글꼴을 줄이고, 그래도 넘치면 두 줄로</b> 간다.
+    ///
+    /// 예전에는 판 너비가 300으로 고정이고 줄바꿈이 없어, 창을 아무리 키워도 같은 자리에서
+    /// 잘렸다. 이제 판은 창을 따라 넓어지고 글꼴은 필요한 만큼만 작아진다 —
+    /// 무조건 작게 두면 짧은 제목까지 읽기 나빠진다.
+    /// </summary>
+    private void FitTitle()
+    {
+        var text = _restTitle.Text;
+        if (string.IsNullOrEmpty(text)) return;
+
+        // 판은 창 너비에서 바깥 여백(12+12)과 안쪽 패딩(10+10)을 뺀 만큼 쓸 수 있다.
+        var available = Math.Max(80, ActualWidth - (PlateMargin * 2) - (PlatePadding * 2));
+        _restPlate.MaxWidth = Math.Max(120, ActualWidth - (PlateMargin * 2));
+
+        foreach (var size in TitleSizes)
+        {
+            Apply(size);
+            if (MeasureWidth(text, size, FontWeights.SemiBold) <= available) return;
+        }
+
+        // 가장 작은 글꼴로도 한 줄에 안 들어간다 — 두 줄에 맡긴다(넘치면 말줄임).
+        Apply(TitleSizes[^1]);
+
+        void Apply(double size)
+        {
+            _restTitle.FontSize = size;
+            _restTitle.LineHeight = Math.Round(size * 1.35);
+            // LineHeight를 그대로 믿게 한다 — 기본 전략(MaxHeight)에서는 글꼴에 따라 줄 상자가
+            // LineHeight보다 커질 수 있고, 그러면 두 줄이 상한을 넘겨 둘째 줄이 통째로 잘린다.
+            _restTitle.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+            _restTitle.MaxHeight = (_restTitle.LineHeight * 2) + 2;
+        }
+    }
+
+    /// <summary>그 글꼴로 한 줄에 그렸을 때의 너비.</summary>
+    private double MeasureWidth(string text, double size, FontWeight weight)
+    {
+        var typeface = new Typeface(_restTitle.FontFamily, FontStyles.Normal, weight, FontStretches.Normal);
+        return new FormattedText(
+            text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, typeface, size,
+            Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip).Width;
+    }
+
+    // ---- 창 위치·크기 기억 ----
+
+    /// <summary>창을 화면 끝에서 띄우는 여백. 모서리에 딱 붙으면 잡아 끌기가 어렵다.</summary>
+    private const double EdgeMargin = 24;
+
+    /// <summary>
+    /// 저장해 둔 자리로 되돌린다. 없으면 <b>작업영역 우하단</b>에 놓는다 —
+    /// 늘 띄워 두는 창이라 매번 화면 한가운데 나타나면 하던 일을 가린다.
+    ///
+    /// 저장된 좌표가 지금 화면 밖이면(모니터를 뗐다) 첫 실행 자리로 돌아간다.
+    /// </summary>
+    private void RestorePlacement()
+    {
+        var area = SystemParameters.WorkArea;
+
+        if (_settings.PanelX is { } x && _settings.PanelY is { } y && OnSomeScreen(x, y))
+        {
+            Left = x;
+            Top = y;
+        }
+        else
+        {
+            Left = area.Right - Width - EdgeMargin;
+            Top = area.Bottom - Height - EdgeMargin;
+        }
+    }
+
+    /// <summary>그 좌표에 창을 놓았을 때 어느 모니터엔가 실제로 걸치는가.</summary>
+    private bool OnSomeScreen(double x, double y)
+    {
+        var virtualScreen = new Rect(
+            SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+
+        // 모서리 한 점이 아니라 제목 판이 있는 만큼은 보여야 쓸모가 있다.
+        return virtualScreen.IntersectsWith(new Rect(x, y, Width, Height))
+            && x + Width > virtualScreen.Left + 40
+            && y + Height > virtualScreen.Top + 40
+            && x < virtualScreen.Right - 40
+            && y < virtualScreen.Bottom - 40;
+    }
+
+    /// <summary>
+    /// 지금 자리를 설정에 적는다. <b>화면 밖 보정을 먼저 한다</b> — 오버레이 쪽은 순서가 반대라
+    /// 화면 밖으로 끌어 놓으면 보정 전 좌표가 저장되는 버그가 있었다(같은 실수를 되풀이하지 않는다).
+    /// </summary>
+    private void SavePlacement()
+    {
+        if (WindowState != WindowState.Normal) return;   // 최소화 중의 좌표는 의미가 없다
+
+        KeepOnScreen();
+        _settings.PanelX = Left;
+        _settings.PanelY = Top;
+        _settings.PanelSize = Math.Clamp(ActualWidth, MinSize, MaxSize);
+        _settings.Save();
+    }
+
+    /// <summary>창을 가상 화면 안으로 되돌린다(모니터 구성이 바뀐 뒤).</summary>
+    private void KeepOnScreen()
+    {
+        var left = SystemParameters.VirtualScreenLeft;
+        var top = SystemParameters.VirtualScreenTop;
+        var right = left + SystemParameters.VirtualScreenWidth;
+        var bottom = top + SystemParameters.VirtualScreenHeight;
+
+        Left = Math.Clamp(Left, left, Math.Max(left, right - Width));
+        Top = Math.Clamp(Top, top, Math.Max(top, bottom - Height));
+    }
 
     /// <summary>컨트롤 층을 페이드로 켜고 끈다. 끌 때는 평상시 곡명 층을 되살린다.</summary>
     private void Reveal(bool on)
@@ -702,7 +871,7 @@ public sealed class MiniWindow : Window
         {
             _love.Content = LoveGlyph(extras);
             _love.ToolTip = LoveTip(extras);
-            _love.Foreground = new SolidColorBrush(extras!.ShowLoved ? Heart : Ink);
+            _love.Foreground = new SolidColorBrush(LoveColor(extras));
         }
 
         ApplyLoveBadge();
@@ -743,9 +912,23 @@ public sealed class MiniWindow : Window
         _restLove.Visibility = Visibility.Visible;
     }
 
-    /// <summary>좋아요 버튼에 그릴 글자 — 모르는 상태는 켠 것도 끈 것도 아닌 제3의 모양이다.</summary>
+    /// <summary>
+    /// 아이콘 글꼴(Segoe Fluent Icons / MDL2)의 하트. <b>♡·♥(U+2661·U+2665)를 쓰면 안 된다</b> —
+    /// 그 글꼴은 사용자 정의 영역 전용이라 저 문자가 없고, 폴백이 실패하면 두부(□)로 떨어진다.
+    /// </summary>
+    private const string HeartOutline = "";   // Heart
+    private const string HeartFilled = "";    // HeartFill
+
+    /// <summary>
+    /// 좋아요 버튼에 그릴 글자. <b>모르는 상태는 색으로 가른다</b>(<see cref="Warn"/>) —
+    /// 아이콘 글꼴에는 "물음표 붙은 하트"가 없고, 글자를 덧붙이면 원형 버튼 밖으로 삐져나온다.
+    /// </summary>
     private static string LoveGlyph(SongExtras? extras) =>
-        extras is not { LoveKnown: true } ? "♡ !" : extras.Loved ? "♥" : "♡";
+        extras is { LoveKnown: true, Loved: true } ? HeartFilled : HeartOutline;
+
+    /// <summary>버튼 글자색 — 켬은 분홍, 모름은 주황, 끔은 보통.</summary>
+    private static Color LoveColor(SongExtras? extras) =>
+        extras is not { LoveKnown: true } ? Warn : extras.Loved ? Heart : Ink;
 
     private static string LoveTip(SongExtras? extras) => Loc.T(
         extras is not { LoveKnown: true } ? "mini.love.unknown"
@@ -1108,6 +1291,7 @@ public sealed class MiniWindow : Window
         if (string.IsNullOrWhiteSpace(title))
         {
             _title.Text = _restTitle.Text = Loc.T("mini.noTrack");
+            FitTitle();
             _artist.Text = _restArtist.Text = "";
             _artist.Visibility = _restArtist.Visibility = Visibility.Collapsed;
             _extrasEpoch++;          // 진행 중인 조회 결과를 버린다
@@ -1119,6 +1303,7 @@ public sealed class MiniWindow : Window
 
         _title.Text = _restTitle.Text = title;
         _artist.Text = _restArtist.Text = artist ?? "";
+        FitTitle();
         var hasArtist = !string.IsNullOrWhiteSpace(artist);
         _artist.Visibility = _restArtist.Visibility = hasArtist ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1167,7 +1352,7 @@ public sealed class MiniWindow : Window
         Title = Loc.T("mini.title");
         SyncOverlayVisible(_a.IsOverlayVisible());
         // 아이콘 버튼은 글자가 아니라 툴팁이 설명을 담는다 — 언어를 바꾸면 툴팁이 따라간다.
-        _settings.ToolTip = Loc.T("mini.settings");
+        _settingsButton.ToolTip = Loc.T("mini.settings");
         _exit.ToolTip = Loc.T("mini.exit");
         _search.ToolTip = Loc.T("mini.search");
         _openLyrics.ToolTip = Loc.T("mini.openLyrics");
@@ -1181,6 +1366,7 @@ public sealed class MiniWindow : Window
         _offsetReset.Content = Loc.T("mini.offset.reset");
         ApplyMeaningLabel();
         _love.Content = LoveGlyph(_extras);
+        _love.Foreground = new SolidColorBrush(LoveColor(_extras));
         _love.ToolTip = LoveTip(_extras);
         ApplyLoveBadge();
         RefreshOffset();

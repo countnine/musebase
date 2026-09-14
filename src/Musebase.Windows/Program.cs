@@ -724,7 +724,8 @@ internal static class Program
                     : Task.FromResult(Musebase.Core.Search.MeaningRequestResult.Of(
                         Musebase.Core.Search.MeaningRequestStatus.Unavailable)),
                 // 이 곡의 서버 화면을 브라우저로 열 때 쓴다(주소가 비면 그 버튼이 사라진다).
-                ServerEndpoint: () => settings.LyricsServerEndpoint));
+                ServerEndpoint: () => settings.LyricsServerEndpoint),
+                settings);
 
             // 재생 중인 곡이 없거나 서버 주소를 안 넣었으면 물어보지 않는다 — 그건 오류가 아니라
             // "쓰지 않는 상태"다. 못 닿은 것(Failed)과 구별해야 화면에 엉뚱한 경고가 뜨지 않는다.
@@ -740,7 +741,7 @@ internal static class Program
                     ? ask(track) ?? Task.FromResult<Musebase.Core.Search.SongExtras?>(null)
                     : Task.FromResult<Musebase.Core.Search.SongExtras?>(null);
             miniWindow.SetTrack(coordinator.CurrentTrack?.Title, coordinator.CurrentTrack?.Artist);
-            if (coordinator.CurrentStatus is { } cs) miniWindow.SetStatus(LocalizeStatus(cs));
+            if (coordinator.CurrentStatus is { } cs) miniWindow.SetStatus(LocalizeStatusShort(cs));
             miniWindow.RefreshLyricsFeatures();
             // 앨범 커버 창이므로 시작할 때 바로 보여 준다(예전에는 최소화 상태로 숨어 있었다).
             miniWindow.WindowState = WindowState.Normal;
@@ -794,7 +795,29 @@ internal static class Program
 
             // ---- 이벤트 배선 ----
             // 엔진은 구조화된 LyricsStatus를 발행 → 여기서 현지화(UI 분리)
-            static string LocalizeStatus(LyricsStatus s) => s.Kind switch
+            /// <summary>
+    /// 제어판용 짧은 상태. <b>곡명·아티스트를 빼고</b> 소스·품질만 남긴다 —
+    /// 그 둘은 바로 위에 이미 제목·아티스트 줄로 나와 있어서, 넣으면 같은 말이 두 번 나오고
+    /// (한 줄이라) 정작 뒤쪽 소스 정보가 잘려 나간다.
+    ///
+    /// 트레이 툴팁·메뉴는 곡명이 있어야 무슨 곡인지 알 수 있으므로 <see cref="LocalizeStatus"/>를
+    /// 그대로 쓴다.
+    /// </summary>
+    static string LocalizeStatusShort(LyricsStatus s) => s.Kind switch
+    {
+        LyricsStatusKind.NoTrack => Loc.T("status.noTrack"),
+        LyricsStatusKind.HiddenByUser => Loc.T("status.short.hidden"),
+        LyricsStatusKind.Cache => Loc.T("status.short.cache", ("service", s.Service ?? "")),
+        LyricsStatusKind.Searching => Loc.T("status.short.searching"),
+        LyricsStatusKind.Found => Loc.T("status.short.found", ("service", s.Service ?? ""), ("quality", (s.Quality ?? 0).ToString("0.00"))),
+        LyricsStatusKind.NotFound => Loc.T("status.short.notFound"),
+        LyricsStatusKind.Wrong => Loc.T("status.short.wrong"),
+        LyricsStatusKind.Manual => Loc.T("status.short.manual", ("service", s.Service ?? "")),
+        LyricsStatusKind.Edited => Loc.T("status.short.edited"),
+        _ => "",
+    };
+
+    static string LocalizeStatus(LyricsStatus s) => s.Kind switch
             {
                 LyricsStatusKind.NoTrack => Loc.T("status.noTrack"),
                 LyricsStatusKind.HiddenByUser => Loc.T("status.hidden.user", ("track", s.Track ?? "")),
@@ -856,11 +879,12 @@ internal static class Program
                     return;
                 }
 
-                var text = (status is { } cs ? LocalizeStatus(cs) : "")
-                    + TranslationSuffix(coordinator.CurrentTranslationStatus);
+                var suffix = TranslationSuffix(coordinator.CurrentTranslationStatus);
+                var text = (status is { } cs ? LocalizeStatus(cs) : "") + suffix;
                 trackItem.Header = MenuText(text);
                 if (tray is { } t) t.ToolTipText = Loc.T("tray.tooltip.status", ("status", text));
-                miniWindow?.SetStatus(text);
+                // 제어판은 곡명·아티스트를 이미 위에 그리므로 짧은 쪽을 준다.
+                miniWindow?.SetStatus((status is { } s2 ? LocalizeStatusShort(s2) : "") + suffix);
             }
 
             coordinator.StatusChanged += status =>
@@ -889,6 +913,14 @@ internal static class Program
             if (args.Contains("--demo"))
             {
                 overlay.SetUserVisible(true);
+
+                // 제어판도 함께 채운다 — 이 플래그는 화면을 눈으로 검증하라고 있는 것인데
+                // 지금까지 오버레이만 다뤄, 긴 제목이 어떻게 접히는지 볼 방법이 없었다.
+                miniWindow?.SetTrack(
+                    "Everything In Its Right Place - 2016 Remaster Extended Version",
+                    "Radiohead & The London Contemporary Orchestra");
+                miniWindow?.SetStatus(Loc.T("status.short.searching"));
+
                 var demoLines = new (string Content, string Translation)[]
                 {
                     ("沈むように溶けてゆくように", "가라앉듯이 녹아내리듯이"),
