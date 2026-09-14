@@ -347,41 +347,58 @@ public sealed class AppSettings
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
 
     /// <summary>
-    /// 가져온 백업을 이 설정에 덮어쓴다. <b>기기마다 달라야 하는 값은 지킨다</b> —
-    /// 익명 식별자는 기기별로 달라야 하고, 창 좌표는 모니터 구성이 다르면 화면 밖이 된다.
+    /// 백업이 <b>덮어쓰지 않는</b> 속성.
     ///
-    /// 비밀값은 평문으로 받아 두고, 이어지는 <see cref="Save"/>가 <b>이 PC의 DPAPI로 다시 잠근다</b>.
+    /// 앞의 다섯은 기기마다 달라야 한다 — 익명 식별자는 기기별로 갈라야 하고, 창 좌표는 모니터
+    /// 구성이 다르면 화면 밖이 된다.
+    ///
+    /// 나머지(비밀값 평문·암호문)는 <b>지우면 되돌릴 수 없어서</b> 지킨다. 백업 파일에는 암호문이
+    /// 애초에 담기지 않고(다른 PC에서 못 푼다) 비밀번호 없이 내보내면 평문도 안 담긴다 — 그걸
+    /// 그대로 반영하면 이 PC의 키가 평문·암호문 양쪽에서 사라진다. 실제로 들어온 값만
+    /// <see cref="ApplyBackup"/> 끝에서 따로 덮어쓴다.
+    /// </summary>
+    private static readonly HashSet<string> KeptOnImport = new(StringComparer.Ordinal)
+    {
+        nameof(TelemetryClientId),
+        nameof(OverlayX), nameof(OverlayY), nameof(PanelX), nameof(PanelY),
+        nameof(DeeplApiKey), nameof(DeeplApiKeyEncrypted),
+        nameof(GoogleApiKey), nameof(GoogleApiKeyEncrypted),
+        nameof(LibreTranslateApiKey), nameof(LibreTranslateApiKeyEncrypted),
+        nameof(OpenRouterApiKey), nameof(OpenRouterApiKeyEncrypted),
+        nameof(LyricsServerToken), nameof(LyricsServerTokenEncrypted),
+        nameof(LegacyDeeplApiKey),
+    };
+
+    /// <summary>
+    /// 가져온 백업을 이 설정에 덮어쓴다. <b>지키는 것</b>은 <see cref="KeptOnImport"/>에 적혀 있다.
+    ///
+    /// 비밀값은 <b>백업에 실제로 들어 있을 때만</b> 바꾼다 — 비어 있는 칸은 "지우라"가 아니라
+    /// "안 담겼다"는 뜻이다(비밀번호 없이 내보낸 백업에는 키가 아예 없다).
+    ///
+    /// 들어온 평문은 이어지는 <see cref="Save"/>가 <b>이 PC의 DPAPI로 다시 잠근다</b>.
     /// </summary>
     public void ApplyBackup(JsonElement settings, Musebase.Core.Settings.SettingsBackup.Secrets? secrets)
     {
         var incoming = settings.Deserialize<AppSettings>(JsonOptions)
             ?? throw new InvalidDataException("설정을 읽지 못했습니다.");
 
-        var clientId = TelemetryClientId;
-        var overlayX = OverlayX;
-        var overlayY = OverlayY;
-        var panelX = PanelX;
-        var panelY = PanelY;
-
         foreach (var property in typeof(AppSettings).GetProperties())
         {
             if (!property.CanRead || !property.CanWrite) continue;
+            if (KeptOnImport.Contains(property.Name)) continue;
             property.SetValue(this, property.GetValue(incoming));
         }
 
-        TelemetryClientId = clientId;
-        OverlayX = overlayX;
-        OverlayY = overlayY;
-        PanelX = panelX;
-        PanelY = panelY;
-
         if (secrets is not { } s) return;
 
-        DeeplApiKey = s.DeeplApiKey;
-        GoogleApiKey = s.GoogleApiKey;
-        LibreTranslateApiKey = s.LibreTranslateApiKey;
-        OpenRouterApiKey = s.OpenRouterApiKey;
-        LyricsServerToken = s.LyricsServerToken;
+        DeeplApiKey = Taken(s.DeeplApiKey, DeeplApiKey);
+        GoogleApiKey = Taken(s.GoogleApiKey, GoogleApiKey);
+        LibreTranslateApiKey = Taken(s.LibreTranslateApiKey, LibreTranslateApiKey);
+        OpenRouterApiKey = Taken(s.OpenRouterApiKey, OpenRouterApiKey);
+        LyricsServerToken = Taken(s.LyricsServerToken, LyricsServerToken);
+
+        static string? Taken(string? fromBackup, string? current) =>
+            string.IsNullOrEmpty(fromBackup) ? current : fromBackup;
     }
 
     public void Save()
