@@ -599,6 +599,13 @@ public sealed class MainActivity : Activity
         else
         {
             ShowMeaningText(dialog, meaning);
+            // 이미 있는 글도 다시 만들 수 있어야 한다(모델을 바꿔 보거나 마음에 안 들 때).
+            // 다만 **덮어쓰기**라 누르면 먼저 묻는다 — MakeMeaning이 확인 창을 띄운다.
+            if (make is not null)
+            {
+                make.Text = RegenerateLabel;
+                make.Visibility = ViewStates.Visible;
+            }
         }
     }
 
@@ -612,10 +619,15 @@ public sealed class MainActivity : Activity
         Musebase.Core.Search.IRemoteLyricsCache remote, AlertDialog dialog, global::Android.Widget.Button make,
         TrackInfo track)
     {
+        // 이미 글이 있는 상태에서 누른 것이면 재생성이다 — 되돌릴 수 없으므로 먼저 묻는다.
+        var regenerate = make.Text == RegenerateLabel;
+        if (regenerate && !await ConfirmRegenerateAsync()) return;
+
         make.Enabled = false;
         dialog.SetMessage("의미를 만드는 중… 수십 초 걸릴 수 있습니다.");
 
-        var result = await remote.RequestMeaningAsync(track.Title, track.Artist);
+        // force는 사람이 방금 확인했을 때만. 그 밖에는 서버가 만들어 둔 것을 그대로 받는다.
+        var result = await remote.RequestMeaningAsync(track.Title, track.Artist, regenerate);
 
         if (IsFinishing || IsDestroyed || !dialog.IsShowing) return;
 
@@ -643,6 +655,32 @@ public sealed class MainActivity : Activity
         // 다시 눌러 볼 수 있는 것은 일시적 실패뿐이다 — 자료가 없는 곡은 눌러도 같은 답이 온다.
         make.Enabled = result.Status is Musebase.Core.Search.MeaningRequestStatus.Retry
                                      or Musebase.Core.Search.MeaningRequestStatus.Failed;
+    }
+
+    /// <summary>이미 있는 글을 다시 만들 때의 버튼 글자 — 그 상태를 이 문자열로 가린다.</summary>
+    private const string RegenerateLabel = "다시 만들기";
+
+    /// <summary>
+    /// "다시 만들기"를 정말 할지 묻는다. <b>기존 글을 덮어쓴다</b> — 되돌릴 수 없고 비싼 호출이라,
+    /// 읽으려다 잘못 누른 것과 구별해야 한다.
+    /// </summary>
+    private Task<bool> ConfirmRegenerateAsync()
+    {
+        var answer = new TaskCompletionSource<bool>();
+        new AlertDialog.Builder(this)
+            .SetTitle("의미를 다시 만들까요?")!
+            .SetMessage("지금 있는 글을 지우고 새로 만듭니다. 되돌릴 수 없습니다.")!
+            .SetPositiveButton(RegenerateLabel, (_, _) => answer.TrySetResult(true))!
+            .SetNegativeButton("취소", (_, _) => answer.TrySetResult(false))!
+            .SetOnCancelListener(new CancelListener(() => answer.TrySetResult(false)))!
+            .Show();
+        return answer.Task;
+    }
+
+    /// <summary>뒤로 가기로 창을 닫아도 기다리는 쪽이 멈추지 않게 한다.</summary>
+    private sealed class CancelListener(Action onCancel) : Java.Lang.Object, IDialogInterfaceOnCancelListener
+    {
+        public void OnCancel(IDialogInterface? dialog) => onCancel();
     }
 
     /// <summary>본문과 출처를 함께 그린다 — 출처 표기는 계약상 의무라 떼어 놓지 않는다.</summary>

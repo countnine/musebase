@@ -54,7 +54,13 @@ public interface IRemoteLyricsCache
     /// 조회와 달리 수십 초가 걸릴 수 있어 <b>훨씬 긴 타임아웃</b>을 쓰고, 실패해도
     /// 서킷 브레이커에 세지 않는다(부가 기능 때문에 가사 조회가 막히면 손해가 크다).
     /// </summary>
-    Task<MeaningRequestResult> RequestMeaningAsync(string title, string artist, CancellationToken ct = default);
+    /// <param name="force">
+    /// <b>이미 있는 의미를 버리고 다시 만든다.</b> 기본값(false)이면 서버가 만들어 둔 것이 있을 때
+    /// 그것을 그대로 돌려준다 — 비싼 호출을 되풀이하지 않고, 무엇보다 <b>기존 글을 덮어쓰지 않는다</b>.
+    /// 사람이 "다시 만들기"를 눌러 확인했을 때만 true를 준다.
+    /// </param>
+    Task<MeaningRequestResult> RequestMeaningAsync(
+        string title, string artist, bool force = false, CancellationToken ct = default);
 
     /// <summary>
     /// 곡에 딸린 것들(커버 주소·좋아요 상태)을 한 번에 받는다.

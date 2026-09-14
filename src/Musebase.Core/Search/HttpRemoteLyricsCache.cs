@@ -172,12 +172,14 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     /// 타임아웃도 따로 길게 잡는다: 외부 자료 수집 + LLM이라 수십 초가 걸린다.
     /// </summary>
     public async Task<MeaningRequestResult> RequestMeaningAsync(
-        string title, string artist, CancellationToken ct = default)
+        string title, string artist, bool force = false, CancellationToken ct = default)
     {
         try
         {
+            // force가 없으면 서버가 만들어 둔 것을 그대로 준다 — 기존 글을 덮어쓰지 않는다.
             var url = new Uri(_baseUri,
-                $"v1/meaning?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist)}");
+                $"v1/meaning?title={Uri.EscapeDataString(title)}&artist={Uri.EscapeDataString(artist)}"
+                + (force ? "&force=1" : ""));
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(GenerateTimeout);
 

@@ -194,6 +194,42 @@ public class RemoteLyricsCacheTests
     }
 
     /// <summary>
+    /// <b>기본은 캐시 우선이다.</b> force 없이 부르면 서버가 만들어 둔 글을 그대로 돌려주므로
+    /// 주소에 force가 실리면 안 된다 — 실렸다면 멀쩡한 글을 덮어쓴다.
+    /// </summary>
+    [Fact]
+    public async Task 의미_요청은_기본적으로_다시_만들지_않는다()
+    {
+        string? url = null;
+        var cache = Create(new StubHandler(req =>
+        {
+            url = req.RequestUri!.ToString();
+            return Task.FromResult(Json(HttpStatusCode.OK,
+                """{"title":"Kids","artist":"MGMT","summary":"이미 있던 글","lang":"ko"}"""));
+        }));
+
+        await cache.RequestMeaningAsync("Kids", "MGMT");
+
+        Assert.DoesNotContain("force", url);
+    }
+
+    [Fact]
+    public async Task 사람이_확인했을_때만_force를_싣는다()
+    {
+        string? url = null;
+        var cache = Create(new StubHandler(req =>
+        {
+            url = req.RequestUri!.ToString();
+            return Task.FromResult(Json(HttpStatusCode.OK,
+                """{"title":"Kids","artist":"MGMT","summary":"새로 쓴 글","lang":"ko"}"""));
+        }));
+
+        await cache.RequestMeaningAsync("Kids", "MGMT", force: true);
+
+        Assert.Contains("force=1", url);
+    }
+
+    /// <summary>
     /// 만들지 못한 것은 오류가 아니라 흔한 결과다. 다만 이유마다 사람에게 할 말이 다르므로
     /// (다시 눌러 볼지 말지가 갈린다) 202 본문의 status를 그대로 옮겨야 한다.
     /// </summary>

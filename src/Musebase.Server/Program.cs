@@ -208,10 +208,18 @@ app.MapGet(Routes.Api + "/meaning", (HttpRequest request, string? title, string?
 // 앱에서 의미 만들기. **사람이 누를 때만 일어난다**는 원칙은 그대로고(자동 생성은 여전히 없다),
 // 누르는 자리가 관리자 화면 하나에서 각 기기로 늘어난 것이다(ADR-0007 결정 4 참고).
 // 비용이 드는 유일한 쓰기 경로라 `MUSEBASE_MEANING_ALLOW_CLIENT=0`으로 막을 수 있다.
-app.MapPost(Routes.Api + "/meaning", async (HttpRequest request, string? title, string? artist) =>
+app.MapPost(Routes.Api + "/meaning", async (HttpRequest request, string? title, string? artist, string? force) =>
 {
     if (!Authorized(request)) return Unauthorized();
     if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
+
+    // **이미 만들어 둔 의미가 있으면 그대로 돌려준다.** 예전에는 확인 없이 새로 만들어 덮어썼고,
+    // 막는 것이 클라이언트 플래그 한 겹뿐이라 조회가 실패·타임아웃이거나 응답 전에 버튼을 누르면
+    // 그대로 무너졌다. 방어를 서버에 두어야 앱·웹·구버전이 모두 함께 보호된다.
+    // 일부러 다시 만들려면 force=1(사람이 "다시 만들기"를 눌렀을 때만).
+    var regenerate = force is "1" or "true";
+    if (!regenerate && store.GetMeaning(title!, artist ?? "") is { Status: MeaningEntry.StatusOk } cached)
+        return Results.Ok(cached with { Sources = "", Attribution = MeaningMapper.Attribution(cached.Sources) });
 
     if (!meaningSettings.Current.AllowClientGeneration)
         return Results.Json(new ApiError("client generation disabled"), statusCode: StatusCodes.Status403Forbidden);
@@ -226,6 +234,11 @@ app.MapPost(Routes.Api + "/meaning", async (HttpRequest request, string? title, 
     // 앱은 방금 그 곡의 가사를 받아 띄운 상태이므로 정상 경로에서는 늘 있다.
     var found = store.Get(title!, artist ?? "");
     if (found?.Key is not { Length: > 0 } key) return Results.Json(new ApiError("song not found"), statusCode: 404);
+
+    // 조회(GetMeaning)는 느슨한 키로 형제 행까지 훑는데 저장은 이 행의 key에 한다.
+    // 표기가 갈린 곡에서 "조회는 있다는데 다시 만든다"가 되지 않도록, 이미 그 그룹에 의미가
+    // 있으면 그 행에 덮어쓴다(새 행을 하나 더 만들지 않는다).
+    if (store.GetMeaning(title!, artist ?? "") is { Key: { Length: > 0 } existing }) key = existing;
 
     var status = await meaningGenerator.GenerateAsync(key, found.Title, found.Artist);
 
