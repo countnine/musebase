@@ -726,8 +726,8 @@ internal static class Program
                 GetMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
                     ? rc.GetMeaningAsync(t.Title, t.Artist)
                     : Task.FromResult<Musebase.Core.Search.SongMeaningView?>(null),
-                MakeMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
-                    ? rc.RequestMeaningAsync(t.Title, t.Artist)
+                MakeMeaning: force => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
+                    ? rc.RequestMeaningAsync(t.Title, t.Artist, force)
                     : Task.FromResult(Musebase.Core.Search.MeaningRequestResult.Of(
                         Musebase.Core.Search.MeaningRequestStatus.Unavailable)),
                 // 이 곡의 서버 화면을 브라우저로 열 때 쓴다(주소가 비면 그 버튼이 사라진다).

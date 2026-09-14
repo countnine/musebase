@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Shell;
+using System.Windows.Threading;
 using Musebase.Core.Search;
 using Musebase.Engine;
 using Musebase.Windows.Services;
@@ -51,7 +52,7 @@ public sealed record MiniWindowActions(
     Func<Task<byte[]?>>? GetThumbnail = null,
     // 의미: 있으면 창을 열고, 없으면 그 자리에서 만든다
     Func<Task<SongMeaningView?>>? GetMeaning = null,
-    Func<Task<MeaningRequestResult>>? MakeMeaning = null,
+    Func<bool, Task<MeaningRequestResult>>? MakeMeaning = null,
     // 가사 서버 주소(설정값) — 이 곡의 서버 화면을 브라우저로 열 때 쓴다. 없으면 그 버튼이 사라진다
     Func<string?>? ServerEndpoint = null);
 
@@ -429,6 +430,13 @@ public sealed class MiniWindow : Window
         };
         _veil.LostKeyboardFocus += (_, _) => { if (!IsMouseOver) Reveal(false); };
 
+        _refreshTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = RefreshInterval,
+        };
+        _refreshTimer.Tick += (_, _) => OnRefreshTick();
+        _refreshTimer.Start();
+
         // 창이 다시 보일 때는 커버만 보이는 상태로 시작한다. 다만 마우스가 이미 그 자리에 있으면
         // 열어 두는 편이 맞다 — 지금까지는 커서를 한 번 움직여야 열렸다(MouseEnter가 안 온다).
         IsVisibleChanged += (_, e) =>
@@ -507,6 +515,31 @@ public sealed class MiniWindow : Window
     private struct Rect32 { public int Left, Top, Right, Bottom; }
 
     // ---- 호버 ----
+
+    // ---- 열려 있는 동안 상태 따라가기 ----
+
+    /// <summary>
+    /// 다시 물어보는 간격. 좋아요·의미는 관리 화면이나 폰에서도 바뀌는데 서버가 알려 줄 길이
+    /// 없어(방송 채널이 없다) 이쪽에서 되묻는다. 30초면 사람이 "안 따라오네" 하기 전이고,
+    /// 곡 하나에 요청 하나라 서버에도 부담이 없다.
+    /// </summary>
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
+
+    private readonly DispatcherTimer _refreshTimer;
+
+    /// <summary>
+    /// 주기 갱신은 <b>창이 실제로 보일 때만</b> 돈다. 트레이로 숨겼거나 최소화한 창을 위해
+    /// 서버를 두드릴 이유가 없다 — 다시 열 때 어차피 새로 받는다.
+    /// </summary>
+    private void OnRefreshTick()
+    {
+        if (!IsVisible || WindowState == WindowState.Minimized) return;
+        if (_fetchedKey is null) return;                 // 재생 중인 곡이 없다
+
+        var epoch = _extrasEpoch;
+        FetchServerExtras(epoch);
+        FetchMeaning(epoch);
+    }
 
     // ---- 곡 제목 맞추기 ----
 
@@ -774,17 +807,33 @@ public sealed class MiniWindow : Window
     /// </summary>
     private async void OnMeaningClick()
     {
-        if (_hasMeaning || _a.MakeMeaning is not { } make)
+        if (_a.MakeMeaning is not { } make)
         {
             _a.OpenMeaning?.Invoke();
             return;
+        }
+
+        // 이미 글이 떠 있는데 또 눌렀다 = 다시 만들고 싶다는 뜻일 수 있다. 하지만 그건 비싸고
+        // **기존 글을 덮어쓴다** — 되돌릴 수 없으므로 반드시 묻는다.
+        if (_hasMeaning)
+        {
+            var answer = MessageBox.Show(
+                Loc.T("mini.meaning.regenerate.ask"), Loc.T("mini.meaning.regenerate.title"),
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+            {
+                _a.OpenMeaning?.Invoke();   // 아니오 = 그냥 읽고 싶었던 것
+                return;
+            }
         }
 
         var epoch = _extrasEpoch;
         _meaning.IsEnabled = false;
         _meaning.ToolTip = Loc.T("mini.meaning.making");
 
-        var result = await make();
+        // force는 사람이 방금 "다시 만들기"에 예라고 했을 때만. 그 밖에는 서버가 만들어 둔 것을
+        // 그대로 준다(요청 전에 GET으로 또 물을 필요가 없다).
+        var result = await make(_hasMeaning);
         if (epoch != _extrasEpoch) return;
 
         _meaning.IsEnabled = true;
@@ -806,12 +855,29 @@ public sealed class MiniWindow : Window
     private void ApplyMeaningLabel() =>
         _meaning.ToolTip = Loc.T(_hasMeaning ? "mini.meaning" : "mini.meaning.find");
 
+    /// <summary>
+    /// 좋아요를 뒤집는다. <b>누르기 전에 지금 값을 다시 받아 온다</b> —
+    /// 서버는 토글이 아니라 절대값(<c>on=1|0</c>)을 받으므로, 관리 화면이나 폰에서 바꾼 뒤라면
+    /// 화면에 남아 있던 스냅샷을 뒤집어 보내는 순간 <b>의도와 반대로 간다</b>
+    /// (사용자에게는 "눌러도 안 바뀐다"로 보인다).
+    ///
+    /// 그 사이 값이 바뀌어 있었으면 조용히 넘어가지 않고 상태 줄에 한 줄로 알린다 —
+    /// 안 알리면 방금 누른 결과로 오해한다.
+    /// </summary>
     private async void ToggleLove()
     {
-        if (_a.SetLoved is not { } set || _extras is not { LoveConnected: true } now) return;
+        if (_a.SetLoved is not { } set || _extras is not { LoveConnected: true } shown) return;
 
         _love.IsEnabled = false;
         var epoch = _extrasEpoch;
+
+        var fresh = _a.GetExtras is { } get ? (await get()).Extras : null;
+        if (epoch != _extrasEpoch) return;
+
+        var now = fresh ?? shown;
+        var changedElsewhere = fresh is not null && shown.LoveKnown && fresh.LoveKnown
+            && fresh.Loved != shown.Loved;
+
         // 모르는 상태(조회 실패)면 끄는 쪽으로 보내지 않는다 — 이미 켜 둔 것을 꺼 버릴 수 있다.
         // 켜는 요청은 이미 켜져 있어도 해가 없고, 응답으로 실제 상태를 받아 온다.
         var updated = await set(!now.LoveKnown || !now.Loved);
@@ -819,6 +885,7 @@ public sealed class MiniWindow : Window
 
         _love.IsEnabled = true;
         if (updated is not null) ApplyExtras(updated);
+        if (changedElsewhere) _source.Text = Loc.T("mini.love.changedElsewhere");
     }
 
     /// <summary>
