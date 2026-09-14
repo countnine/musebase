@@ -35,6 +35,7 @@ public sealed class OverlayWindow : Window
     // 좌상단 제어판 버튼(마우스 오버 시 표시). EnablePanelButton으로 배선되면 생성된다.
     // 예전에는 여기에 재생 컨트롤이 있었는데, 같은 기능이 제어판에도 있어 자리만 두 벌 썼다.
     private PanelButtonWindow? _panelButton;
+    private CloseButtonWindow? _closeButton;
     private Func<bool>? _panelVisibleProvider;
 
     private static readonly Duration FadeDuration = new(TimeSpan.FromMilliseconds(180));
@@ -117,12 +118,13 @@ public sealed class OverlayWindow : Window
             // 드래그해도 자물쇠 버튼이 아래로 깔려 클릭 불능이 되지 않는다
             _lockButton.Owner = this;
             if (_panelButton is not null) _panelButton.Owner = this;
+            if (_closeButton is not null) _closeButton.Owner = this;
             RestorePosition();
             UpdateTextLayout();
             _hoverTimer.Start();
         };
         SizeChanged += (_, _) => UpdateTextLayout();
-        LocationChanged += (_, _) => { PositionLockButton(); UpdatePanelButton(); };
+        LocationChanged += (_, _) => UpdateOverlayButtons();
         SourceInitialized += (_, _) =>
         {
             var hwnd = new WindowInteropHelper(this).Handle;
@@ -146,6 +148,16 @@ public sealed class OverlayWindow : Window
         _panelVisibleProvider = visibleProvider;
         _panelButton = new PanelButtonWindow(onToggle);
         if (IsLoaded) _panelButton.Owner = this;
+    }
+
+    /// <summary>
+    /// 우상단 숨기기(✕) 버튼을 활성화한다. 지금까지 오버레이 위에서 오버레이를 직접 치울
+    /// 방법이 없어 트레이나 제어판을 찾아가야 했다.
+    /// </summary>
+    public void EnableCloseButton(Action onClose)
+    {
+        _closeButton = new CloseButtonWindow(onClose);
+        if (IsLoaded) _closeButton.Owner = this;
     }
 
     // ---- 표시 내용 ----
@@ -262,8 +274,7 @@ public sealed class OverlayWindow : Window
         if (!moveMode) SaveBounds();
         MoveModeChanged?.Invoke(moveMode);
         ApplyVisibility(); // 억제 상태여도 이동 모드 진입 시 표시
-        UpdateLockButton();
-        UpdatePanelButton();
+        UpdateOverlayButtons();
     }
 
     /// <summary>호버 타이머(150ms): 마우스 오버 숨김 처리 + 자물쇠 버튼 표시 갱신.</summary>
@@ -285,53 +296,68 @@ public sealed class OverlayWindow : Window
             ApplyVisibility();
         }
 
-        UpdateLockButton();
-        UpdatePanelButton();
+        UpdateOverlayButtons();
     }
 
-    /// <summary>제어판 버튼 표시/숨김·상태 갱신. 오버레이(또는 버튼) 위에 커서가 있을 때만 뜬다.</summary>
-    private void UpdatePanelButton()
-    {
-        if (_panelButton is null) return;
-
-        // 이동 모드나 숨김 상태에서는 표시하지 않음
-        if (!IsVisible || IsMoveMode)
-        {
-            _panelButton.Hide();
-            return;
-        }
-
-        var show = _panelButton.IsMouseOver || IsCursorOverOverlay();
-        if (!show)
-        {
-            _panelButton.Hide();
-            return;
-        }
-
-        if (_panelVisibleProvider is { } visible) _panelButton.SetPanelVisible(visible());
-        PositionPanelButton();
-    }
-
-    private void PositionPanelButton()
-    {
-        if (_panelButton is null || !IsVisible) return;
-        // 좌상단(오버레이 Left/Top + 여백). 우상단 자물쇠와 겹치지 않는다.
-        _panelButton.ShowAt(Left + 6, Top + 6);
-    }
-
-    private void UpdateLockButton()
+    /// <summary>
+    /// 버튼 세 개의 표시 여부와 자리를 한 번에 정한다 —
+    /// 제어판(좌하단) · 자물쇠(우하단) · 숨기기(우상단).
+    ///
+    /// 예전에는 버튼마다 판단과 좌표가 따로 있어, 배치를 바꿀 때 한쪽만 고치면 서로 겹쳤다.
+    ///
+    /// 규칙은 셋이다. ① 오버레이가 안 보이면 전부 숨긴다. ② <b>이동 모드에서는 자물쇠만</b>
+    /// 남긴다 — 자리를 잡는 중에 숨기기·제어판을 누를 일이 없고, 오히려 잘못 눌러 사라진다.
+    /// ③ 그 밖에는 커서가 오버레이나 버튼 위에 있을 때만 보인다.
+    /// </summary>
+    private void UpdateOverlayButtons()
     {
         if (!IsVisible)
         {
-            _lockButton.Hide();
+            HideOverlayButtons();
             return;
         }
 
-        // 이동 모드에서는 항상 표시, 잠금 상태에서는 커서가 영역 위일 때만
-        var show = IsMoveMode || _lockButton.IsMouseOver || IsCursorOverOverlay();
-        if (show) PositionLockButton();
-        else _lockButton.Hide();
+        if (IsMoveMode)
+        {
+            _panelButton?.Hide();
+            _closeButton?.Hide();
+            PositionLock();
+            return;
+        }
+
+        var overButton = _lockButton.IsMouseOver
+            || _panelButton is { IsMouseOver: true }
+            || _closeButton is { IsMouseOver: true };
+
+        if (!overButton && !IsCursorOverOverlay())
+        {
+            HideOverlayButtons();
+            return;
+        }
+
+        if (_panelVisibleProvider is { } panelVisible) _panelButton?.SetPanelVisible(panelVisible());
+
+        PositionLock();
+        _panelButton?.ShowAt(Left + ButtonGap, Bottom - ButtonSize - ButtonGap);
+        _closeButton?.ShowAt(Right - ButtonSize - ButtonGap, Top + ButtonGap);
     }
+
+    private void PositionLock() =>
+        _lockButton.ShowAt(Right - ButtonSize - ButtonGap, Bottom - ButtonSize - ButtonGap);
+
+    private void HideOverlayButtons()
+    {
+        _lockButton.Hide();
+        _panelButton?.Hide();
+        _closeButton?.Hide();
+    }
+
+    /// <summary>세 버튼 창의 한 변(모두 같다)과 오버레이 모서리에서 띄우는 간격.</summary>
+    private const double ButtonSize = 32;
+    private const double ButtonGap = 6;
+
+    private double Right => Left + ActualWidth;
+    private double Bottom => Top + ActualHeight;
 
     // 오버레이의 화면 영역(물리 px). 보이는 동안 갱신해 두면 '마우스 오버 시 숨김'으로
     // 창이 숨겨진 뒤에도(PresentationSource 변환에 의존하지 않고) 커서 이탈을 판정할 수 있다.
@@ -358,11 +384,7 @@ public sealed class OverlayWindow : Window
         return _cachedScreenBounds.Contains(pt.X, pt.Y);
     }
 
-    private void PositionLockButton()
-    {
-        if (!IsVisible) return;
-        _lockButton.ShowAt(Left + ActualWidth - _lockButton.Width - 6, Top + 6);
-    }
+
 
     // ---- 가시성 (사용자 토글 × 전체화면 억제) ----
 
@@ -373,13 +395,17 @@ public sealed class OverlayWindow : Window
     }
 
     /// <summary>
-    /// 미니창(작업표시줄)에서 오버레이 되살리기: 사용자 숨김·일시정지·마우스오버 억제를 해제해
-    /// 항상 다시 보이게 한다. 전체화면 억제는 게임/영상 위로 튀지 않도록 그대로 둔다.
+    /// 미니창(작업표시줄)에서 오버레이 되살리기: <b>사용자 숨김</b>과 마우스오버 억제를 푼다.
+    ///
+    /// <b>일시정지 억제는 건드리지 않는다.</b> 예전에는 여기서 false로 덮어썼는데, 재계산이
+    /// 재생 상태 변화로만 일어나 <b>멈춘 가사가 다음 재생까지 떠 있었다</b> — 제어판을 여는
+    /// 것이 "일시정지 중에도 보이게 해 달라"는 뜻일 리 없다.
+    ///
+    /// 전체화면 억제도 그대로 둔다(게임·영상 위로 튀지 않게).
     /// </summary>
     public void ReviveVisible()
     {
         _userVisible = true;
-        _pausedSuppressed = false;
         _mouseOverSuppressed = false;
         ApplyVisibility();
     }
@@ -438,8 +464,7 @@ public sealed class OverlayWindow : Window
             BeginAnimation(OpacityProperty, null);
             Hide();
         }
-        _lockButton.Hide();
-        _panelButton?.Hide();
+        HideOverlayButtons();
     }
 
     /// <summary>설정의 색상/외곽선 스타일 적용 (설정 저장 후에도 호출)</summary>
@@ -521,12 +546,13 @@ public sealed class OverlayWindow : Window
         }
         else
         {
+            // 설치 직후 기본 자리 — 주 모니터 작업영역의 가로 중앙, 작업표시줄 위.
             var area = SystemParameters.WorkArea;
             Left = area.Left + (area.Width - ActualWidth) / 2;
             Top = area.Bottom - ActualHeight - 64;
         }
         KeepOnScreen();
-        PositionLockButton();
+        UpdateOverlayButtons();
     }
 
     private void SaveBounds()
@@ -538,17 +564,20 @@ public sealed class OverlayWindow : Window
         _settings.Save();
     }
 
+    /// <summary>
+    /// 창을 <b>그 창이 놓인 모니터의 작업영역</b> 안으로 되돌린다.
+    ///
+    /// 예전에는 가상 화면(VirtualScreen) 기준이라 작업표시줄 아래로 끼는 것을 막지 못했다 —
+    /// 그러면 가사 아래쪽이 작업표시줄에 가려 읽히지 않는다. 모니터를 뗀 뒤의 복원도 여기서 잡힌다.
+    /// </summary>
     private void KeepOnScreen()
     {
-        var vLeft = SystemParameters.VirtualScreenLeft;
-        var vTop = SystemParameters.VirtualScreenTop;
-        var vRight = vLeft + SystemParameters.VirtualScreenWidth;
-        var vBottom = vTop + SystemParameters.VirtualScreenHeight;
+        var area = MonitorWorkArea.For(this);
 
-        if (Left + ActualWidth > vRight) Left = vRight - ActualWidth;
-        if (Top + ActualHeight > vBottom) Top = vBottom - ActualHeight;
-        if (Left < vLeft) Left = vLeft;
-        if (Top < vTop) Top = vTop;
+        if (Left + ActualWidth > area.Right) Left = area.Right - ActualWidth;
+        if (Top + ActualHeight > area.Bottom) Top = area.Bottom - ActualHeight;
+        if (Left < area.Left) Left = area.Left;
+        if (Top < area.Top) Top = area.Top;
     }
 
     // ---- Win32 ----
@@ -595,9 +624,11 @@ public sealed class OverlayWindow : Window
 
             // 이동/크기 조절 종료 시 저장
             case NativeMethods.WM_EXITSIZEMOVE:
-                SaveBounds();
-                PositionLockButton();
+                // 보정을 먼저 한다 — 반대 순서면 화면 밖으로 끌어 놓은 좌표가 그대로 저장돼,
+                // 화면에 보이는 자리와 설정값이 어긋난다.
                 KeepOnScreen();
+                SaveBounds();
+                UpdateOverlayButtons();
                 break;
         }
         return IntPtr.Zero;

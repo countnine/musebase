@@ -456,15 +456,10 @@ public sealed class MiniWindow : Window
                 WindowState = WindowState.Minimized;
         };
 
-        // 작업표시줄에서 복원(클릭) → 오버레이 되살리기.
-        StateChanged += (_, _) =>
-        {
-            if (WindowState == WindowState.Normal) _a.ReviveOverlay();
-        };
-        Activated += (_, _) =>
-        {
-            if (WindowState != WindowState.Minimized) _a.ReviveOverlay();
-        };
+        // **창을 건드렸다는 이유로 오버레이를 되살리지 않는다.** 예전에는 여기서 복원·활성화마다
+        // ReviveOverlay()를 불렀는데, 그러면 사용자가 오버레이를 숨겨 둬도 제어판을 클릭하는 순간
+        // 다시 켜지고 그 상태가 설정에 저장됐다 — 숨김이 아예 유지되지 않았다.
+        // 되살리기는 명시적으로 그 뜻을 가진 경로(트레이 "제어판 열기" 등)에서만 한다.
 
         Loc.CultureChanged += ApplyText;
         Closed += (_, _) => Loc.CultureChanged -= ApplyText;
