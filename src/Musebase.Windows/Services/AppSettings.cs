@@ -29,6 +29,16 @@ public sealed class AppSettings
     public double OverlayWidth { get; set; } = 780;
     public double OverlayHeight { get; set; } = 150;
 
+    /// <summary>
+    /// 제어판(앨범 커버 창)의 위치·크기. 저장된 값이 없으면(<c>null</c>) 첫 실행 배치로 간다 —
+    /// 작업영역 우하단에 살짝 띄워서. 늘 띄워 두는 창이라 매번 화면 한가운데 나타나면 방해가 된다.
+    /// </summary>
+    public double? PanelX { get; set; }
+    public double? PanelY { get; set; }
+
+    /// <summary>정사각이라 한 변만 저장한다.</summary>
+    public double PanelSize { get; set; } = 360;
+
     // ---- 오버레이 스타일 (#RRGGBB) ----
     public string TextColor { get; set; } = "#FFFFFF";
     public string KaraokeColor { get; set; } = "#FFEB3B";
