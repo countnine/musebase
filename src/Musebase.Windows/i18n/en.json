@@ -122,6 +122,7 @@
   "lock.tooltip.unlocked": "Click: lock overlay (click-through)",
   "overlay.panel.show": "Open the control panel",
   "overlay.panel.hide": "Close the control panel",
+  "overlay.close": "Hide lyrics (turn back on from the tray or control panel)",
 
   "controls.previous": "Previous",
   "controls.playPause": "Play/Pause",

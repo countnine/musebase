@@ -122,6 +122,7 @@
   "lock.tooltip.unlocked": "클릭: 오버레이 고정 (클릭스루)",
   "overlay.panel.show": "제어판 열기",
   "overlay.panel.hide": "제어판 닫기",
+  "overlay.close": "가사 숨기기 (트레이·제어판에서 다시 켤 수 있습니다)",
 
   "controls.previous": "이전 곡",
   "controls.playPause": "재생/일시정지",

@@ -178,17 +178,17 @@ internal static class Program
                 nowPlaying.IsPlayingChanged += playing =>
                     app.Dispatcher.BeginInvoke(() => overlay.SetPausedSuppressed(!playing));
 
-                // 오버레이 좌상단의 제어판 여닫기 버튼. 마우스 오버 시에만 표시.
-                // 예전에는 이 자리에 재생 컨트롤이 있었으나 같은 기능이 제어판에 있고,
-                // 정작 오버레이에서 제어판으로 가는 길은 없었다(트레이를 찾아야 했다).
-                overlay.EnablePanelButton(
-                    visibleProvider: () => miniWindow is { IsVisible: true, WindowState: not WindowState.Minimized },
-                    onToggle: TogglePanel);
-
                 // 재생 상태 변경 시 미니창 재생 버튼(재생/일시정지·활성) 갱신.
                 nowPlaying.IsPlayingChanged += _ =>
                     app.Dispatcher.BeginInvoke(() => miniWindow?.RefreshPlayback());
             }
+
+            // 오버레이 좌하단의 제어판 여닫기 버튼. 마우스 오버 시에만 표시.
+            // 재생 상태와 무관하므로 --demo에서도 건다 — 그 플래그는 화면을 눈으로 검증하라고
+            // 있는 것인데, 빼 두면 정작 버튼 배치를 확인할 수 없다.
+            overlay.EnablePanelButton(
+                visibleProvider: () => miniWindow is { IsVisible: true, WindowState: not WindowState.Minimized },
+                onToggle: TogglePanel);
 
             // ---- 트레이 메뉴 ----
             var trackItem = new MenuItem { Header = Loc.T("status.noTrack"), IsEnabled = false };
@@ -511,6 +511,9 @@ internal static class Program
             void ReviveOverlay()
             {
                 overlay.ReviveVisible();
+                // 되살리기는 "사용자 숨김"만 푼다 — 일시정지 중이면 여전히 숨어 있어야 하므로
+                // 지금 재생 상태를 다시 알려 준다(그 판단은 오버레이가 한다).
+                if (!args.Contains("--demo")) overlay.SetPausedSuppressed(!nowPlaying.IsPlaying);
                 settings.OverlayVisible = true;
                 settings.Save();
                 overlayToggle.IsChecked = true;
@@ -691,6 +694,10 @@ internal static class Program
 
             // ---- 작업표시줄 상주 미니창(컨트롤 허브) ----
             // 콜백은 위 트레이 로컬 함수를 그대로 주입 → 트레이/미니창이 같은 코드 경로를 공유.
+            // 오버레이 우상단 숨기기 — 가사가 지금 거슬리는 그 자리에서 바로 치울 수 있게.
+            // 트레이 항목이 다 만들어진 뒤에 건다(SetOverlayVisible이 overlayToggle을 잡는다).
+            overlay.EnableCloseButton(() => SetOverlayVisible(false));
+
             miniWindow = new MiniWindow(appIcon, new MiniWindowActions(
                 IsOverlayVisible: () => settings.OverlayVisible,
                 SetOverlayVisible: SetOverlayVisible,
