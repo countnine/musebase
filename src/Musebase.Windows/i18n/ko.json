@@ -73,7 +73,7 @@
   "settings.backup.import": "설정 가져오기…",
   "settings.backup.exported": "내보냈습니다. 이 파일은 비밀번호만 알면 어느 PC에서나 열립니다 — 보관에 주의하세요.",
   "settings.backup.exported.noSecrets": "내보냈습니다. 비밀번호를 넣지 않아 API 키·토큰은 담기지 않았습니다.",
-  "settings.backup.imported": "가져왔습니다. 설정 창을 닫고 반영합니다.",
+  "settings.backup.imported": "가져왔습니다. 창 위치와 기기 식별자는 이 PC 것을 그대로 씁니다. 설정 창을 닫고 반영합니다.",
   "settings.backup.failed": "하지 못했습니다: {error}",
   "settings.backup.password.export": "백업 비밀번호 정하기",
   "settings.backup.password.import": "백업 비밀번호",

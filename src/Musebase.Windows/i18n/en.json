@@ -73,7 +73,7 @@
   "settings.backup.import": "Import settings…",
   "settings.backup.exported": "Exported. Anyone with the password can open this file on any PC — keep it somewhere safe.",
   "settings.backup.exported.noSecrets": "Exported. No password was given, so API keys and tokens were left out.",
-  "settings.backup.imported": "Imported. Closing settings to apply.",
+  "settings.backup.imported": "Imported. Window positions and the device id keep this PC's own values. Closing settings to apply.",
   "settings.backup.failed": "Could not do that: {error}",
   "settings.backup.password.export": "Choose a backup password",
   "settings.backup.password.import": "Backup password",

@@ -975,8 +975,13 @@ public sealed class SettingsWindow : Window
             MessageBox.Show(this, Loc.T("settings.backup.imported"),
                 Loc.T("settings.backup.header"), MessageBoxButton.OK, MessageBoxImage.Information);
 
-            DialogResult = true;   // 저장한 것과 같은 취급 — 호출자가 엔진을 다시 구성한다
+            // 이 창은 모달이 아니다(Program이 Show로 띄운다) — DialogResult를 건드리면 예외가 난다.
+            // [저장]과 같은 길로 알린다: 콜백으로 엔진·오버레이·서버를 다시 구성하고 닫는다.
+            _onSaved();
             Close();
+
+            // 언어는 창을 닫은 뒤에 바꾼다 — 열려 있으면 닫는 중인 창을 한 번 더 그리게 된다.
+            Loc.SetLanguage(_settings.UiLanguage);
         }
         catch (Exception e)
         {
