@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
+using Musebase.Core.Settings;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -540,6 +542,34 @@ public sealed class SettingsWindow : Window
             };
             general.Children.Add(resetIdButton);
 
+            // ---- 설정 백업 ----
+            general.Children.Add(Header("settings.backup.header"));
+            general.Children.Add(new TextBlock
+            {
+                Text = Loc.T("settings.backup.hint"),
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6),
+            });
+
+            var backupRow = new StackPanel { Orientation = Orientation.Horizontal };
+            var exportButton = new Button
+            {
+                Content = Loc.T("settings.backup.export"),
+                Padding = new Thickness(10, 2, 10, 2),
+                Margin = new Thickness(0, 0, 8, 0),
+            };
+            var importButton = new Button
+            {
+                Content = Loc.T("settings.backup.import"),
+                Padding = new Thickness(10, 2, 10, 2),
+            };
+            exportButton.Click += (_, _) => ExportSettings();
+            importButton.Click += (_, _) => ImportSettings();
+            backupRow.Children.Add(exportButton);
+            backupRow.Children.Add(importButton);
+            general.Children.Add(backupRow);
+
             // ================= [오버레이 스타일] 탭 =================
             var appearance = new StackPanel { Margin = new Thickness(16), Width = 400, HorizontalAlignment = HorizontalAlignment.Left };
 
@@ -868,5 +898,90 @@ public sealed class SettingsWindow : Window
         try { Process.Start(new ProcessStartInfo(e.Uri.ToString()) { UseShellExecute = true }); }
         catch { /* 브라우저 실행 실패는 무시 */ }
         e.Handled = true;
+    }
+
+    // ---- 설정 백업 ----
+
+    private const string BackupFilter = "Musebase 백업 (*.musebase.json)|*.musebase.json|JSON (*.json)|*.json";
+
+    /// <summary>
+    /// 설정을 파일로 내보낸다. 비밀번호를 받으면 API 키·토큰을 그것으로 봉인해 함께 담고,
+    /// 비우면 <b>키를 아예 빼고</b> 내보낸다 — 잠그지 않은 키를 파일에 흘리는 것보다 낫다.
+    ///
+    /// 화면에서 고치던 값(아직 저장 안 한 것)이 아니라 <b>저장된 설정</b>을 내보낸다.
+    /// 반쯤 고친 상태를 다른 PC로 옮기면 무엇이 옮겨졌는지 알 수 없다.
+    /// </summary>
+    private void ExportSettings()
+    {
+        var password = SettingsPasswordWindow.Ask(this, forExport: true);
+        if (password is null) return;   // 취소
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = BackupFilter,
+            FileName = $"musebase-{DateTime.Now:yyyyMMdd}.musebase.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            var secrets = new SettingsBackup.Secrets(
+                _settings.DeeplApiKey, _settings.GoogleApiKey, _settings.LibreTranslateApiKey,
+                _settings.OpenRouterApiKey, _settings.LyricsServerToken);
+
+            File.WriteAllText(
+                dialog.FileName,
+                SettingsBackup.Export(_settings.ToJson(), secrets, password.Length == 0 ? null : password));
+
+            MessageBox.Show(
+                this,
+                Loc.T(password.Length == 0 ? "settings.backup.exported.noSecrets" : "settings.backup.exported"),
+                Loc.T("settings.backup.header"), MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception e)
+        {
+            MessageBox.Show(this, Loc.T("settings.backup.failed", ("error", e.Message)),
+                Loc.T("settings.backup.header"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 백업을 읽어 설정에 반영한다. <b>전부 되거나 아무것도 안 되거나</b>다 —
+    /// 비밀번호가 틀렸는데 평문 설정만 덮어써 놓으면 어중간한 상태가 남는다.
+    ///
+    /// 반영 뒤에는 창을 닫는다. 열려 있는 컨트롤들이 예전 값을 들고 있어, 그대로 두고 [저장]을
+    /// 누르면 방금 가져온 것을 도로 덮어쓴다.
+    /// </summary>
+    private void ImportSettings()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = BackupFilter, CheckFileExists = true };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            var json = File.ReadAllText(dialog.FileName);
+
+            var password = "";
+            if (SettingsBackup.NeedsPassword(json))
+            {
+                password = SettingsPasswordWindow.Ask(this, forExport: false) ?? "";
+                if (password.Length == 0) return;   // 취소하거나 빈 비밀번호 — 그대로 둔다
+            }
+
+            var opened = SettingsBackup.Import(json, password.Length == 0 ? null : password);
+            _settings.ApplyBackup(opened.Settings, opened.Secrets);
+            _settings.Save();
+
+            MessageBox.Show(this, Loc.T("settings.backup.imported"),
+                Loc.T("settings.backup.header"), MessageBoxButton.OK, MessageBoxImage.Information);
+
+            DialogResult = true;   // 저장한 것과 같은 취급 — 호출자가 엔진을 다시 구성한다
+            Close();
+        }
+        catch (Exception e)
+        {
+            MessageBox.Show(this, Loc.T("settings.backup.failed", ("error", e.Message)),
+                Loc.T("settings.backup.header"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 }

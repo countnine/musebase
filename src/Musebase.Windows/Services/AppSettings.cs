@@ -332,16 +332,68 @@ public sealed class AppSettings
         LyricsServerToken = _secretStore.Unprotect(LyricsServerTokenEncrypted);
     }
 
+    /// <summary>
+    /// 평문을 이 PC의 DPAPI로 잠근다. <b>평문이 비었는데 기존 암호문이 있으면 그대로 둔다.</b>
+    ///
+    /// 예전에는 무조건 <c>Protect(평문)</c>을 썼는데, 복호에 실패해 평문이 null이면 암호문까지
+    /// null이 되고 <c>WhenWritingNull</c> 때문에 키가 파일에서 아예 빠졌다 — 다른 PC·계정에서
+    /// settings.json을 한 번 열어 보기만 해도 <b>키가 영영 사라졌다</b>. 복호 실패는 "값이 없다"가
+    /// 아니라 "여기서는 못 읽는다"일 뿐이다.
+    /// </summary>
+    private string? Seal(string? plain, string? existingCipher) =>
+        string.IsNullOrEmpty(plain) ? existingCipher : _secretStore.Protect(plain);
+
+    /// <summary>파일에 쓰는 것과 같은 모양의 JSON — 백업이 이걸 담는다.</summary>
+    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+
+    /// <summary>
+    /// 가져온 백업을 이 설정에 덮어쓴다. <b>기기마다 달라야 하는 값은 지킨다</b> —
+    /// 익명 식별자는 기기별로 달라야 하고, 창 좌표는 모니터 구성이 다르면 화면 밖이 된다.
+    ///
+    /// 비밀값은 평문으로 받아 두고, 이어지는 <see cref="Save"/>가 <b>이 PC의 DPAPI로 다시 잠근다</b>.
+    /// </summary>
+    public void ApplyBackup(JsonElement settings, Musebase.Core.Settings.SettingsBackup.Secrets? secrets)
+    {
+        var incoming = settings.Deserialize<AppSettings>(JsonOptions)
+            ?? throw new InvalidDataException("설정을 읽지 못했습니다.");
+
+        var clientId = TelemetryClientId;
+        var overlayX = OverlayX;
+        var overlayY = OverlayY;
+        var panelX = PanelX;
+        var panelY = PanelY;
+
+        foreach (var property in typeof(AppSettings).GetProperties())
+        {
+            if (!property.CanRead || !property.CanWrite) continue;
+            property.SetValue(this, property.GetValue(incoming));
+        }
+
+        TelemetryClientId = clientId;
+        OverlayX = overlayX;
+        OverlayY = overlayY;
+        PanelX = panelX;
+        PanelY = panelY;
+
+        if (secrets is not { } s) return;
+
+        DeeplApiKey = s.DeeplApiKey;
+        GoogleApiKey = s.GoogleApiKey;
+        LibreTranslateApiKey = s.LibreTranslateApiKey;
+        OpenRouterApiKey = s.OpenRouterApiKey;
+        LyricsServerToken = s.LyricsServerToken;
+    }
+
     public void Save()
     {
         try
         {
             // 평문 키는 파일에 쓰지 않고, 암호문만 저장(플랫폼 시크릿 저장소)
-            DeeplApiKeyEncrypted = _secretStore.Protect(DeeplApiKey);
-            GoogleApiKeyEncrypted = _secretStore.Protect(GoogleApiKey);
-            LibreTranslateApiKeyEncrypted = _secretStore.Protect(LibreTranslateApiKey);
-            OpenRouterApiKeyEncrypted = _secretStore.Protect(OpenRouterApiKey);
-            LyricsServerTokenEncrypted = _secretStore.Protect(LyricsServerToken);
+            DeeplApiKeyEncrypted = Seal(DeeplApiKey, DeeplApiKeyEncrypted);
+            GoogleApiKeyEncrypted = Seal(GoogleApiKey, GoogleApiKeyEncrypted);
+            LibreTranslateApiKeyEncrypted = Seal(LibreTranslateApiKey, LibreTranslateApiKeyEncrypted);
+            OpenRouterApiKeyEncrypted = Seal(OpenRouterApiKey, OpenRouterApiKeyEncrypted);
+            LyricsServerTokenEncrypted = Seal(LyricsServerToken, LyricsServerTokenEncrypted);
             LegacyDeeplApiKey = null;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));
