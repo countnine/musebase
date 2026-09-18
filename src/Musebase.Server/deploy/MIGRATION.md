@@ -31,7 +31,7 @@ journalctl -u musebase-backup -n 20          # 결과 확인
 
 ```
 MUSEBASE_BACKUP_REMOTE=ubuntu@mini:/srv/backup/musebase     # scp
-MUSEBASE_BACKUP_REMOTE=gs://my-bucket/musebase               # 또는 GCS(gcloud storage cp)
+MUSEBASE_BACKUP_REMOTE=gs://my-bucket/musebase               # 또는 GCS(서비스 계정 키로 직접 업로드)
 MUSEBASE_BACKUP_REMOTE="gs://my-bucket/musebase ubuntu@mini:/srv/backup/musebase"   # 둘 다(권장)
 ```
 
@@ -49,10 +49,16 @@ MUSEBASE_BACKUP_GCS_KEY=/etc/musebase/gcs-backup-key.json   # 버킷 쓰기 전�
 - GCS 사본 이름에는 시각이 붙는다(`lyrics-2026-09-18-040003.db.gz.gpg`). 서비스 계정에 **만들기 권한만**
   주면 되도록 한 것이다 — 서버가 털려도 클라우드 사본을 덮어쓰거나 지울 수 없다. 보존은 버킷 수명 주기 규칙으로.
 - 테일넷 기기(scp) 사본은 개인 기기라 암호화하지 않는다.
-- VM에 gcloud CLI가 있어야 한다(`google-cloud-cli` 패키지). 로그인 상태는 남기지 않고 위 키만 쓴다.
+- **VM에 gcloud는 필요 없다.** python3(표준 라이브러리)와 openssl로 업로드 API를 직접 부른다.
+  `gcloud storage cp`는 올리기 전에 버킷 목록·객체 읽기 권한을 요구해 만들기 전용 계정으로는 막힌다(실측).
+- 서비스 계정 권한은 버킷에 **`Storage 객체 생성자` 하나**, IAM 조건으로 경로를 좁힌다:
+  `resource.name.startsWith('projects/_/buckets/<버킷>/objects/musebase/')`. 목록·읽기·삭제는 주지 않는다 —
+  올린 사본이 맞는지는 업로드 응답의 크기·MD5로 확인한다.
+- 조직 기본 정책(`iam.disableServiceAccountKeyCreation`)이 키 발급을 막으면, 그 프로젝트만 잠시 예외를 두고
+  키를 발급한 뒤 **바로 다시 켠다**. 이미 발급된 키는 계속 동작한다(HMAC 키도 같은 정책에 막힌다).
 
 scp는 테일넷 이름을 쓰면 어디에 있든 붙는다 — 대상 호스트에 이 서버의 공개키를 등록해 둔다(`ssh-copy-id`).
-GCS는 VM에 gcloud 인증(서비스 계정 키 또는 `gcloud auth login`)이 있어야 한다.
+GCS는 위 서비스 계정 키 파일(`MUSEBASE_BACKUP_GCS_KEY`)만 있으면 된다.
 매일 백업이 끝난 뒤 한 부 더 넘어가고, 실패하면 로컬 백업은 그대로 둔 채 유닛이 **failed**로 남는다.
 
 > 백업 유닛이 `EnvironmentFile=-/etc/musebase/server.env`를 읽어야 이 값이 닿는다(2026-09-18 이전 `install.sh`는 빠뜨렸다).
@@ -61,7 +67,7 @@ GCS는 VM에 gcloud 인증(서비스 계정 키 또는 `gcloud auth login`)이 �
 
 ### 복구
 
-GCS 사본에서 되살릴 때는 먼저 받아서 푼다(비밀번호 필요):
+GCS 사본에서 되살릴 때는 **내 계정으로 아무 PC에서** 받아서 푼다(서버의 백업 계정은 읽을 수 없다. 비밀번호 필요):
 
 ```bash
 gcloud storage cp gs://<버킷>/musebase/lyrics-2026-09-18-040003.db.gz.gpg .

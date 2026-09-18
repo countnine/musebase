@@ -16,13 +16,17 @@
 #                            공백이나 쉼표로 구분한다 — 성격이 다른 두 곳(클라우드 + 집 기기)을
 #                            두면 한쪽이 죽어도 사본이 남는다. 대상마다 형식:
 #                            ubuntu@mini:/srv/backup/musebase  — scp(테일넷 이름이면 어디서든 붙는다)
-#                            gs://버킷/musebase                — gcloud storage cp(VM에 gcloud 인증 필요)
+#                            gs://버킷/musebase                — GCS(아래 서비스 계정 키로 직접 업로드)
 #
 #   MUSEBASE_BACKUP_PASSPHRASE  gs:// 대상에 올리는 사본을 암호화할 비밀번호(gpg AES-256). **필수** —
 #                            백업에는 관리화면에서 넣은 API 키·Last.fm/Spotify 토큰이 평문으로 들어 있어
 #                            비밀번호 없이는 클라우드에 올리지 않는다. 테일넷 기기(scp) 사본은 암호화하지 않는다.
 #   MUSEBASE_BACKUP_GCS_KEY  GCS 쓰기용 서비스 계정 키 파일 경로(예: /etc/musebase/gcs-backup-key.json).
-#                            gcloud 로그인 상태를 서버에 남기지 않고 이 키만 쓴다.
+#                            gs:// 대상이 있으면 필수. python3(표준 라이브러리)와 openssl만 쓴다 — gcloud는 필요 없다.
+#
+# gcloud를 쓰지 않는 이유: `gcloud storage cp`는 올리기 전에 버킷 목록(objects.list)과 대상 객체
+# (objects.get)를 먼저 읽는다. 백업 계정에는 일부러 "만들기"만 주므로 그 확인에서 막힌다(실측).
+# 업로드 API를 직접 부르면 만들기 권한 하나로 충분하고, 1GB VM에서 무거운 gcloud를 띄우지도 않는다.
 #
 # GCS 사본은 이름에 시각까지 넣는다(lyrics-2026-09-18-040003.db.gz.gpg). 서비스 계정에
 # "만들기"만 주고 덮어쓰기·지우기를 안 줘도 되게 하려는 것이다 — 서버가 털려도 클라우드
@@ -76,16 +80,76 @@ seal() {
         echo "MUSEBASE_BACKUP_PASSPHRASE가 없어 클라우드에 올리지 않습니다(평문 키가 들어 있다)" >&2
         return 1; }
     SEALED="$DEST/lyrics-$STAMP-$(date +%H%M%S).db.gz.gpg"
-    gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 3         --symmetric --cipher-algo AES256 -o "$SEALED" "$ARCHIVE" 3<<<"$MUSEBASE_BACKUP_PASSPHRASE"         || { rm -f "$SEALED"; SEALED=""; return 1; }
+    gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 3 \
+        --symmetric --cipher-algo AES256 -o "$SEALED" "$ARCHIVE" 3<<<"$MUSEBASE_BACKUP_PASSPHRASE" \
+        || { rm -f "$SEALED"; SEALED=""; return 1; }
 }
 
-[ -n "${MUSEBASE_BACKUP_GCS_KEY:-}" ] && export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$MUSEBASE_BACKUP_GCS_KEY"
+# GCS 업로드 — 서비스 계정 키로 JWT를 서명해 토큰을 받고, 업로드 API에 한 번 보낸다.
+# ifGenerationMatch=0: 같은 이름이 있으면 덮어쓰지 않고 실패한다(만들기 전용 계정과 같은 뜻).
+# 응답의 크기·MD5를 로컬 파일과 대조한다 — 읽기 권한 없이도 제대로 올라갔는지 확인하는 방법이다.
+gcs_put() {  # $1 파일, $2 gs://버킷/경로
+    [ -n "${MUSEBASE_BACKUP_GCS_KEY:-}" ] || { echo "MUSEBASE_BACKUP_GCS_KEY가 없습니다" >&2; return 1; }
+    python3 - "$MUSEBASE_BACKUP_GCS_KEY" "$1" "$2" <<'PY'
+import base64, hashlib, json, os, subprocess, sys, tempfile, time
+import urllib.error, urllib.parse, urllib.request
+
+key_path, src, target = sys.argv[1:4]
+bucket, _, prefix = target[len("gs://"):].partition("/")
+prefix = prefix.strip("/")
+name = (prefix + "/" if prefix else "") + os.path.basename(src)
+key = json.load(open(key_path))
+
+
+def b64(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+
+now = int(time.time())
+unsigned = b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()) + b"." + b64(json.dumps({
+    "iss": key["client_email"],
+    "scope": "https://www.googleapis.com/auth/devstorage.read_write",
+    "aud": key["token_uri"], "iat": now, "exp": now + 600}).encode())
+# 개인 키는 0600 임시 파일로만 openssl에 넘기고 곧바로 지운다.
+with tempfile.NamedTemporaryFile("w") as pem:
+    pem.write(key["private_key"])
+    pem.flush()
+    sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", pem.name],
+                         input=unsigned, capture_output=True, check=True).stdout
+
+
+def call(request):
+    try:
+        with urllib.request.urlopen(request, timeout=120) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"GCS HTTP {e.code}: {e.read()[:300].decode(errors='replace')}")
+    except urllib.error.URLError as e:
+        sys.exit(f"GCS 연결 실패: {e.reason}")
+
+
+token = call(urllib.request.Request(key["token_uri"], data=urllib.parse.urlencode({
+    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    "assertion": (unsigned + b"." + b64(sig)).decode()}).encode()))["access_token"]
+
+with open(src, "rb") as f:
+    data = f.read()
+url = (f"https://storage.googleapis.com/upload/storage/v1/b/{urllib.parse.quote(bucket, safe='')}/o"
+       f"?uploadType=media&ifGenerationMatch=0&name={urllib.parse.quote(name, safe='')}")
+made = call(urllib.request.Request(url, data=data, method="POST", headers={
+    "Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"}))
+
+md5 = base64.b64encode(hashlib.md5(data).digest()).decode()
+if int(made.get("size", -1)) != len(data) or made.get("md5Hash") != md5:
+    sys.exit(f"올린 사본이 원본과 다릅니다(size {made.get('size')}/{len(data)}, md5 {made.get('md5Hash')}/{md5})")
+PY
+}
 
 for TARGET in ${REMOTE//,/ }; do
     # 한 곳이 실패해도 다음 대상은 계속 시도한다 — 그래야 사본이 한 부라도 더 남는다.
     case "$TARGET" in
         gs://*)
-            if seal && gcloud storage cp --quiet "$SEALED" "${TARGET%/}/"; then
+            if seal && gcs_put "$SEALED" "$TARGET"; then
                 echo "원격 사본(암호화): ${TARGET%/}/$(basename "$SEALED")"
                 continue
             fi ;;
