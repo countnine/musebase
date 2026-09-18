@@ -12,12 +12,15 @@
 #   MUSEBASE_DB              원본 DB (기본 /var/lib/musebase/lyrics.db)
 #   MUSEBASE_BACKUP_DIR      보관 폴더 (기본 /var/backups/musebase)
 #   MUSEBASE_BACKUP_KEEP_DAYS  보관 일수 (기본 14)
-#   MUSEBASE_BACKUP_REMOTE   있으면 스냅샷을 이 대상으로도 복사한다(오프사이트). 두 가지 형식:
+#   MUSEBASE_BACKUP_REMOTE   있으면 스냅샷을 이 대상들로도 복사한다(오프사이트). 여러 곳이면
+#                            공백이나 쉼표로 구분한다 — 성격이 다른 두 곳(클라우드 + 집 기기)을
+#                            두면 한쪽이 죽어도 사본이 남는다. 대상마다 형식:
 #                            ubuntu@mini:/srv/backup/musebase  — scp(테일넷 이름이면 어디서든 붙는다)
 #                            gs://버킷/musebase                — gcloud storage cp(VM에 gcloud 인증 필요)
 #
-# 원격 복사가 실패하면 로컬 백업은 남긴 채 **비정상 종료**한다 — systemd에 failed로 남아야
-# 알아챌 수 있다. 예전에는 경고만 찍고 성공으로 끝나, 오프사이트 사본이 없는 줄 몰랐다.
+# 원격 복사가 **하나라도** 실패하면 나머지 대상과 로컬 정리까지 마친 뒤 **비정상 종료**한다 —
+# systemd에 failed로 남아야 알아챌 수 있다. 예전에는 경고만 찍고 성공으로 끝나, 오프사이트
+# 사본이 없는 줄 몰랐다.
 set -euo pipefail
 
 DB="${MUSEBASE_DB:-/var/lib/musebase/lyrics.db}"
@@ -50,18 +53,19 @@ ARCHIVE="$SNAPSHOT.gz"
 
 # 4) 오프사이트 사본(선택). 실패해도 로컬 백업은 유효하므로 정리까지 마친 뒤 비정상 종료한다.
 REMOTE_FAILED=0
-if [ -n "$REMOTE" ]; then
-    case "$REMOTE" in
-        gs://*) COPY=(gcloud storage cp --quiet "$ARCHIVE" "${REMOTE%/}/") ;;
-        *)      COPY=(scp -q -o BatchMode=yes -o ConnectTimeout=10 "$ARCHIVE" "$REMOTE/") ;;
+for TARGET in ${REMOTE//,/ }; do
+    case "$TARGET" in
+        gs://*) COPY=(gcloud storage cp --quiet "$ARCHIVE" "${TARGET%/}/") ;;
+        *)      COPY=(scp -q -o BatchMode=yes -o ConnectTimeout=10 "$ARCHIVE" "${TARGET%/}/") ;;
     esac
+    # 한 곳이 실패해도 다음 대상은 계속 시도한다 — 그래야 사본이 한 부라도 더 남는다.
     if "${COPY[@]}"; then
-        echo "원격 사본: ${REMOTE%/}/$(basename "$ARCHIVE")"
+        echo "원격 사본: ${TARGET%/}/$(basename "$ARCHIVE")"
     else
-        echo "원격 사본 실패($REMOTE) — 로컬 백업은 정상입니다" >&2
+        echo "원격 사본 실패($TARGET) — 로컬 백업은 정상입니다" >&2
         REMOTE_FAILED=1
     fi
-fi
+done
 
 # 5) 보존 기간 지난 것 정리
 find "$DEST" -name 'lyrics-*.db.gz' -mtime "+$KEEP_DAYS" -delete

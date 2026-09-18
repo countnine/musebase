@@ -32,7 +32,10 @@ journalctl -u musebase-backup -n 20          # 결과 확인
 ```
 MUSEBASE_BACKUP_REMOTE=ubuntu@mini:/srv/backup/musebase     # scp
 MUSEBASE_BACKUP_REMOTE=gs://my-bucket/musebase               # 또는 GCS(gcloud storage cp)
+MUSEBASE_BACKUP_REMOTE="gs://my-bucket/musebase ubuntu@mini:/srv/backup/musebase"   # 둘 다(권장)
 ```
+
+여러 대상은 공백이나 쉼표로 구분한다. 한 곳이 실패해도 나머지는 계속 시도하고, 끝에 유닛을 failed로 남긴다.
 
 scp는 테일넷 이름을 쓰면 어디에 있든 붙는다 — 대상 호스트에 이 서버의 공개키를 등록해 둔다(`ssh-copy-id`).
 GCS는 VM에 gcloud 인증(서비스 계정 키 또는 `gcloud auth login`)이 있어야 한다.
