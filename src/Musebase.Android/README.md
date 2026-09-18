@@ -216,6 +216,19 @@ dotnet build src/Musebase.Android -t:InstallAndroidDependencies -f net8.0-androi
 
 APK 산출 경로(디버그 서명 포함): `src/Musebase.Android/bin/Debug/net8.0-android/com.countnine.musebase-Signed.apk`
 
+### 릴리스 서명 (0.8.0부터)
+
+릴리스 APK는 **CI가 고정 릴리스 키로 서명**한다(`.github/workflows/ci.yml`의 android 작업 — 시크릿
+`ANDROID_KEYSTORE_B64`·`ANDROID_KEYSTORE_PASS`가 있으면 서명 빌드 후 `musebase-android-apk` 아티팩트로 올린다).
+0.7.0까지는 빌드한 PC의 디버그 키로 서명돼, 그 PC가 사라지자 덮어쓰기 업데이트를 낼 수 없었다.
+
+- 키: PKCS#12, 별칭 `musebase`, RSA 4096, 2056년까지. 인증서 SHA-256 `75:54:DD:D6:81:16:…:EF:20:EB:F1`.
+- 예비 사본: 가사 서버 `/etc/musebase/android-release/`(root 전용). 비밀번호는 비밀번호 관리자에도 있다.
+  GitHub 시크릿은 다시 읽을 수 없으므로 **이 사본을 잃으면 다음 업데이트는 다시 제거 후 설치가 된다.**
+- 로컬 `dotnet build` 산출물은 여전히 그 PC의 디버그 키라, 릴리스 키로 깔린 앱 위에는 설치되지 않는다
+  (시험용은 CI 아티팩트를 쓰거나 제거 후 설치).
+- 릴리스: master의 CI 아티팩트를 받아 `gh release create android-vX.Y.Z <apk> --prerelease`.
+
 ## 폰에서 테스트 (사이드로드)
 
 1. 폰 USB 디버깅 켜고 `adb install <위 APK 경로>` — 또는 APK를 폰에 복사해 설치
