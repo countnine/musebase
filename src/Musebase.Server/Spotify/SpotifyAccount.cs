@@ -45,8 +45,12 @@ public sealed class SpotifyAccount
     private readonly TimeSpan _timeout;
 
     // 액세스 토큰은 짧게 살고(보통 1시간) 다시 받으면 그만이라 메모리에만 둔다.
+    // **어느 계정의 토큰인지(= 어떤 갱신 토큰으로 받았는지)도 함께 기억한다.** 예전에는 이걸 안 봐서,
+    // 관리화면에서 다른 Spotify 계정으로 다시 연결해도 최대 1시간 동안 옛 계정 토큰이 쓰였다 —
+    // 좋아요가 옛 계정 라이브러리에 담기고, "담겨 있음" 표시도 옛 계정 기준이었다.
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
     private string? _accessToken;
+    private string? _accessFor;
     private DateTimeOffset _accessExpires;
 
     public SpotifyAccount(string? clientId, string? clientSecret, HttpClient? http = null, int timeoutMs = 4000)
@@ -194,7 +198,9 @@ public sealed class SpotifyAccount
         try
         {
             // 만료 직전에 받은 토큰으로 요청을 보내면 401이 난다 — 1분 여유를 둔다.
-            if (_accessToken is { Length: > 0 } && DateTimeOffset.UtcNow < _accessExpires.AddMinutes(-1))
+            if (_accessToken is { Length: > 0 }
+                && string.Equals(_accessFor, refresh, StringComparison.Ordinal)
+                && DateTimeOffset.UtcNow < _accessExpires.AddMinutes(-1))
                 return _accessToken;
 
             var token = await PostTokenAsync(new Dictionary<string, string>
@@ -206,6 +212,7 @@ public sealed class SpotifyAccount
             if (token is not { Access: { Length: > 0 } access }) return null;
 
             _accessToken = access;
+            _accessFor = refresh;
             _accessExpires = DateTimeOffset.UtcNow.AddSeconds(token.Value.ExpiresIn);
             return _accessToken;
         }

@@ -128,6 +128,31 @@ public class SpotifyAccountTests
             .FindUriAsync("Kids", "MGMT", "at"));
     }
 
+    [Fact]
+    public async Task 같은_계정이면_토큰을_다시_받지_않는다()
+    {
+        var calls = new List<(string Method, string Url)>();
+        var account = Create(calls, Json("""{"access_token":"at","expires_in":3600}"""));
+
+        await account.SetSavedAsync("spotify:track:a", saved: true, refresh: "rt-1");
+        await account.SetSavedAsync("spotify:track:b", saved: true, refresh: "rt-1");
+
+        Assert.Equal(1, calls.Count(c => c.Url.Contains("accounts.spotify.com")));
+    }
+
+    [Fact]
+    public async Task 계정을_바꾸면_옛_계정_토큰을_쓰지_않는다()
+    {
+        // 다시 연결하면 갱신 토큰이 바뀐다. 캐시가 이걸 안 봐서 최대 1시간 동안 좋아요가 옛 계정에 담겼다.
+        var calls = new List<(string Method, string Url)>();
+        var account = Create(calls, Json("""{"access_token":"at","expires_in":3600}"""));
+
+        await account.SetSavedAsync("spotify:track:a", saved: true, refresh: "old-account");
+        await account.SetSavedAsync("spotify:track:a", saved: true, refresh: "new-account");
+
+        Assert.Equal(2, calls.Count(c => c.Url.Contains("accounts.spotify.com")));
+    }
+
     // ---- 도구 ----
 
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)
