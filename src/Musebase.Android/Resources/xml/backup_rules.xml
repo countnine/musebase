@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 이하의 백업 규칙. 비밀값 파일만 뺀다(나머지 설정은 새 폰으로 옮겨지게 둔다).
+     파일 이름은 AndroidSettings.SecretsPrefsName + ".xml"과 같아야 한다. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="musebase.secrets.xml" />
+</full-backup-content>
