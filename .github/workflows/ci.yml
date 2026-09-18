@@ -40,6 +40,10 @@ jobs:
         with:
           distribution: microsoft
           java-version: '17'
+      # 러너의 기본 SDK(10)는 지원이 끝난 net8.0-android 워크로드를 NETSDK1202 오류로 거부한다.
+      # 로컬 빌드·0.7.0 릴리스와 같은 SDK 8로 고정한다(이 작업 안에서만 — 저장소에는 global.json이 없다).
+      - name: Pin SDK 8
+        run: dotnet new globaljson --sdk-version "$(dotnet --list-sdks | grep '^8\.' | tail -1 | cut -d' ' -f1)" --force
       - name: Install android workload
         run: dotnet workload install android
       - name: Build
