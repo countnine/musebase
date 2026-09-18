@@ -64,7 +64,9 @@ ARCHIVE="$SNAPSHOT.gz"
 # 4) 오프사이트 사본(선택). 실패해도 로컬 백업은 유효하므로 정리까지 마친 뒤 비정상 종료한다.
 REMOTE_FAILED=0
 SEALED=""   # GCS용 암호화 사본 — 대상이 여럿이어도 한 번만 만든다
-cleanup() { [ -n "$SEALED" ] && rm -f "$SEALED"; }
+# if로 쓴다 — `[ -n ] && rm`은 지울 게 없을 때 1을 남기고, EXIT trap의 마지막 상태가
+# 스크립트 종료 코드를 덮어써 원격 대상이 없는 평범한 백업까지 failed가 됐다.
+cleanup() { if [ -n "$SEALED" ]; then rm -f "$SEALED"; fi; }
 trap cleanup EXIT
 
 # 클라우드로 나가는 사본만 암호화한다. 비밀번호는 명령줄(ps에 보임)이 아니라 fd로 넘긴다.
