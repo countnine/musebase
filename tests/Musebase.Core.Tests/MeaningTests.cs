@@ -340,15 +340,110 @@ public class MeaningTests
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.TooManyRequests, true)]   // 쿼타 — 기다리면 풀린다
-    [InlineData(HttpStatusCode.ServiceUnavailable, true)]
-    [InlineData(HttpStatusCode.InternalServerError, true)]
-    [InlineData(HttpStatusCode.PaymentRequired, true)]   // 잔액 — 충전하면 풀린다
-    [InlineData(HttpStatusCode.Unauthorized, false)]     // 키가 틀렸다 — 다시 불러도 같다
-    [InlineData(HttpStatusCode.BadRequest, false)]
-    public void 다시_시도할_가치가_있는_응답만_retryable이다(HttpStatusCode code, bool retryable)
+    [InlineData(HttpStatusCode.TooManyRequests, true, false)]    // 쿼타 — 기다리면 풀린다
+    [InlineData(HttpStatusCode.ServiceUnavailable, true, false)]
+    [InlineData(HttpStatusCode.InternalServerError, true, false)]
+    [InlineData(HttpStatusCode.PaymentRequired, false, true)]    // 잔액 — 기다려도 안 풀린다(실측 장애)
+    [InlineData(HttpStatusCode.NotFound, false, true)]           // 모델 폐기·무료 모델 정책(실측 장애)
+    [InlineData(HttpStatusCode.Unauthorized, false, true)]       // 키가 틀렸다
+    [InlineData(HttpStatusCode.Forbidden, false, true)]
+    [InlineData(HttpStatusCode.BadRequest, false, true)]         // 잘못된 모델 id·키 형식
+    public void 기다리면_풀릴_실패와_설정을_고쳐야_할_실패를_가른다(
+        HttpStatusCode code, bool retryable, bool needsSetup)
     {
-        Assert.Equal(retryable, MeaningWriteResult.FromStatus(code).Retryable);
+        var result = MeaningWriteResult.FromStatus(code);
+
+        Assert.Equal(retryable, result.Retryable);
+        Assert.Equal(needsSetup, result.NeedsSetup);
+        Assert.Equal((int)code, result.StatusCode);
+    }
+
+    [Fact]
+    public async Task 잔액_부족은_retry가_아니라_config이고_이유를_남긴다()
+    {
+        // 2026-09 실측: OpenRouter 잔액이 바닥나 402가 왔는데 "잠시 후 다시"로만 보였다.
+        var service = new SongMeaningService(
+            [new FixedSource("Genius", "설명")],
+            new FailingWriter(MeaningWriteResult.FromStatus(
+                HttpStatusCode.PaymentRequired,
+                """{"error":{"message":"This request requires more credits","code":402}}""")));
+
+        var result = await service.BuildAsync("Kids", "MGMT", "ko");
+
+        Assert.Equal(SongMeaning.Config, result.Status);
+        Assert.Equal("HTTP 402 · This request requires more credits", result.Detail);
+        Assert.True(SongMeaning.IsUnsaved(result.Status)); // 행으로 굳히면 백필이 이 곡을 영영 건너뛴다
+    }
+
+    [Theory]
+    [InlineData(SongMeaning.Retry, true)]
+    [InlineData(SongMeaning.Config, true)]
+    [InlineData(SongMeaning.Failed, false)]   // 그 곡의 문제 — 남겨야 백필이 무한히 다시 부르지 않는다
+    [InlineData(SongMeaning.NoSource, false)]
+    [InlineData(SongMeaning.Ok, false)]
+    public void 곡의_문제가_아닌_실패만_저장하지_않는다(string status, bool unsaved) =>
+        Assert.Equal(unsaved, SongMeaning.IsUnsaved(status));
+
+    [Fact]
+    public async Task 두_엔진_모두_공급자가_준_이유를_버리지_않는다()
+    {
+        // 2026-09 실측: 무료 모델이 계정 정책으로 막혀 404가 왔는데 "키를 확인하세요"로만 보였다.
+        var blocked = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent(
+                """{"error":{"message":"0 endpoints ... Free model training violation (account settings)","code":404}}""",
+                Encoding.UTF8, "application/json"),
+        });
+        var sources = new[] { new MeaningSource("Genius", null, "text") };
+
+        foreach (var writer in new IMeaningWriter[]
+        {
+            new GeminiMeaningWriter("k", null, blocked.Client),
+            new OpenRouterMeaningWriter("k", null, blocked.Client),
+        })
+        {
+            var result = await writer.WriteAsync("T", "A", sources, "ko");
+            Assert.True(result.NeedsSetup);
+            Assert.Equal(404, result.StatusCode);
+            Assert.Contains("Free model training violation", result.Reason);
+        }
+    }
+
+    [Fact]
+    public async Task 키가_비어_있으면_부르지_않고_설정_문제로_본다()
+    {
+        var handler = new StubHandler(_ => Json("{}"));
+        var sources = new[] { new MeaningSource("Genius", null, "text") };
+
+        var result = await new OpenRouterMeaningWriter("  ", null, handler.Client).WriteAsync("T", "A", sources, "ko");
+
+        Assert.True(result.NeedsSetup);
+        Assert.Equal(0, handler.Calls);
+    }
+
+    [Theory]
+    [InlineData("""{"error":{"message":"잔액이\n  부족합니다"}}""", "잔액이 부족합니다")] // 줄바꿈·공백을 한 칸으로
+    [InlineData("""{"error":"quota"}""", "quota")]                                 // error가 문자열인 공급자
+    [InlineData("<html>Bad Gateway</html>", "<html>Bad Gateway</html>")]              // JSON이 아니면 본문 그대로
+    [InlineData("", null)]
+    public void 응답_본문에서_이유_한_줄을_뽑는다(string body, string? expected) =>
+        Assert.Equal(expected, MeaningWriteResult.ReasonOf(body));
+
+    [Fact]
+    public void 긴_이유는_잘라서_한_줄에_들어가게_한다()
+    {
+        var reason = MeaningWriteResult.ReasonOf(new string('x', 1000))!;
+
+        Assert.Equal(MeaningWriteResult.MaxReasonLength + 1, reason.Length); // + 말줄임표
+        Assert.EndsWith("…", reason);
+    }
+
+    [Fact]
+    public void 공용_클라이언트가_엔진의_시간_예산을_몰래_자르지_않는다()
+    {
+        // 예전 30초가 OpenRouter의 60초(최대 180초) 예산을 먼저 끊어, 느린 모델이 늘 "일시적 오류"가 됐다.
+        // 만료는 호출마다의 CTS가 정한다 — 이 값은 가장 긴 예산(180초)보다 길어야 한다.
+        Assert.True(MeaningHttp.Client.Timeout > TimeSpan.FromSeconds(180));
     }
 
     [Fact]
@@ -528,6 +623,8 @@ public class MeaningTests
         Assert.Null(openRouter.Text);
         Assert.False(gemini.Retryable);    // 키가 틀린 건 다시 눌러도 같다
         Assert.False(openRouter.Retryable);
+        Assert.True(gemini.NeedsSetup);    // 곡 탓이 아니다 — 저장하지 말고 설정을 고치라고 해야 한다
+        Assert.True(openRouter.NeedsSetup);
     }
 
     // ---- 테스트 더블 ----

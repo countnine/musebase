@@ -73,7 +73,8 @@ var admin = AdminOptions.FromEnvironment(token!);
 // 곡의 의미 — 키가 없으면 서비스가 꺼진 상태로 만들어지고 아무 데도 영향을 주지 않는다.
 // 환경변수 위에 DB 설정을 덮는다 — 관리 화면에서 엔진·모델을 바꾸면 재시작 없이 반영된다.
 var meaningSettings = new MeaningSettings(store, MeaningOptions.FromEnvironment());
-var meaningGenerator = new MeaningGenerator(store, meaningSettings);
+var meaningGenerator = new MeaningGenerator(
+    store, meaningSettings, app.Services.GetRequiredService<ILogger<MeaningGenerator>>());
 var extras = new SongExtrasService(
     store, new CoverArt(),
     meaningSettings.Current.LastFmAccount(),
@@ -187,7 +188,7 @@ app.MapPut(Routes.Api + "/lyrics", async (HttpRequest request) =>
 app.MapGet(Routes.Api + "/stats", (HttpRequest request) =>
     !Authorized(request) ? Unauthorized() : Results.Ok(store.Stats()));
 
-// 곡의 의미 — 앱은 조회만 한다. 생성은 관리자 화면에서만 일어난다(쿼타·비용을 사람이 통제).
+// 곡의 의미 조회. 생성은 사람이 누를 때만 일어난다(아래 POST · 관리자 화면) — 쿼타·비용을 사람이 통제.
 app.MapGet(Routes.Api + "/meaning", (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
@@ -240,7 +241,7 @@ app.MapPost(Routes.Api + "/meaning", async (HttpRequest request, string? title, 
     // 있으면 그 행에 덮어쓴다(새 행을 하나 더 만들지 않는다).
     if (store.GetMeaning(title!, artist ?? "") is { Key: { Length: > 0 } existing }) key = existing;
 
-    var status = await meaningGenerator.GenerateAsync(key, found.Title, found.Artist);
+    var status = (await meaningGenerator.GenerateAsync(key, found.Title, found.Artist)).Status;
 
     // 만들어졌으면 조회와 **같은 모양**으로 돌려준다 — 앱이 다시 GET 하지 않아도 되게.
     if (status == MeaningEntry.StatusOk && store.GetMeaningByKey(key) is { } made)

@@ -52,7 +52,8 @@ public sealed class GeminiMeaningWriter : IMeaningWriter
         string title, string artist, IReadOnlyList<MeaningSource> sources,
         string targetLang, CancellationToken ct = default)
     {
-        if (_apiKey.Length == 0 || sources.Count == 0) return MeaningWriteResult.Failed;
+        if (_apiKey.Length == 0) return MeaningWriteResult.MissingKey();
+        if (sources.Count == 0) return MeaningWriteResult.Failed;
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -75,28 +76,33 @@ public sealed class GeminiMeaningWriter : IMeaningWriter
             request.Headers.Add("x-goog-api-key", _apiKey);
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return MeaningWriteResult.FromStatus(response.StatusCode);
+            if (!response.IsSuccessStatusCode)
+            {
+                // 본문을 버리지 않는다 — "잔액 부족"·"모델 없음" 같은 진짜 이유가 여기에만 있다.
+                var error = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+                return MeaningWriteResult.FromStatus(response.StatusCode, error);
+            }
 
             var body = await response.Content.ReadFromJsonAsync<GeminiResponse>(Json, cts.Token).ConfigureAwait(false);
             var text = body?.Candidates?
                 .FirstOrDefault()?.Content?.Parts?
                 .FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.Text))?.Text;
             return string.IsNullOrWhiteSpace(text)
-                ? MeaningWriteResult.Failed
+                ? MeaningWriteResult.Failed with { Reason = "응답 본문이 비어 있음" }
                 : MeaningWriteResult.Written(text!.Trim());
         }
         catch (OperationCanceledException)
         {
             // 타임아웃이든 호출자 취소든 "결과를 모른다"는 뜻이다 — 실패로 못 박지 않는다.
-            return MeaningWriteResult.Transient;
+            return MeaningWriteResult.Transient with { Reason = "응답 시간 초과" };
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
-            return MeaningWriteResult.Transient; // 네트워크는 다음에 될 수 있다
+            return MeaningWriteResult.Transient with { Reason = MeaningWriteResult.ReasonOf(ex.Message) }; // 네트워크는 다음에 될 수 있다
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return MeaningWriteResult.Failed; // 의미는 부가 기능 — 가사에 영향이 없어야 한다
+            return MeaningWriteResult.Failed with { Reason = ex.GetType().Name }; // 의미는 부가 기능 — 가사에 영향이 없어야 한다
         }
     }
 

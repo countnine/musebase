@@ -199,6 +199,8 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
                     "no-source" => MeaningRequestStatus.NoSource,
                     "insufficient" => MeaningRequestStatus.Insufficient,
                     "retry" => MeaningRequestStatus.Retry,
+                    // 서버 엔진의 결제·키·모델 문제 — 앱에서 할 수 있는 일은 없고 서버를 고쳐야 한다.
+                    "config" => MeaningRequestStatus.Unavailable,
                     _ => MeaningRequestStatus.Failed,
                 });
             }

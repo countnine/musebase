@@ -33,7 +33,7 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | PUT | `/musebase/v1/lyrics` | 가사 1건 업서트. 본문 `LyricsEntry`(요청 필드만) |
 | GET | `/musebase/v1/stats` | 곡 수·최근 갱신(검증·디버깅용) |
 | GET | `/musebase/v1/meaning?title=&artist=` | 곡의 의미 1건. 히트 `200 MeaningEntry`, 없으면 `404` |
-| POST | `/musebase/v1/meaning?title=&artist=` | 의미를 **지금 만든다**. 성공 `200 MeaningEntry`, 못 만들면 `202 {status}` |
+| POST | `/musebase/v1/meaning?title=&artist=&force=` | 의미를 **지금 만든다**(기본은 캐시 우선). 성공 `200 MeaningEntry`, 못 만들면 `202 {status}` |
 | GET | `/musebase/v1/song?title=&artist=` | 곡에 딸린 것들(커버·좋아요). 없는 곡은 `404` |
 | POST | `/musebase/v1/song/cover?title=&artist=` | 커버를 다시 찾는다 |
 | POST | `/musebase/v1/song/love?title=&artist=&on=1\|0` | Last.fm 좋아요를 켜거나 끈다 |
@@ -201,9 +201,14 @@ Authorization: Bearer <서버가 발급한 임의 문자열>
 | `202 {"status":"no-source"}` | 외부 자료를 못 찾았다 | "자료를 찾지 못했습니다". 다시 눌러도 같은 답이다 |
 | `202 {"status":"insufficient"}` | 자료는 있었지만 부족했다 | 위와 같다 |
 | `202 {"status":"retry"}` | 쿼타·네트워크로 잠시 안 된다 | **저장하지 않았다** — 잠시 후 다시 눌러도 된다 |
+| `202 {"status":"config"}` | 서버 엔진의 결제 잔액·키·모델에 문제가 있다 | **저장하지 않았다.** 기다려도 풀리지 않는다 — 서버를 고쳐야 한다고 안내한다(`503`과 같은 취급) |
 | `403 {"error":"client generation disabled"}` | 서버가 앱 생성을 껐다 | 버튼을 감추거나 안내한다 |
 | `503 {"error":"meaning engine not configured"}` | 엔진·키가 없다 | 위와 같다 |
 | `404 {"error":"ad"}` / `{"error":"song not found"}` | 광고이거나 서버에 없는 곡 | 만들 수 없다 |
+
+`retry`와 `config`의 경계: 공급자 응답이 429·5xx·타임아웃이면 `retry`, 그 밖의 4xx(402 잔액, 401/403 키,
+404 모델 없음·계정 정책, 400 잘못된 모델 id)는 `config`다. 둘 다 곡의 문제가 아니라서 저장하지 않는다 —
+행으로 남기면 백필이 원인이 풀린 뒤에도 그 곡을 건너뛴다. 공급자가 준 이유는 서버 로그와 관리 화면에만 보인다.
 
 **이 호출은 비싸다** — 한 번이 외부 API 여러 개 + LLM 호출이다. 자동으로 부르지 말고 사람이 누른
 경우에만 보내야 하며, 수십 초가 걸릴 수 있으므로 조회용 타임아웃(수 초)을 쓰면 안 된다.

@@ -237,6 +237,7 @@ public class RemoteLyricsCacheTests
     [InlineData("no-source", MeaningRequestStatus.NoSource)]
     [InlineData("insufficient", MeaningRequestStatus.Insufficient)]
     [InlineData("retry", MeaningRequestStatus.Retry)]
+    [InlineData("config", MeaningRequestStatus.Unavailable)] // 서버 엔진의 결제·키·모델 문제
     [InlineData("뭔가 새로운 값", MeaningRequestStatus.Failed)]
     public async Task 만들지_못한_이유를_구분해_옮긴다(string status, MeaningRequestStatus expected)
     {

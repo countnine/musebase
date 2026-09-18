@@ -26,7 +26,10 @@ public static class MeaningHttp
             UseCookies = false,
         })
         {
-            Timeout = TimeSpan.FromSeconds(30), // 실제 만료는 소스마다 링크된 CTS로 제어한다
+            // 실제 만료는 호출마다 링크된 CTS로 정한다. 이 값은 그보다 **길어야 하는** 안전망이다 —
+            // 예전 30초는 OpenRouter writer의 60초(최대 180초) 예산을 몰래 잘라, 느린 모델이
+            // 늘 "일시적 오류"로 끝났다. 모든 호출자의 상한(180초)보다 넉넉히 둔다.
+            Timeout = TimeSpan.FromMinutes(4),
         };
         client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
         return client;
