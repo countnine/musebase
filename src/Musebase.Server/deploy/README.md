@@ -64,10 +64,11 @@ MUSEBASE_ADMIN_PASSWORD=pbkdf2$210000$…$…
 
 ## 3. 빌드 · 전송 (개발 PC)
 
-Oracle 무료 티어는 보통 **Ampere A1(ARM64)** 이다. x86 인스턴스면 `linux-x64`로 바꾼다.
+**지금 운영 중인 서버는 x86_64**다(Ubuntu 24.04). 새 VM이면 `uname -m`으로 먼저 확인한다 —
+`aarch64`(Oracle 무료 티어의 Ampere A1)면 `linux-arm64`로 바꾼다. 아키텍처가 틀리면 바이너리가 아예 실행되지 않는다.
 
 ```powershell
-dotnet publish src/Musebase.Server/Musebase.Server.csproj -c Release -r linux-arm64 `
+dotnet publish src/Musebase.Server/Musebase.Server.csproj -c Release -r linux-x64 `
   --self-contained true -p:PublishSingleFile=true -o publish-server
 scp -r publish-server/* oracle:/tmp/musebase-server/
 ```
@@ -109,8 +110,8 @@ tailscale serve status      # https://oracle.<tailnet>.ts.net/ 확인
 확인:
 
 ```bash
-curl https://oracle.<tailnet>.ts.net/v1/healthz            # ok
-curl -H "Authorization: Bearer $TOKEN" https://oracle.<tailnet>.ts.net/v1/stats
+curl https://oracle.<tailnet>.ts.net/musebase/v1/healthz            # ok
+curl -H "Authorization: Bearer $TOKEN" https://oracle.<tailnet>.ts.net/musebase/v1/stats
 ```
 
 ## 6. 기존 캐시로 시드 (선택)
@@ -140,12 +141,16 @@ sudo chmod +x /usr/local/bin/musebase-backup
 보존 기간 정리 순으로 동작한다. 자세한 내용과 **오프사이트 사본·복구 절차·다른 서버로 이전**은
 `MIGRATION.md`를 참고한다.
 
-`/etc/systemd/system/musebase-backup.service`(Type=oneshot, ExecStart=/usr/local/bin/musebase-backup)와
-`musebase-backup.timer`(OnCalendar=*-*-* 04:00:00)를 만들어 `systemctl enable --now musebase-backup.timer`.
+`/etc/systemd/system/musebase-backup.service`(Type=oneshot, **`EnvironmentFile=-/etc/musebase/server.env`**,
+ExecStart=/usr/local/bin/musebase-backup)와 `musebase-backup.timer`(OnCalendar=*-*-* 04:00:00)를 만들어
+`systemctl enable --now musebase-backup.timer`. `install.sh`가 이 둘을 만들어 준다.
 
-오프사이트 사본은 `/etc/musebase/server.env`에 `MUSEBASE_BACKUP_REMOTE=user@host:/path` 한 줄이면
-매일 백업 뒤 자동으로 넘어간다(테일넷 이름 사용 가능). 주 1회 개발 PC로
-`scp` 회수해 두면 오프사이트 백업이 된다.
+오프사이트 사본은 `/etc/musebase/server.env`에 `MUSEBASE_BACKUP_REMOTE=` 한 줄이면 매일 백업 뒤 자동으로
+넘어간다 — `user@host:/path`(scp, 테일넷 이름 가능)나 `gs://버킷/경로`(gcloud), 여러 곳이면 공백으로 구분.
+원격 복사가 하나라도 실패하면 유닛이 **failed**로 남는다(`systemctl status musebase-backup`).
+
+> ⚠ 2026-09-18 이전에 `install.sh`로 만든 유닛에는 `EnvironmentFile=` 줄이 없어 **이 값이 무시됐다.**
+> 그 서버라면 `install.sh`를 다시 돌리거나 유닛에 그 줄을 넣고 `systemctl daemon-reload` 한다.
 
 ## 8. 관리자 페이지
 

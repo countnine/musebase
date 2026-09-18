@@ -18,6 +18,9 @@ PORT="${PORT:-5180}"
 [[ -x "$STAGE/Musebase.Server" || -f "$STAGE/Musebase.Server" ]] || {
   echo "$STAGE 에 publish 산출물이 없습니다(deploy/README.md 3단계 먼저)."; exit 1; }
 
+# 백업 스크립트가 sqlite3로 스냅샷을 뜬다 — 없으면 매일 04:00에 조용히 실패한다.
+command -v sqlite3 >/dev/null || { apt-get update -qq && apt-get install -y -qq sqlite3; }
+
 id musebase &>/dev/null || useradd --system --no-create-home musebase
 mkdir -p "$APP_DIR" "$DATA_DIR" /etc/musebase
 chown musebase:musebase "$DATA_DIR"
@@ -46,13 +49,20 @@ systemctl daemon-reload
 systemctl enable --now musebase-server
 
 # 단일 파일 배포는 첫 실행에 압축을 풀어 몇 초 걸린다 — 뜰 때까지 기다렸다 확인한다.
-for _ in $(seq 1 15); do
-  if curl -fsS "http://127.0.0.1:$PORT/v1/healthz" >/dev/null 2>&1; then
+# 끝내 안 뜨면 여기서 멈춘다 — 예전에는 조용히 다음 단계로 넘어가 "설치 완료"까지 찍었다.
+healthy=0
+for _ in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:$PORT/musebase/v1/healthz" >/dev/null 2>&1; then
     echo "healthz ok"
+    healthy=1
     break
   fi
   sleep 1
 done
+if [[ $healthy -ne 1 ]]; then
+  echo "서버가 30초 안에 뜨지 않았습니다. 로그: journalctl -u musebase-server -n 50" >&2
+  exit 1
+fi
 
 # 테일넷에 HTTPS로 노출(공개 인터넷 노출인 funnel은 쓰지 않는다).
 tailscale serve --bg --https=443 "http://127.0.0.1:$PORT"
@@ -65,6 +75,8 @@ cat > /etc/systemd/system/musebase-backup.service <<'EOF'
 Description=Musebase lyrics DB backup
 [Service]
 Type=oneshot
+# MUSEBASE_BACKUP_REMOTE 등 백업 설정도 server.env에 둔다 — 이 줄이 없으면 그 값이 스크립트에 닿지 않는다.
+EnvironmentFile=-/etc/musebase/server.env
 ExecStart=/usr/local/bin/musebase-backup
 EOF
 cat > /etc/systemd/system/musebase-backup.timer <<'EOF'

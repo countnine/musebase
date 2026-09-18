@@ -30,15 +30,45 @@ journalctl -u musebase-backup -n 20          # 결과 확인
 한 대에만 두면 그 기계가 죽을 때 같이 죽는다. `/etc/musebase/server.env`에 한 줄이면 된다:
 
 ```
-MUSEBASE_BACKUP_REMOTE=ubuntu@mini:/srv/backup/musebase
+MUSEBASE_BACKUP_REMOTE=ubuntu@mini:/srv/backup/musebase     # scp
+MUSEBASE_BACKUP_REMOTE=gs://my-bucket/musebase               # 또는 GCS(gcloud storage cp)
+MUSEBASE_BACKUP_REMOTE="gs://my-bucket/musebase ubuntu@mini:/srv/backup/musebase"   # 둘 다(권장)
 ```
 
-테일넷 이름을 쓰면 어디에 있든 붙는다. 대상 호스트에 이 서버의 공개키를 등록해 두면
-(`ssh-copy-id`) 매일 백업이 끝난 뒤 자동으로 한 부 더 넘어간다. 실패해도 로컬 백업은 그대로다.
+여러 대상은 공백이나 쉼표로 구분한다. 한 곳이 실패해도 나머지는 계속 시도하고, 끝에 유닛을 failed로 남긴다.
+
+**GCS 사본은 반드시 암호화된다.** 백업에는 관리화면에서 넣은 API 키·Last.fm/Spotify 토큰이 평문으로 들어 있어,
+`gs://` 대상이 있으면 아래 둘이 필요하다(없으면 그 대상은 올리지 않고 실패로 남긴다):
+
+```
+MUSEBASE_BACKUP_PASSPHRASE=<긴 무작위 문자열>              # gpg AES-256 — 잃으면 클라우드 사본을 못 연다
+MUSEBASE_BACKUP_GCS_KEY=/etc/musebase/gcs-backup-key.json   # 버킷 쓰기 전용 서비스 계정 키(chmod 600)
+```
+
+- 비밀번호는 서버 밖(비밀번호 관리자 등)에도 적어 둔다 — 서버가 통째로 죽었을 때 쓰려는 사본이다.
+- GCS 사본 이름에는 시각이 붙는다(`lyrics-2026-09-18-040003.db.gz.gpg`). 서비스 계정에 **만들기 권한만**
+  주면 되도록 한 것이다 — 서버가 털려도 클라우드 사본을 덮어쓰거나 지울 수 없다. 보존은 버킷 수명 주기 규칙으로.
+- 테일넷 기기(scp) 사본은 개인 기기라 암호화하지 않는다.
+- VM에 gcloud CLI가 있어야 한다(`google-cloud-cli` 패키지). 로그인 상태는 남기지 않고 위 키만 쓴다.
+
+scp는 테일넷 이름을 쓰면 어디에 있든 붙는다 — 대상 호스트에 이 서버의 공개키를 등록해 둔다(`ssh-copy-id`).
+GCS는 VM에 gcloud 인증(서비스 계정 키 또는 `gcloud auth login`)이 있어야 한다.
+매일 백업이 끝난 뒤 한 부 더 넘어가고, 실패하면 로컬 백업은 그대로 둔 채 유닛이 **failed**로 남는다.
+
+> 백업 유닛이 `EnvironmentFile=-/etc/musebase/server.env`를 읽어야 이 값이 닿는다(2026-09-18 이전 `install.sh`는 빠뜨렸다).
 
 > 백업 파일에는 가사 전문과 조회 기록(청취 이력)이 들어 있다. 보관 위치도 개인 범위로 유지한다.
 
 ### 복구
+
+GCS 사본에서 되살릴 때는 먼저 받아서 푼다(비밀번호 필요):
+
+```bash
+gcloud storage cp gs://<버킷>/musebase/lyrics-2026-09-18-040003.db.gz.gpg .
+gpg -d lyrics-2026-09-18-040003.db.gz.gpg > lyrics-2026-09-18.db.gz    # 비밀번호 입력
+```
+
+그다음은 로컬 사본과 같다:
 
 ```bash
 sudo systemctl stop musebase-server
@@ -46,7 +76,7 @@ sudo gunzip -c /var/backups/musebase/lyrics-2026-07-29.db.gz | sudo tee /var/lib
 sudo rm -f /var/lib/musebase/lyrics.db-wal /var/lib/musebase/lyrics.db-shm   # 옛 WAL 잔재 제거
 sudo chown musebase:musebase /var/lib/musebase/lyrics.db
 sudo systemctl start musebase-server
-curl -H "Authorization: Bearer $TOKEN" https://<호스트>.<tailnet>.ts.net/v1/stats   # 곡 수 확인
+curl -H "Authorization: Bearer $TOKEN" https://<호스트>.<tailnet>.ts.net/musebase/v1/stats   # 곡 수 확인
 ```
 
 ---
@@ -101,7 +131,7 @@ docker exec musebase-server sqlite3 /data/lyrics.db "PRAGMA integrity_check; SEL
 ```bash
 # 새 호스트
 sudo tailscale serve --bg --https=443 http://127.0.0.1:5180
-curl https://<새호스트>.<tailnet>.ts.net/v1/healthz     # ok
+curl https://<새호스트>.<tailnet>.ts.net/musebase/v1/healthz     # ok
 
 # 옛 서버 — 노출을 내려 두 대가 동시에 응답하지 않게 한다
 sudo tailscale serve --https=443 off
