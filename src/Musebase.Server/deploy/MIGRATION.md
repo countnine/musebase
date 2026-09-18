@@ -30,11 +30,15 @@ journalctl -u musebase-backup -n 20          # 결과 확인
 한 대에만 두면 그 기계가 죽을 때 같이 죽는다. `/etc/musebase/server.env`에 한 줄이면 된다:
 
 ```
-MUSEBASE_BACKUP_REMOTE=ubuntu@mini:/srv/backup/musebase
+MUSEBASE_BACKUP_REMOTE=ubuntu@mini:/srv/backup/musebase     # scp
+MUSEBASE_BACKUP_REMOTE=gs://my-bucket/musebase               # 또는 GCS(gcloud storage cp)
 ```
 
-테일넷 이름을 쓰면 어디에 있든 붙는다. 대상 호스트에 이 서버의 공개키를 등록해 두면
-(`ssh-copy-id`) 매일 백업이 끝난 뒤 자동으로 한 부 더 넘어간다. 실패해도 로컬 백업은 그대로다.
+scp는 테일넷 이름을 쓰면 어디에 있든 붙는다 — 대상 호스트에 이 서버의 공개키를 등록해 둔다(`ssh-copy-id`).
+GCS는 VM에 gcloud 인증(서비스 계정 키 또는 `gcloud auth login`)이 있어야 한다.
+매일 백업이 끝난 뒤 한 부 더 넘어가고, 실패하면 로컬 백업은 그대로 둔 채 유닛이 **failed**로 남는다.
+
+> 백업 유닛이 `EnvironmentFile=-/etc/musebase/server.env`를 읽어야 이 값이 닿는다(2026-09-18 이전 `install.sh`는 빠뜨렸다).
 
 > 백업 파일에는 가사 전문과 조회 기록(청취 이력)이 들어 있다. 보관 위치도 개인 범위로 유지한다.
 
@@ -46,7 +50,7 @@ sudo gunzip -c /var/backups/musebase/lyrics-2026-07-29.db.gz | sudo tee /var/lib
 sudo rm -f /var/lib/musebase/lyrics.db-wal /var/lib/musebase/lyrics.db-shm   # 옛 WAL 잔재 제거
 sudo chown musebase:musebase /var/lib/musebase/lyrics.db
 sudo systemctl start musebase-server
-curl -H "Authorization: Bearer $TOKEN" https://<호스트>.<tailnet>.ts.net/v1/stats   # 곡 수 확인
+curl -H "Authorization: Bearer $TOKEN" https://<호스트>.<tailnet>.ts.net/musebase/v1/stats   # 곡 수 확인
 ```
 
 ---
@@ -101,7 +105,7 @@ docker exec musebase-server sqlite3 /data/lyrics.db "PRAGMA integrity_check; SEL
 ```bash
 # 새 호스트
 sudo tailscale serve --bg --https=443 http://127.0.0.1:5180
-curl https://<새호스트>.<tailnet>.ts.net/v1/healthz     # ok
+curl https://<새호스트>.<tailnet>.ts.net/musebase/v1/healthz     # ok
 
 # 옛 서버 — 노출을 내려 두 대가 동시에 응답하지 않게 한다
 sudo tailscale serve --https=443 off

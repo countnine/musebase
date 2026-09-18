@@ -12,8 +12,12 @@
 #   MUSEBASE_DB              원본 DB (기본 /var/lib/musebase/lyrics.db)
 #   MUSEBASE_BACKUP_DIR      보관 폴더 (기본 /var/backups/musebase)
 #   MUSEBASE_BACKUP_KEEP_DAYS  보관 일수 (기본 14)
-#   MUSEBASE_BACKUP_REMOTE   있으면 스냅샷을 이 대상으로도 복사한다(오프사이트).
-#                            예) ubuntu@mini:/srv/backup/musebase  — 테일넷 이름이면 어디서든 붙는다.
+#   MUSEBASE_BACKUP_REMOTE   있으면 스냅샷을 이 대상으로도 복사한다(오프사이트). 두 가지 형식:
+#                            ubuntu@mini:/srv/backup/musebase  — scp(테일넷 이름이면 어디서든 붙는다)
+#                            gs://버킷/musebase                — gcloud storage cp(VM에 gcloud 인증 필요)
+#
+# 원격 복사가 실패하면 로컬 백업은 남긴 채 **비정상 종료**한다 — systemd에 failed로 남아야
+# 알아챌 수 있다. 예전에는 경고만 찍고 성공으로 끝나, 오프사이트 사본이 없는 줄 몰랐다.
 set -euo pipefail
 
 DB="${MUSEBASE_DB:-/var/lib/musebase/lyrics.db}"
@@ -44,12 +48,18 @@ SONGS="$(sqlite3 "$SNAPSHOT" 'SELECT COUNT(*) FROM lyrics;')"
 gzip -f "$SNAPSHOT"
 ARCHIVE="$SNAPSHOT.gz"
 
-# 4) 오프사이트 사본(선택) — 실패해도 로컬 백업은 유효하므로 경고만 남긴다
+# 4) 오프사이트 사본(선택). 실패해도 로컬 백업은 유효하므로 정리까지 마친 뒤 비정상 종료한다.
+REMOTE_FAILED=0
 if [ -n "$REMOTE" ]; then
-    if scp -q -o BatchMode=yes -o ConnectTimeout=10 "$ARCHIVE" "$REMOTE/"; then
-        echo "원격 사본: $REMOTE/$(basename "$ARCHIVE")"
+    case "$REMOTE" in
+        gs://*) COPY=(gcloud storage cp --quiet "$ARCHIVE" "${REMOTE%/}/") ;;
+        *)      COPY=(scp -q -o BatchMode=yes -o ConnectTimeout=10 "$ARCHIVE" "$REMOTE/") ;;
+    esac
+    if "${COPY[@]}"; then
+        echo "원격 사본: ${REMOTE%/}/$(basename "$ARCHIVE")"
     else
-        echo "경고: 원격 사본 실패($REMOTE) — 로컬 백업은 정상입니다" >&2
+        echo "원격 사본 실패($REMOTE) — 로컬 백업은 정상입니다" >&2
+        REMOTE_FAILED=1
     fi
 fi
 
@@ -57,3 +67,4 @@ fi
 find "$DEST" -name 'lyrics-*.db.gz' -mtime "+$KEEP_DAYS" -delete
 
 echo "백업 완료: $ARCHIVE ($SONGS곡, $(du -h "$ARCHIVE" | cut -f1))"
+exit "$REMOTE_FAILED"

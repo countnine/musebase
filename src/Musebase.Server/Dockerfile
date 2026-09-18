@@ -41,7 +41,7 @@ EXPOSE 5180
 
 # 컨테이너 오케스트레이터가 살아있음을 판단할 수 있게(무인증 엔드포인트).
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
-  CMD ["/bin/sh", "-c", "curl -fsS http://127.0.0.1:5180/v1/healthz || exit 1"]
+  CMD ["/bin/sh", "-c", "curl -fsS http://127.0.0.1:5180/musebase/v1/healthz || exit 1"]
 
 # 컨테이너는 루트로 돌 이유가 없다. /data 소유권은 compose의 볼륨 초기화에 맡긴다.
 USER $APP_UID
