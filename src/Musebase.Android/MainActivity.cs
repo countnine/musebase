@@ -18,6 +18,7 @@ namespace Musebase.Android;
 /// 1) 상단 아이콘 바: 오버레이 켜기/끄기, 오버레이 위치 이동, 설정, 앱 종료
 /// 2) 권한 배너: 필요한 권한이 빠졌을 때만 나타난다(허용되면 사라져 공간을 돌려준다)
 /// 3) 가사: <see cref="LyricsCoordinator.CurrentLyrics"/>의 전 줄을 그리고, 현재 줄만 흰색·굵게.
+///    맨 위에는 서버에 있는 "이 곡의 의미"를 카드로 붙인다(없으면 그 자리에서 만들 수 있다).
 ///    현재 줄은 <see cref="Lyrics.LineIndexesAt"/>로 재생 위치에서 직접 계산한다(엔진 변경 없음).
 /// 4) 재생 컨트롤: <see cref="INowPlayingSource"/>의 컨트롤 API를 그대로 쓴다(가용 여부에 따라 흐림).
 ///
@@ -114,13 +115,13 @@ public sealed class MainActivity : Activity
         _moveButton = IconButton(global::Android.Resource.Drawable.IcMenuCompass, "오버레이 위치 이동", ToggleOverlayMoveMode);
         var searchButton = IconButton(global::Android.Resource.Drawable.IcMenuSearch, "가사 검색",
             () => StartActivity(new Intent(this, typeof(SearchActivity))));
-        var meaningButton = IconButton(global::Android.Resource.Drawable.IcMenuInfoDetails, "이 곡의 의미", ShowMeaning);
+        _meaningPill = BuildMeaningPill();
         var wrongButton = IconButton(global::Android.Resource.Drawable.IcMenuDelete, "틀린 가사로 표시", ConfirmMarkWrong);
         var settingsButton = IconButton(global::Android.Resource.Drawable.IcMenuPreferences, "설정",
             () => StartActivity(new Intent(this, typeof(SettingsActivity))));
         var quitButton = IconButton(global::Android.Resource.Drawable.IcMenuCloseClearCancel, "앱 종료", ConfirmQuit);
         iconBar.AddView(searchButton);
-        iconBar.AddView(meaningButton);
+        iconBar.AddView(_meaningPill);
         iconBar.AddView(wrongButton);
         iconBar.AddView(_overlayButton);
         iconBar.AddView(_moveButton);
@@ -147,9 +148,12 @@ public sealed class MainActivity : Activity
         _lyricsColumn.SetGravity(GravityFlags.CenterHorizontal);
         _lyricsColumn.SetPadding(0, Dp(24), 0, Dp(24));
 
+        _meaningCard = BuildMeaningCard();
+
         _emptyLyricsText = new TextView(this) { Text = "♪", Gravity = GravityFlags.Center };
         _emptyLyricsText.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 20f);
         _emptyLyricsText.SetTextColor(InactiveColor);
+        AttachMeaningCard();
         _lyricsColumn.AddView(_emptyLyricsText);
 
         _lyricsScroll = new ScrollView(this) { FillViewport = true };
@@ -195,7 +199,7 @@ public sealed class MainActivity : Activity
             _onStatusChanged = s => { _lastLyricsStatus = s; RenderStatusLine(); RenderLyrics(); };
             // 번역이 끝나면 화면의 가사도 즉시 번역본으로 바꿔 준다(같은 곡 = 뷰 재생성 없이 글자만).
             _onTranslationStatusChanged = _ => { RenderStatusLine(); RenderLyrics(); RefreshTranslations(); };
-            _onTrackChanged = _ => { RenderTrack(); RenderLyrics(); };
+            _onTrackChanged = _ => { RenderTrack(); RenderLyrics(); LoadMeaning(); };
             app.Coordinator.StatusChanged += _onStatusChanged;
             app.Coordinator.TranslationStatusChanged += _onTranslationStatusChanged;
             app.Source.TrackChanged += _onTrackChanged;
@@ -211,6 +215,7 @@ public sealed class MainActivity : Activity
     {
         base.OnResume();
         if (!_uiLoopRunning) { _uiLoopRunning = true; UiTick(); }
+        LoadMeaning(); // 처음 뜰 때 + 돌아올 때(다른 기기에서 방금 만든 의미도 따라온다)
     }
 
     protected override void OnPause()
@@ -247,6 +252,7 @@ public sealed class MainActivity : Activity
         _lyricsColumn.RemoveAllViews();
         _lineViews.Clear();
         _translationViews.Clear();
+        AttachMeaningCard(); // 열이 비워졌으니 카드를 맨 위에 되붙인다
 
         if (lyrics is null || lyrics.Lines.Count == 0)
         {
@@ -539,125 +545,327 @@ public sealed class MainActivity : Activity
         else StartService(intent);
     }
 
-    /// <summary>
-    /// 현재 곡을 "틀린 가사"로 표시한다(Windows 트레이의 같은 기능) — 이 곡은 이후 가사를 찾지 않고,
-    /// 캐시에 저장된 잘못된 가사도 지운다. 되돌리려면 가사 검색에서 직접 골라 적용하면 된다.
-    /// </summary>
-    /// <summary>
-    /// "이 곡의 의미" — 서버가 만들어 둔 문단을 보여 주고, <b>없으면 그 자리에서 만들 수 있다</b>.
-    ///
-    /// 만들기는 <b>사람이 누를 때만</b> 일어난다(자동 생성은 여전히 없다) — 한 번이 외부 자료
-    /// 수집 + LLM 호출이라 비싸기 때문이다. 서버가 <c>MUSEBASE_MEANING_ALLOW_CLIENT=0</c>이면
-    /// 막을 수 있고, 그때는 눌러도 안 된다고 알려 준다.
-    ///
-    /// 출처 표기는 의무라(Wikipedia CC BY-SA 등) 본문과 함께 반드시 붙인다.
-    /// </summary>
-    private async void ShowMeaning()
+    // ---- 곡의 의미(가사 위 카드) ----
+    //
+    // 예전에는 상단의 ⓘ 아이콘 → 팝업이었다. 무엇을 하는 버튼인지 알기 어렵고, 의미가 이미 있어도
+    // 눌러 봐야만 알 수 있었다. 이제 곡이 바뀌면 서버에 조용히 물어보고(GET — 만들지 않으니 비용이 없다)
+    // 있으면 **가사 맨 위에 카드로** 바로 보여 준다. 없으면 같은 자리에 [의미 알아보기]가 뜬다.
+    // 만들기는 여전히 사람이 누를 때만이다 — 한 번이 외부 자료 수집 + LLM 호출이라 비싸다.
+    // 서버가 앱 생성을 막아 두었으면(MUSEBASE_MEANING_ALLOW_CLIENT=0) 눌러도 안 된다고 알려 준다.
+
+    private enum MeaningPhase { Hidden, Loading, Absent, Making, Present, Failed }
+
+    private static readonly Color AccentColor = Color.Argb(0xFF, 0x7C, 0xC4, 0xFF);
+
+    /// <summary>접힌 카드의 본문 줄 수 — 긴 글이 가사를 화면 밖으로 밀어내지 않게.</summary>
+    private const int CollapsedMeaningLines = 3;
+
+    private LinearLayout? _meaningCard;
+    private TextView? _meaningBody;
+    private TextView? _meaningCredit;
+    private TextView? _meaningAction;
+    private TextView? _meaningPill;
+
+    private MeaningPhase _meaningPhase = MeaningPhase.Hidden;
+    private Musebase.Core.Search.SongMeaningView? _meaning;
+    private string? _meaningFor;       // 카드가 지금 설명하는 곡(제목|아티스트)
+    private string? _meaningFailure;   // Failed일 때 보여 줄 문장
+    private bool _meaningRetryable;
+    private bool _meaningExpanded;
+
+    private static string MeaningKey(TrackInfo track) => $"{track.Title}|{track.Artist}";
+
+    /// <summary>가사 맨 위에 붙는 카드. 가사를 다시 그릴 때마다 <see cref="AttachMeaningCard"/>가 되붙인다.</summary>
+    private LinearLayout BuildMeaningCard()
     {
-        if (MusebaseApp.Instance is not { } app || app.Source.CurrentTrack is not { } track)
+        var card = new LinearLayout(this) { Orientation = Orientation.Vertical, Visibility = ViewStates.Gone };
+        var background = new global::Android.Graphics.Drawables.GradientDrawable();
+        background.SetColor(Color.Argb(0xFF, 0x1C, 0x1F, 0x24));
+        background.SetCornerRadius(Dp(12));
+        card.Background = background;
+        card.SetPadding(Dp(14), Dp(12), Dp(14), Dp(12));
+
+        var top = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        top.SetGravity(GravityFlags.CenterVertical);
+        var header = new TextView(this) { Text = "이 곡의 의미" };
+        header.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 12f);
+        header.SetTextColor(AccentColor);
+        header.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+        top.AddView(header, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        _meaningAction = new TextView(this);
+        _meaningAction.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 13f);
+        _meaningAction.SetTextColor(AccentColor);
+        _meaningAction.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+        _meaningAction.SetPadding(Dp(12), Dp(6), 0, Dp(6)); // 손가락으로 누르기 쉽게 여백을 준다
+        _meaningAction.Click += (_, _) => OnMeaningAction();
+        top.AddView(_meaningAction);
+        card.AddView(top);
+
+        _meaningBody = new TextView(this);
+        _meaningBody.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 15f);
+        _meaningBody.SetLineSpacing(Dp(3), 1f);
+        _meaningBody.SetPadding(0, Dp(6), 0, 0);
+        card.AddView(_meaningBody);
+
+        _meaningCredit = new TextView(this);
+        _meaningCredit.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 11f);
+        _meaningCredit.SetTextColor(InactiveColor);
+        _meaningCredit.SetPadding(0, Dp(8), 0, 0);
+        card.AddView(_meaningCredit);
+
+        // 카드를 누르면 펼치고 접는다.
+        card.Click += (_, _) =>
         {
-            Toast.MakeText(this, "재생 중인 곡이 없습니다.", ToastLength.Short)?.Show();
+            if (_meaningPhase != MeaningPhase.Present) return;
+            _meaningExpanded = !_meaningExpanded;
+            RenderMeaning();
+        };
+        return card;
+    }
+
+    /// <summary>
+    /// 상단 줄의 [의미] 버튼. 아이콘(ⓘ)은 무엇을 하는지 알기 어려워 글자로 바꿨다.
+    /// 이 곡에 의미가 있으면 색이 채워진다 — 누르지 않아도 있는지 보인다.
+    /// </summary>
+    private TextView BuildMeaningPill()
+    {
+        var pill = new TextView(this)
+        {
+            Text = "의미",
+            ContentDescription = "이 곡의 의미",
+            Gravity = GravityFlags.Center,
+            Visibility = ViewStates.Gone,
+        };
+        pill.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 13f);
+        pill.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+        pill.SetPadding(Dp(12), 0, Dp(12), 0);
+        pill.Click += (_, _) => RevealMeaning();
+        pill.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30))
+        {
+            LeftMargin = Dp(4),
+            RightMargin = Dp(4),
+        };
+        return pill;
+    }
+
+    /// <summary>가사 열의 맨 위에 카드를 붙인다(가사를 다시 그리면 열이 비워지므로 매번).</summary>
+    private void AttachMeaningCard()
+    {
+        if (_meaningCard is null || _lyricsColumn is null) return;
+        (_meaningCard.Parent as ViewGroup)?.RemoveView(_meaningCard);
+        _lyricsColumn.AddView(_meaningCard, 0, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(12) });
+    }
+
+    /// <summary>[의미] — 카드로 올라간다. 자동 스크롤이 곧바로 현재 줄로 끌고 내려가지 않게 잠시 멈춘다.</summary>
+    private void RevealMeaning()
+    {
+        if (_meaningPhase == MeaningPhase.Present) _meaningExpanded = true;
+        RenderMeaning();
+        _userScrolling = true;
+        _userScrollUntilMs = SystemClock.UptimeMillis() + 10_000;
+        _lyricsScroll?.SmoothScrollTo(0, 0);
+    }
+
+    /// <summary>
+    /// 지금 곡의 의미를 서버에 묻는다(곡이 바뀔 때, 화면에 돌아올 때). 조회만 하므로 비용이 없다 —
+    /// 다른 기기에서 방금 만든 의미도 화면에 돌아오면 따라온다.
+    /// </summary>
+    private async void LoadMeaning()
+    {
+        if (MusebaseApp.Instance is not { } app) return;
+        var track = app.Source.CurrentTrack;
+        if (track is null || app.Coordinator.RemoteCache is not { } remote)
+        {
+            _meaning = null;
+            SetMeaning(MeaningPhase.Hidden, null);
             return;
         }
 
-        if (app.Coordinator.RemoteCache is not { } remote)
+        var key = MeaningKey(track);
+        if (key == _meaningFor && _meaningPhase == MeaningPhase.Making) return; // 곧 결과가 온다
+        if (key != _meaningFor)
         {
-            Toast.MakeText(this, "가사 서버가 설정되지 않았습니다.", ToastLength.Short)?.Show();
-            return;
-        }
-
-        // 창은 **하나**만 띄우고 내용만 바꾼다. 불러오기용과 결과용을 따로 띄우면
-        // 팝업이 두 번 깜빡여 부자연스럽다(실측으로 지적받은 부분).
-        var dialog = new AlertDialog.Builder(this)
-            .SetTitle($"{track.Title} — {track.Artist}")!
-            .SetMessage("불러오는 중…")!
-            .SetPositiveButton("닫기", (_, _) => { })!
-            .SetNeutralButton("의미 만들기", (IDialogInterfaceOnClickListener?)null)!
-            .Show();
-
-        var make = dialog?.GetButton((int)DialogButtonType.Neutral);
-        if (make is not null)
-        {
-            make.Visibility = ViewStates.Gone;   // 결과를 보기 전에는 감춘다
-            // 기본 동작은 "누르면 창이 닫힌다"인데, 만드는 동안 창이 살아 있어야 진행 상황을
-            // 보여 줄 수 있다. 그래서 Show() 뒤에 리스너를 직접 붙인다(안드로이드 관례).
-            make.Click += (_, _) => MakeMeaning(remote, dialog!, make, track);
+            _meaning = null;
+            _meaningExpanded = false;
+            SetMeaning(MeaningPhase.Loading, key);
         }
 
         Musebase.Core.Search.SongMeaningView? meaning = null;
         try { meaning = await remote.GetMeaningAsync(track.Title, track.Artist); }
         catch (Exception) { /* 조용한 강등 — 부가 기능이다 */ }
 
-        if (IsFinishing || IsDestroyed || dialog is null || !dialog.IsShowing) return;
+        // 그사이 곡이 바뀌었거나 사람이 만들기를 눌렀으면 이 답은 버린다.
+        if (IsFinishing || IsDestroyed || key != _meaningFor || _meaningPhase == MeaningPhase.Making) return;
 
-        if (meaning is null)
+        // 이미 보여 주던 글이 있는데 이번 조회만 실패했다면 그대로 둔다(글이 사라지면 사람이 놀란다).
+        if (meaning is null && _meaningPhase == MeaningPhase.Present) return;
+
+        _meaning = meaning;
+        SetMeaning(meaning is null ? MeaningPhase.Absent : MeaningPhase.Present, key);
+    }
+
+    private void SetMeaning(MeaningPhase phase, string? key)
+    {
+        _meaningPhase = phase;
+        _meaningFor = key;
+        RenderMeaning();
+    }
+
+    private void RenderMeaning()
+    {
+        if (_meaningCard is null || _meaningBody is null || _meaningCredit is null || _meaningAction is null) return;
+
+        // 불러오는 동안은 카드를 띄우지 않는다 — 곡마다 빈 카드가 깜빡이면 가사가 들썩인다.
+        _meaningCard.Visibility = _meaningPhase is MeaningPhase.Hidden or MeaningPhase.Loading
+            ? ViewStates.Gone
+            : ViewStates.Visible;
+
+        _meaningBody.SetMaxLines(int.MaxValue);
+        _meaningBody.Ellipsize = null;
+        _meaningBody.SetTextColor(InactiveColor);
+        _meaningCredit.Visibility = ViewStates.Gone;
+        _meaningAction.Visibility = ViewStates.Visible;
+
+        switch (_meaningPhase)
         {
-            // 대부분의 곡에는 아직 의미가 없다 — 실패가 아니라 정상이다.
-            dialog.SetMessage("이 곡의 의미는 아직 없습니다.\n[의미 만들기]를 누르면 지금 만듭니다.");
-            if (make is not null) make.Visibility = ViewStates.Visible;
+            case MeaningPhase.Absent:
+                _meaningBody.Text = "아직 없습니다. 외부 자료를 모아 이 곡이 무엇에 대한 노래인지 한 문단으로 정리합니다.";
+                _meaningAction.Text = "의미 알아보기";
+                break;
+
+            case MeaningPhase.Making:
+                _meaningBody.Text = "의미를 만드는 중… 수십 초 걸릴 수 있습니다.";
+                _meaningAction.Visibility = ViewStates.Gone;
+                break;
+
+            case MeaningPhase.Present when _meaning is { } meaning:
+                _meaningBody.Text = meaning.Summary;
+                _meaningBody.SetTextColor(TranslationColor);
+                if (!_meaningExpanded)
+                {
+                    _meaningBody.SetMaxLines(CollapsedMeaningLines);
+                    _meaningBody.Ellipsize = global::Android.Text.TextUtils.TruncateAt.End;
+                    _meaningAction.Text = "더 보기";
+                }
+                else
+                {
+                    // 출처 표기는 의무라(Wikipedia CC BY-SA 등) 펼친 본문에는 반드시 붙인다.
+                    _meaningCredit.Text = meaning.CreditLine;
+                    _meaningCredit.Visibility = string.IsNullOrEmpty(meaning.CreditLine)
+                        ? ViewStates.Gone
+                        : ViewStates.Visible;
+                    _meaningAction.Text = RegenerateLabel;
+                }
+                break;
+
+            case MeaningPhase.Failed:
+                _meaningBody.Text = _meaningFailure ?? "의미를 만들지 못했습니다.";
+                _meaningAction.Text = "다시 시도";
+                _meaningAction.Visibility = _meaningRetryable ? ViewStates.Visible : ViewStates.Gone;
+                break;
         }
-        else
+
+        RenderMeaningPill();
+    }
+
+    /// <summary>의미가 있으면 채운 버튼, 없으면 테두리만 — 누르지 않아도 상태가 보인다.</summary>
+    private void RenderMeaningPill()
+    {
+        if (_meaningPill is null) return;
+        _meaningPill.Visibility = _meaningPhase == MeaningPhase.Hidden ? ViewStates.Gone : ViewStates.Visible;
+
+        var present = _meaningPhase == MeaningPhase.Present;
+        var shape = new global::Android.Graphics.Drawables.GradientDrawable();
+        shape.SetCornerRadius(Dp(15));
+        shape.SetStroke(Dp(1), present ? AccentColor : InactiveColor);
+        shape.SetColor(present ? AccentColor : Color.Transparent);
+        _meaningPill.Background = shape;
+        _meaningPill.SetTextColor(present ? Color.Argb(0xFF, 0x11, 0x11, 0x11) : InactiveColor);
+    }
+
+    private void OnMeaningAction()
+    {
+        switch (_meaningPhase)
         {
-            ShowMeaningText(dialog, meaning);
-            // 이미 있는 글도 다시 만들 수 있어야 한다(모델을 바꿔 보거나 마음에 안 들 때).
-            // 다만 **덮어쓰기**라 누르면 먼저 묻는다 — MakeMeaning이 확인 창을 띄운다.
-            if (make is not null)
-            {
-                make.Text = RegenerateLabel;
-                make.Visibility = ViewStates.Visible;
-            }
+            case MeaningPhase.Present when !_meaningExpanded:
+                _meaningExpanded = true;
+                RenderMeaning();
+                break;
+            case MeaningPhase.Present:
+                MakeMeaning(regenerate: true);
+                break;
+            case MeaningPhase.Absent:
+            case MeaningPhase.Failed when _meaningRetryable:
+                MakeMeaning(regenerate: false);
+                break;
         }
     }
 
     /// <summary>
-    /// 서버에 의미 생성을 요청하고 결과를 같은 창에 그린다.
-    ///
-    /// 수십 초가 걸릴 수 있어 <b>버튼을 잠그고</b> 진행 중임을 글로 밝힌다 — 반응이 없으면
-    /// 사람이 다시 눌러 같은 곡을 두 번 만들게 된다(서버도 막지만 기다림이 길어진다).
+    /// 서버에 의미 생성을 요청하고 결과를 카드에 그린다. 수십 초가 걸릴 수 있어 그동안 버튼을 감추고
+    /// 진행 중임을 글로 밝힌다 — 반응이 없으면 사람이 다시 눌러 같은 곡을 두 번 만들게 된다.
     /// </summary>
-    private async void MakeMeaning(
-        Musebase.Core.Search.IRemoteLyricsCache remote, AlertDialog dialog, global::Android.Widget.Button make,
-        TrackInfo track)
+    private async void MakeMeaning(bool regenerate)
     {
+        if (MusebaseApp.Instance is not { } app
+            || app.Source.CurrentTrack is not { } track
+            || app.Coordinator.RemoteCache is not { } remote)
+            return;
+
         // 이미 글이 있는 상태에서 누른 것이면 재생성이다 — 되돌릴 수 없으므로 먼저 묻는다.
-        var regenerate = make.Text == RegenerateLabel;
         if (regenerate && !await ConfirmRegenerateAsync()) return;
 
-        make.Enabled = false;
-        dialog.SetMessage("의미를 만드는 중… 수십 초 걸릴 수 있습니다.");
+        var key = MeaningKey(track);
+        var previous = _meaning;
+        SetMeaning(MeaningPhase.Making, key);
 
         // force는 사람이 방금 확인했을 때만. 그 밖에는 서버가 만들어 둔 것을 그대로 받는다.
         var result = await remote.RequestMeaningAsync(track.Title, track.Artist, regenerate);
-
-        if (IsFinishing || IsDestroyed || !dialog.IsShowing) return;
+        if (IsFinishing || IsDestroyed || key != _meaningFor) return; // 그사이 곡이 바뀌었다
 
         if (result is { Status: Musebase.Core.Search.MeaningRequestStatus.Created, Meaning: { } made })
         {
-            ShowMeaningText(dialog, made);
-            make.Visibility = ViewStates.Gone;
+            _meaning = made;
+            _meaningExpanded = true; // 방금 만든 글은 펼쳐서 보여 준다
+            SetMeaning(MeaningPhase.Present, key);
             return;
         }
 
-        // 만들지 못한 이유마다 사람이 할 일이 다르다 — 뭉뚱그리면 다시 누를지 말지 알 수 없다.
-        dialog.SetMessage(result.Status switch
-        {
-            Musebase.Core.Search.MeaningRequestStatus.NoSource =>
-                "이 곡에 대한 외부 자료를 찾지 못했습니다.",
-            Musebase.Core.Search.MeaningRequestStatus.Insufficient =>
-                "자료가 부족해 의미를 판단하지 못했습니다.",
-            Musebase.Core.Search.MeaningRequestStatus.Retry =>
-                "지금은 만들 수 없습니다(쿼타·네트워크).\n저장하지 않았으니 잠시 후 다시 눌러 보세요.",
-            Musebase.Core.Search.MeaningRequestStatus.Unavailable =>
-                "이 서버에서는 앱에서 의미를 만들 수 없습니다.",
-            _ => "의미를 만들지 못했습니다.",
-        });
+        var message = FailureText(result.Status);
 
+        // 다시 만들기가 실패했으면 원래 글을 그대로 둔다 — 서버도 저장하지 않았다.
+        if (regenerate && previous is not null)
+        {
+            _meaning = previous;
+            SetMeaning(MeaningPhase.Present, key);
+            Toast.MakeText(this, message, ToastLength.Long)?.Show();
+            return;
+        }
+
+        _meaningFailure = message;
         // 다시 눌러 볼 수 있는 것은 일시적 실패뿐이다 — 자료가 없는 곡은 눌러도 같은 답이 온다.
-        make.Enabled = result.Status is Musebase.Core.Search.MeaningRequestStatus.Retry
-                                     or Musebase.Core.Search.MeaningRequestStatus.Failed;
+        _meaningRetryable = result.Status is Musebase.Core.Search.MeaningRequestStatus.Retry
+                                          or Musebase.Core.Search.MeaningRequestStatus.Failed;
+        SetMeaning(MeaningPhase.Failed, key);
     }
 
-    /// <summary>이미 있는 글을 다시 만들 때의 버튼 글자 — 그 상태를 이 문자열로 가린다.</summary>
+    /// <summary>만들지 못한 이유마다 사람이 할 일이 다르다 — 뭉뚱그리면 다시 누를지 말지 알 수 없다.</summary>
+    private static string FailureText(Musebase.Core.Search.MeaningRequestStatus status) => status switch
+    {
+        Musebase.Core.Search.MeaningRequestStatus.NoSource =>
+            "이 곡에 대한 외부 자료를 찾지 못했습니다.",
+        Musebase.Core.Search.MeaningRequestStatus.Insufficient =>
+            "자료가 부족해 의미를 판단하지 못했습니다.",
+        Musebase.Core.Search.MeaningRequestStatus.Retry =>
+            "지금은 만들 수 없습니다(쿼타·네트워크). 저장하지 않았으니 잠시 후 다시 눌러 보세요.",
+        Musebase.Core.Search.MeaningRequestStatus.Unavailable =>
+            "이 서버에서는 지금 의미를 만들 수 없습니다(서버 설정을 확인하세요).",
+        _ => "의미를 만들지 못했습니다.",
+    };
+
+    /// <summary>이미 있는 글을 다시 만들 때의 버튼 글자.</summary>
     private const string RegenerateLabel = "다시 만들기";
 
     /// <summary>
@@ -683,10 +891,10 @@ public sealed class MainActivity : Activity
         public void OnCancel(IDialogInterface? dialog) => onCancel();
     }
 
-    /// <summary>본문과 출처를 함께 그린다 — 출처 표기는 계약상 의무라 떼어 놓지 않는다.</summary>
-    private static void ShowMeaningText(AlertDialog dialog, Musebase.Core.Search.SongMeaningView meaning) =>
-        dialog.SetMessage(meaning.Summary + "\n\n" + meaning.CreditLine);
-
+    /// <summary>
+    /// 현재 곡을 "틀린 가사"로 표시한다(Windows 트레이의 같은 기능) — 이 곡은 이후 가사를 찾지 않고,
+    /// 캐시에 저장된 잘못된 가사도 지운다. 되돌리려면 가사 검색에서 직접 골라 적용하면 된다.
+    /// </summary>
     private void ConfirmMarkWrong()
     {
         if (MusebaseApp.Instance?.Source.CurrentTrack is null)
