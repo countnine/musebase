@@ -1,15 +1,17 @@
 namespace Musebase.Core.Meaning;
 
 /// <summary>한 곡에 대한 의미 생성 결과.</summary>
-/// <param name="Status">`ok` | `no-source` | `failed` | `retry`.</param>
+/// <param name="Status">`ok` | `no-source` | `insufficient` | `failed` | `retry` | `config`.</param>
 /// <param name="Summary">생성된 대상 언어 문단. `ok`가 아니면 null.</param>
 /// <param name="Sources">근거로 쓴 원문들(출처 표기·재생성 판단용).</param>
+/// <param name="Detail">만들지 못했을 때 공급자가 준 이유(상태코드 포함). 로그·관리 화면용.</param>
 public sealed record SongMeaning(
     string Status,
     string? Summary,
     IReadOnlyList<MeaningSource> Sources,
     string? Engine,
-    string? Model)
+    string? Model,
+    string? Detail = null)
 {
     public const string Ok = "ok";
     /// <summary>어느 소스에도 자료가 없었다 — LLM은 부르지 않았다.</summary>
@@ -22,6 +24,16 @@ public sealed record SongMeaning(
     /// 백필이 이 곡을 영영 건너뛴다. 이 상태는 DB에 들어가지 않는 값이다.
     /// </summary>
     public const string Retry = "retry";
+
+    /// <summary>
+    /// 엔진 설정(결제 잔액·키·모델 이름·계정 정책)을 사람이 고쳐야 한다 — **저장하지 않는다.**
+    /// 곡의 문제가 아니므로 행으로 남기면 백필이 멀쩡한 곡을 영영 건너뛴다. `retry`와 달리
+    /// 기다려도 풀리지 않으므로 화면에 이유를 그대로 보여 줘야 한다. DB에 들어가지 않는 값이다.
+    /// </summary>
+    public const string Config = "config";
+
+    /// <summary>저장하지 않는 상태인가(<see cref="Retry"/>·<see cref="Config"/>).</summary>
+    public static bool IsUnsaved(string status) => status is Retry or Config;
 
     /// <summary>
     /// 자료는 찾았지만 그것만으로는 곡의 의미를 말할 수 없었다. 문단은 남기되(사람이 판단할 수
@@ -80,10 +92,22 @@ public sealed class SongMeaningService
                 verdict, MeaningVerdict.Strip(written.Text), collected, _writer.EngineId, _writer.Model);
         }
 
-        // 쿼타·네트워크처럼 시간이 풀어 줄 실패는 `failed`로 굳히지 않는다.
-        var status = written.Retryable ? SongMeaning.Retry : SongMeaning.Failed;
-        return new SongMeaning(status, null, collected, _writer.EngineId, _writer.Model);
+        // 쿼타·네트워크처럼 시간이 풀어 줄 실패와 설정 문제는 `failed`로 굳히지 않는다.
+        var status = written.NeedsSetup ? SongMeaning.Config
+            : written.Retryable ? SongMeaning.Retry
+            : SongMeaning.Failed;
+        return new SongMeaning(status, null, collected, _writer.EngineId, _writer.Model, DetailOf(written));
     }
+
+    /// <summary>"HTTP 402 · 잔액이 부족합니다"처럼 상태코드와 이유를 한 줄로.</summary>
+    private static string? DetailOf(MeaningWriteResult written) =>
+        (written.StatusCode, written.Reason) switch
+        {
+            ({ } code, { } reason) => $"HTTP {code} · {reason}",
+            ({ } code, null) => $"HTTP {code}",
+            (null, { } reason) => reason,
+            _ => null,
+        };
 
     /// <summary>모든 소스를 동시에 부르고 성공한 것만 모은다(레지스트리 등록 순서 유지).</summary>
     public async Task<IReadOnlyList<MeaningSource>> CollectAsync(

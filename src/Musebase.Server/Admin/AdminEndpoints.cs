@@ -610,18 +610,19 @@ public static class AdminEndpoints
 
             var targets = store.SongsWithoutMeaning(MeaningOptionsNow().BackfillLimit);
             int ok = 0, none = 0, failed = 0, done = 0;
-            var stopped = false;
+            MeaningOutcome? stoppedBy = null;
             foreach (var (key, title, artist) in targets)
             {
                 var delay = MeaningOptionsNow().BackfillDelayMs;
                 if (done > 0 && delay > 0) await Task.Delay(delay);
 
-                var status = await GenerateStatusAsync(key, title, artist);
+                var outcome = await GenerateStatusAsync(key, title, artist);
+                var status = outcome.Status;
 
-                // 쿼타·네트워크 같은 일시적 실패면 여기서 멈춘다. 계속 돌아 봐야 남은 곡까지
-                // 같은 벽에 부딪힐 뿐이고, 중단해도 아무것도 망가지지 않는다 — 저장을 안 했으므로
-                // 다음에 다시 누르면 이 곡부터 그대로 이어진다.
-                if (status == Musebase.Core.Meaning.SongMeaning.Retry) { stopped = true; break; }
+                // 일시적 실패(쿼타·네트워크)나 설정 문제(잔액·키·모델)면 여기서 멈춘다. 계속 돌아 봐야
+                // 남은 곡까지 같은 벽에 부딪힐 뿐이고, 중단해도 아무것도 망가지지 않는다 — 저장을 안
+                // 했으므로 다음에 다시 누르면 이 곡부터 그대로 이어진다.
+                if (Musebase.Core.Meaning.SongMeaning.IsUnsaved(status)) { stoppedBy = outcome; break; }
 
                 done++;
                 // 자료 부족은 "자료 없음"과 같은 칸에 센다 — 둘 다 "의미를 만들지 못함"이다.
@@ -631,10 +632,17 @@ public static class AdminEndpoints
                 else failed++;
             }
 
-            var summary = stopped
-                ? $"{done}곡 처리 후 중단 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}. "
-                  + "쿼타·네트워크 문제로 보입니다. 남은 곡은 손대지 않았으니 잠시 후 다시 눌러 주세요."
-                : $"{targets.Count}곡 처리 — 생성 {ok} · 자료 없음 {none} · 실패 {failed}";
+            var counts = $"생성 {ok} · 자료 없음 {none} · 실패 {failed}";
+            var summary = stoppedBy switch
+            {
+                null => $"{targets.Count}곡 처리 — {counts}",
+                { Status: Musebase.Core.Meaning.SongMeaning.Config } =>
+                    $"{done}곡 처리 후 중단 — {counts}. 엔진 설정 문제입니다({stoppedBy.Detail ?? "사유 없음"}). "
+                    + "결제 잔액·키·모델을 확인한 뒤 다시 눌러 주세요. 남은 곡은 손대지 않았습니다.",
+                _ =>
+                    $"{done}곡 처리 후 중단 — {counts}. 쿼타·네트워크 문제로 보입니다({stoppedBy.Detail ?? "사유 없음"}). "
+                    + "남은 곡은 손대지 않았으니 잠시 후 다시 눌러 주세요.",
+            };
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(summary)}");
         });
 
@@ -643,7 +651,9 @@ public static class AdminEndpoints
             string key, string title, string artist, IReadOnlyList<string>? only = null)
         {
             if (!MeaningsNow().IsEnabled) return "의미 엔진이 구성되지 않았습니다(키를 확인하세요).";
-            var status = await GenerateStatusAsync(key, title, artist, only);
+            var (status, detail) = await GenerateStatusAsync(key, title, artist, only);
+            // 공급자가 준 이유를 그대로 붙인다 — 문구만으로는 "잔액"인지 "모델 없음"인지 알 수 없다.
+            var why = detail is null ? "" : $" ({detail})";
             return status switch
             {
                 Musebase.Core.Meaning.SongMeaning.Ok => "의미를 만들었습니다.",
@@ -651,8 +661,10 @@ public static class AdminEndpoints
                 Musebase.Core.Meaning.SongMeaning.Insufficient =>
                     "자료가 부족해 의미를 판단하지 못했습니다 — 자료원을 바꿔 다시 시도해 보세요.",
                 Musebase.Core.Meaning.SongMeaning.Retry =>
-                    "일시적인 오류입니다(쿼타·네트워크). 저장하지 않았으니 잠시 후 다시 시도하세요.",
-                _ => "생성에 실패했습니다(키를 확인하세요).",
+                    $"일시적인 오류입니다(쿼타·네트워크){why}. 저장하지 않았으니 잠시 후 다시 시도하세요.",
+                Musebase.Core.Meaning.SongMeaning.Config =>
+                    $"엔진 설정 문제로 만들지 못했습니다{why}. 결제 잔액·키·모델을 확인하세요. 저장하지 않았습니다.",
+                _ => $"생성에 실패했습니다{why}.",
             };
         }
 
@@ -701,7 +713,7 @@ public static class AdminEndpoints
         }
 
         // 저장·중복 방지 규칙은 앱용 `POST /v1/meaning`과 **같은 코드**를 쓴다(MeaningGenerator).
-        Task<string> GenerateStatusAsync(
+        Task<MeaningOutcome> GenerateStatusAsync(
             string key, string title, string artist, IReadOnlyList<string>? only = null) =>
             generator.GenerateAsync(key, title, artist, only);
     }

@@ -176,7 +176,10 @@ public enum MeaningRequestStatus
     Insufficient,
     /// <summary>쿼타·네트워크로 잠시 안 된다. <b>저장하지 않았으므로 다시 눌러도 된다.</b></summary>
     Retry,
-    /// <summary>서버에 의미 엔진이 구성돼 있지 않거나 앱 생성이 꺼져 있다.</summary>
+    /// <summary>
+    /// 서버에 의미 엔진이 구성돼 있지 않거나, 앱 생성이 꺼져 있거나, 엔진 설정(결제 잔액·키·모델)에
+    /// 문제가 있다(`202 {"status":"config"}`). 어느 쪽이든 앱이 아니라 서버를 고쳐야 한다.
+    /// </summary>
     Unavailable,
     /// <summary>서버에 못 붙었거나 그 곡이 서버에 없다.</summary>
     Failed,
