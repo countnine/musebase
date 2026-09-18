@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 이상의 백업·기기 이전 규칙. 비밀값 파일은 클라우드 백업에도, 기기 간 직접 이전에도 싣지 않는다.
+     어차피 Keystore 키가 따라가지 않아 새 기기에서는 풀 수 없다 — 싣지 않는 편이 혼란도 없다. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="musebase.secrets.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="musebase.secrets.xml" />
+    </device-transfer>
+</data-extraction-rules>

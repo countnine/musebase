@@ -7,10 +7,12 @@ namespace Musebase.Android.Services;
 /// 앱 설정 저장소 — Android <see cref="ISharedPreferences"/>(앱 private) 래퍼.
 ///
 /// 저장 위치는 앱 private 영역(<c>getSharedPreferences("musebase", MODE_PRIVATE)</c>)이므로
-/// 타 앱에서 접근할 수 없다. 다만 이는 **앱 private 저장일 뿐 디스크 암호화가 아니다** —
-/// 루팅된 기기나 백업 추출로는 평문 노출이 가능하다(Windows판의 DPAPI 암호화와 다르다).
-/// DeepL API 키 같은 민감정보는 이 한계를 감안한다(더 강한 보호가 필요하면
-/// AndroidX Security의 EncryptedSharedPreferences 도입을 고려 — 추가 패키지/복잡도 필요).
+/// 타 앱에서 접근할 수 없다. 다만 앱 private 저장은 암호화가 아니고 **Google 백업에도 실린다.**
+///
+/// 그래서 비밀값(API 키·서버 토큰)은 따로 둔다 — <see cref="KeystoreSecretStore"/>로 암호화해
+/// <c>musebase.secrets</c> 파일에 쓰고, 그 파일은 백업 규칙(<c>Resources/xml</c>)으로 백업에서 뺀다.
+/// Keystore 키는 기기 밖으로 나오지 않으므로 파일이 새어도 풀 수 없다(Windows판의 DPAPI와 같은 성질).
+/// 예전 버전이 평문으로 남긴 값은 처음 실행할 때 옮기고 지운다(<see cref="MigratePlaintextSecrets"/>).
 ///
 /// 직렬화 키(<c>TranslationEngine</c> 등)는 플랫폼 간 정렬을 위해 영어 식별자로 유지한다
 /// (Windows AppSettings와 동일 규칙 — UI 문구만 현지화).
@@ -18,6 +20,12 @@ namespace Musebase.Android.Services;
 public sealed class AndroidSettings
 {
     private const string PrefsName = "musebase";
+
+    // 비밀값 전용 파일 — 이름은 백업 규칙(Resources/xml/*.xml)과 맞춰야 한다.
+    private const string SecretsPrefsName = "musebase.secrets";
+
+    /// <summary>Keystore가 실패했을 때만 쓰는 표식 — 그래도 백업에서 빠지는 파일에만 둔다.</summary>
+    private const string PlainFallbackPrefix = "p:";
     private const string KeyTranslationEngine = "TranslationEngine";
     private const string KeyDeeplApiKey = "DeeplApiKey";
     private const string KeyGoogleApiKey = "GoogleApiKey";
@@ -174,10 +182,47 @@ public sealed class AndroidSettings
     }
 
     private readonly ISharedPreferences _prefs;
+    private readonly ISharedPreferences _secrets;
+    private readonly Musebase.Engine.ISecretStore _secretStore;
+
+    /// <summary>비밀값으로 다루는 키 — 평문 prefs에 있으면 옮긴다.</summary>
+    private static readonly string[] SecretKeys = [KeyDeeplApiKey, KeyGoogleApiKey, KeyLyricsServerToken];
 
     public AndroidSettings(Context context)
+        : this(context, new KeystoreSecretStore())
+    {
+    }
+
+    internal AndroidSettings(Context context, Musebase.Engine.ISecretStore secretStore)
     {
         _prefs = context.GetSharedPreferences(PrefsName, FileCreationMode.Private)!;
+        _secrets = context.GetSharedPreferences(SecretsPrefsName, FileCreationMode.Private)!;
+        _secretStore = secretStore;
+        MigratePlaintextSecrets();
+    }
+
+    /// <summary>
+    /// 0.7.0까지 평문 prefs(백업 대상)에 들어 있던 비밀값을 암호화 파일로 옮기고 평문을 지운다.
+    /// 옮기는 쪽을 먼저 <c>Commit</c>(동기)으로 확정한 뒤에만 지운다 — 중간에 앱이 죽어도 값을 잃지 않는다.
+    /// </summary>
+    private void MigratePlaintextSecrets()
+    {
+        foreach (var key in SecretKeys)
+        {
+            var plain = _prefs.GetString(key, null);
+            if (plain is null) continue;
+
+            if (!_secrets.Contains(key) && !string.IsNullOrWhiteSpace(plain))
+            {
+                var editor = _secrets.Edit()!;
+                editor.PutString(key, Seal(plain.Trim()));
+                if (!editor.Commit()) continue; // 못 썼으면 평문을 남겨 둔다(다음 실행에 다시 시도)
+            }
+
+            var cleanup = _prefs.Edit()!;
+            cleanup.Remove(key);
+            cleanup.Commit();
+        }
     }
 
     /// <summary>
@@ -190,18 +235,18 @@ public sealed class AndroidSettings
         set => Put(KeyTranslationEngine, value);
     }
 
-    /// <summary>DeepL API 키(선택). 앱 private 저장이며 디스크 암호화는 아니다(클래스 주석 참고).</summary>
+    /// <summary>DeepL API 키(선택). Keystore로 암호화하고 백업에서 뺀다(클래스 주석 참고).</summary>
     public string? DeeplApiKey
     {
-        get => NullIfBlank(_prefs.GetString(KeyDeeplApiKey, null));
-        set => Put(KeyDeeplApiKey, value);
+        get => GetSecret(KeyDeeplApiKey);
+        set => PutSecret(KeyDeeplApiKey, value);
     }
 
-    /// <summary>Google Cloud Translation API 키(선택). DeepL 키와 같은 저장 한계를 갖는다.</summary>
+    /// <summary>Google Cloud Translation API 키(선택). DeepL 키와 같이 보호한다.</summary>
     public string? GoogleApiKey
     {
-        get => NullIfBlank(_prefs.GetString(KeyGoogleApiKey, null));
-        set => Put(KeyGoogleApiKey, value);
+        get => GetSecret(KeyGoogleApiKey);
+        set => PutSecret(KeyGoogleApiKey, value);
     }
 
     /// <summary>엔진 id별 API 키 조회(설정 화면이 선택한 엔진의 키를 따라 보여주는 데 쓴다).</summary>
@@ -267,13 +312,13 @@ public sealed class AndroidSettings
     }
 
     /// <summary>
-    /// 가사 서버 공유 토큰. API 키와 같은 저장 한계를 갖는다(앱 private 저장이며 암호화는 아님) —
-    /// 테일넷 내부에서만 쓰는 개인 토큰이라는 전제로 수용한다.
+    /// 가사 서버 공유 토큰. API 키와 같이 Keystore로 암호화하고 백업에서 뺀다 —
+    /// 이 토큰 하나로 서버의 모든 곡을 읽고 쓸 수 있고, 관리자 토큰과 같은 값일 수도 있다.
     /// </summary>
     public string? LyricsServerToken
     {
-        get => NullIfBlank(_prefs.GetString(KeyLyricsServerToken, null));
-        set => Put(KeyLyricsServerToken, value);
+        get => GetSecret(KeyLyricsServerToken);
+        set => PutSecret(KeyLyricsServerToken, value);
     }
 
     /// <summary>
@@ -439,4 +484,34 @@ public sealed class AndroidSettings
     }
 
     private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    // ---- 비밀값 ----
+
+    /// <summary>
+    /// 풀 수 없는 암호문(다른 기기에서 복원됐거나 키가 지워진 경우)은 null이다.
+    /// <b>그렇다고 지우지 않는다</b> — 사람이 새 값을 넣을 때만 바뀐다(Windows판에서 겪은 암호문 소실 버그 참고).
+    /// </summary>
+    private string? GetSecret(string key)
+    {
+        var stored = _secrets.GetString(key, null);
+        if (string.IsNullOrEmpty(stored)) return null;
+        return NullIfBlank(stored.StartsWith(PlainFallbackPrefix, StringComparison.Ordinal)
+            ? stored[PlainFallbackPrefix.Length..]
+            : _secretStore.Unprotect(stored));
+    }
+
+    private void PutSecret(string key, string? value)
+    {
+        var editor = _secrets.Edit()!;
+        if (string.IsNullOrWhiteSpace(value)) editor.Remove(key);
+        else editor.PutString(key, Seal(value.Trim()));
+        editor.Apply();
+    }
+
+    /// <summary>
+    /// 암호화한다. Keystore가 실패하면(극히 드묾) 값을 잃지 않도록 표식을 붙여 평문으로 둔다 —
+    /// 그래도 백업에서 빠지는 파일이라 기기 밖으로는 나가지 않는다.
+    /// </summary>
+    private string Seal(string plain) =>
+        _secretStore.Protect(plain) ?? PlainFallbackPrefix + plain;
 }
