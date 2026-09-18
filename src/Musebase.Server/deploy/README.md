@@ -146,7 +146,7 @@ ExecStart=/usr/local/bin/musebase-backup)와 `musebase-backup.timer`(OnCalendar=
 `systemctl enable --now musebase-backup.timer`. `install.sh`가 이 둘을 만들어 준다.
 
 오프사이트 사본은 `/etc/musebase/server.env`에 `MUSEBASE_BACKUP_REMOTE=` 한 줄이면 매일 백업 뒤 자동으로
-넘어간다 — `user@host:/path`(scp, 테일넷 이름 가능)나 `gs://버킷/경로`(gcloud), 여러 곳이면 공백으로 구분.
+넘어간다 — `user@host:/path`(scp, 테일넷 이름 가능)나 `gs://버킷/경로`(서비스 계정 키, gpg 암호화), 여러 곳이면 공백으로 구분.
 원격 복사가 하나라도 실패하면 유닛이 **failed**로 남는다(`systemctl status musebase-backup`).
 
 > ⚠ 2026-09-18 이전에 `install.sh`로 만든 유닛에는 `EnvironmentFile=` 줄이 없어 **이 값이 무시됐다.**
