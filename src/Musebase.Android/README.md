@@ -216,6 +216,12 @@ dotnet build src/Musebase.Android -t:InstallAndroidDependencies -f net8.0-androi
 
 APK 산출 경로(디버그 서명 포함): `src/Musebase.Android/bin/Debug/net8.0-android/com.countnine.musebase-Signed.apk`
 
+### ⚠ `net8.0-android`는 지원이 끝났다 (2026-05)
+
+앱은 정상 동작하지만 이 토대에는 보안 업데이트가 더 이상 오지 않는다. CI는 러너 기본 SDK(10)가
+이 워크로드를 거부해(NETSDK1202) SDK 8로 고정해 두었다 — 새 .NET으로 올리면 그 고정을 걷어낸다.
+배경·할 일·규모는 `PROGRESS.md` 백로그 3번.
+
 ### 릴리스 서명 (0.8.0부터)
 
 릴리스 APK는 **CI가 고정 릴리스 키로 서명**한다(`.github/workflows/ci.yml`의 android 작업 — 시크릿
