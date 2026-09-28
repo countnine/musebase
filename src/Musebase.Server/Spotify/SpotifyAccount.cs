@@ -75,26 +75,52 @@ public sealed class SpotifyAccount
         + $"&scope={Uri.EscapeDataString(Scopes)}"
         + $"&state={Uri.EscapeDataString(state)}";
 
+    /// <summary>표시 이름을 끝내 못 읽었을 때 대신 적어 두는 값 — 연결 자체는 살아 있다.</summary>
+    public const string UnknownUser = "(이름 확인 못함)";
+
     /// <summary>
     /// 승인 코드를 갱신 토큰과 아이디로 바꾼다. 실패하면 null.
     /// 갱신 토큰은 <b>이 한 번만 받을 수 있다</b> — 저장에 실패하면 사람이 다시 승인해야 한다.
+    ///
+    /// <b>표시 이름을 못 읽었다고 연결을 버리지 않는다.</b> 예전에는 <c>GET /me</c>가 실패하면
+    /// 통째로 null을 돌려줘, 토큰 교환이 멀쩡히 성공했는데도 그 <b>1회용 갱신 토큰을 버리고</b>
+    /// "토큰을 받지 못했습니다"로 끝났다 — 다시 눌러도 같은 자리에서 또 실패하므로 영영 연결되지
+    /// 않는다. 이름은 화면 표시용일 뿐이고 라이브러리 읽기·쓰기에는 필요 없다.
     /// </summary>
+    /// <param name="onFailure">왜 실패했는지(상태 코드·본문 앞부분). 조용한 강등은 원인을 감춘다.</param>
     public async Task<(string Refresh, string User)?> ExchangeCodeAsync(
-        string code, string callback, CancellationToken ct = default)
+        string code, string callback, Action<string>? onFailure = null, CancellationToken ct = default)
     {
-        if (!CanConnect || string.IsNullOrWhiteSpace(code)) return null;
+        if (!CanConnect || string.IsNullOrWhiteSpace(code))
+        {
+            onFailure?.Invoke("클라이언트 ID·시크릿이 없거나 승인 코드가 비었습니다.");
+            return null;
+        }
+
+        // 먼저 온 사유가 더 구체적이다(HTTP 400 · invalid_grant …) — 뒤에서 덮어쓰지 않는다.
+        var reported = false;
+        void Report(string w) { reported = true; onFailure?.Invoke(w); }
 
         var token = await PostTokenAsync(new Dictionary<string, string>
         {
             ["grant_type"] = "authorization_code",
             ["code"] = code,
             ["redirect_uri"] = callback,
-        }, ct).ConfigureAwait(false);
+        }, ct, Report).ConfigureAwait(false);
 
-        if (token is not { Refresh: { Length: > 0 } refresh, Access: { Length: > 0 } access }) return null;
+        if (token is not { Refresh: { Length: > 0 } refresh, Access: { Length: > 0 } access })
+        {
+            if (!reported) Report("토큰 응답에 갱신 토큰이 없습니다.");
+            return null;
+        }
 
         var user = await MeAsync(access, ct).ConfigureAwait(false);
-        return user is null ? null : (refresh, user);
+        if (user is null)
+            Report(
+                "토큰은 받았지만 GET /me로 표시 이름을 읽지 못했습니다(Development Mode 사용자 목록·"
+                + "Premium 구독을 확인하세요). 연결은 그대로 저장합니다.");
+
+        return (refresh, user ?? UnknownUser);
     }
 
     /// <summary>
@@ -307,7 +333,7 @@ public sealed class SpotifyAccount
     }
 
     private async Task<(string? Access, string? Refresh, int ExpiresIn)?> PostTokenAsync(
-        Dictionary<string, string> fields, CancellationToken ct)
+        Dictionary<string, string> fields, CancellationToken ct, Action<string>? onFailure = null)
     {
         try
         {
@@ -323,7 +349,14 @@ public sealed class SpotifyAccount
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+            {
+                // 토큰 엔드포인트는 실패 이유를 본문에 담아 준다(`invalid_grant`·`invalid_client` 등).
+                // 그것을 버리면 "토큰을 받지 못했습니다"만 남아 콜백 주소 문제인지 시크릿 문제인지 알 수 없다.
+                var why = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+                onFailure?.Invoke($"HTTP {(int)response.StatusCode} · {Shorten(why)}");
+                return null;
+            }
 
             var body = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
             using var document = JsonDocument.Parse(body);
@@ -335,10 +368,21 @@ public sealed class SpotifyAccount
                 root.TryGetProperty("refresh_token", out var r) ? r.GetString() : null,
                 root.TryGetProperty("expires_in", out var e) && e.TryGetInt32(out var seconds) ? seconds : 3600);
         }
-        catch (Exception)
+        catch (Exception e)
         {
+            onFailure?.Invoke($"토큰 요청이 실패했습니다(네트워크·타임아웃) — {e.Message}");
             return null; // 조용한 강등
         }
+    }
+
+    /// <summary>오류 본문을 로그·화면에 넣을 만큼만 자른다(토큰이 섞여 들어오지 않게 짧게).</summary>
+    private static string Shorten(string? text)
+    {
+        // 줄바꿈 문자는 (char)13/10으로 적는다 — 이 파일을 도구로 편집할 때 이스케이프가 깨진 적이 있다.
+        var one = string.Join(' ', (text ?? "").Split(
+            new[] { (char)13, (char)10 },
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return one.Length <= 200 ? one : one[..200] + "…";
     }
 
     private async Task<string?> MeAsync(string access, CancellationToken ct)

@@ -198,7 +198,9 @@ public static class AdminEndpoints
                 SetCookie(res);
                 return SeeOther(Routes.Base);
             }
-            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            // 로그인 화면이어도 notice는 보여 준다 — 외부 승인에서 돌아오는 길에 세션이 실리지
+            // 않으면 여기로 떨어지는데, 예전에는 그때 "왜 실패했는지"가 통째로 버려졌다.
+            if (!LoggedIn(req)) return Html(AdminPages.Login(notice, options.HasPassword));
 
             var now = DateTimeOffset.UtcNow;
             return Html(AdminPages.Dashboard(
@@ -399,6 +401,11 @@ public static class AdminEndpoints
 
             if (string.IsNullOrEmpty(nonce))
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("연결 요청이 만료됐습니다 — 다시 눌러 주세요.")}");
+
+            // Spotify 콜백과 같은 이유로 세션을 다시 구워 준다 — 논스가 있다는 것이 곧
+            // 로그인한 관리자가 시작한 흐름이라는 증거다(관리자 쿠키는 Strict라 여기 실리지 않는다).
+            SetCookie(res);
+
             if (string.IsNullOrWhiteSpace(token))
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Last.fm이 승인을 거절했습니다.")}");
 
@@ -480,17 +487,41 @@ public static class AdminEndpoints
             res.Cookies.Delete(SpotifyStateCookie, new CookieOptions { Path = Routes.Base + "/spotify" });
 
             if (string.IsNullOrEmpty(nonce) || !string.Equals(nonce, state, StringComparison.Ordinal))
+            {
+                app.Logger.LogWarning("Spotify 연결 실패: state 논스가 없거나 맞지 않습니다(쿠키 {Has})",
+                    nonce is null ? "없음" : "있음");
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("연결 요청이 만료됐거나 맞지 않습니다 — 다시 눌러 주세요.")}");
-            if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify가 승인을 거절했습니다.")}");
+            }
 
-            var session = await spotify.ExchangeCodeAsync(code!, SpotifyCallback(req));
+            // 논스가 맞았다 = **로그인한 관리자가 시작한 흐름**이다(논스는 로그인 뒤에만 발급된다).
+            // 여기서 세션 쿠키를 다시 구워 준다 — 관리자 쿠키는 SameSite=Strict라 Spotify에서
+            // 돌아오는 이동에 실리지 않아, 이대로 두면 연결에 성공해도 로그인 화면이 뜬다.
+            SetCookie(res);
+
+            if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
+            {
+                app.Logger.LogWarning("Spotify 연결 실패: 승인 거절 {Error}", error ?? "(코드 없음)");
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    $"Spotify가 승인을 거절했습니다({error ?? "코드 없음"}).")}");
+            }
+
+            string? why = null;
+            var session = await spotify.ExchangeCodeAsync(code!, SpotifyCallback(req), w => why = w);
             if (session is null)
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify 토큰을 받지 못했습니다 — 콜백 주소 등록과 Premium 구독을 확인하세요.")}");
+            {
+                app.Logger.LogWarning("Spotify 연결 실패: {Why}", why ?? "사유 없음");
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    $"Spotify 토큰을 받지 못했습니다 — {why ?? "사유 없음"}")}");
+            }
 
             store.SetSetting(SpotifyAccount.RefreshSetting, session.Value.Refresh);
             store.SetSetting(SpotifyAccount.UserSetting, session.Value.User);
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString($"Spotify에 연결했습니다: {session.Value.User}")}");
+            app.Logger.LogInformation("Spotify 연결: {User}", session.Value.User);
+
+            // 이름만 못 읽은 경우도 연결은 성공이다 — 그 사실을 숨기지 않는다.
+            var suffix = why is null ? "" : $" ⚠ {why}";
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                $"Spotify에 연결했습니다: {session.Value.User}{suffix}")}");
         });
 
         // Last.fm 동기화와 같은 규칙 — 사람이 누를 때만, 실패하면 아무것도 바꾸지 않는다.

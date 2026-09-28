@@ -153,6 +153,60 @@ public class SpotifyAccountTests
         Assert.Equal(2, calls.Count(c => c.Url.Contains("accounts.spotify.com")));
     }
 
+    // ---- 계정 연결(코드 교환) ----
+
+    [Fact]
+    public async Task 표시_이름을_못_읽어도_연결을_버리지_않는다()
+    {
+        // 갱신 토큰은 이 한 번만 받을 수 있다 — /me가 403이라고 통째로 버리면(Development Mode
+        // 사용자 목록·Premium 문제) 다시 눌러도 같은 자리에서 또 실패해 영영 연결되지 않는다.
+        var account = Routed(new List<string>(), url =>
+            url.Contains("/me") ? new HttpResponseMessage(HttpStatusCode.Forbidden)
+                : Json("""{"access_token":"at","refresh_token":"rt","expires_in":3600}"""));
+
+        string? why = null;
+        var session = await account.ExchangeCodeAsync("code", "https://box/cb", w => why = w);
+
+        Assert.NotNull(session);
+        Assert.Equal("rt", session!.Value.Refresh);
+        Assert.Equal(SpotifyAccount.UnknownUser, session.Value.User);
+        Assert.Contains("/me", why);      // 숨기지는 않는다
+    }
+
+    [Fact]
+    public async Task 토큰_교환이_거절되면_사유를_그대로_알린다()
+    {
+        var account = Routed(new List<string>(), _ =>
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(
+                    """{"error":"invalid_grant","error_description":"Invalid redirect URI"}""",
+                    Encoding.UTF8, "application/json"),
+            });
+
+        string? why = null;
+        var session = await account.ExchangeCodeAsync("code", "https://box/cb", w => why = w);
+
+        Assert.Null(session);
+        // "토큰을 받지 못했습니다"만으로는 콜백 주소 문제인지 시크릿 문제인지 알 수 없다.
+        Assert.Contains("HTTP 400", why);
+        Assert.Contains("invalid_grant", why);
+    }
+
+    [Fact]
+    public async Task 이름을_읽으면_그_이름으로_연결된다()
+    {
+        var account = Routed(new List<string>(), url =>
+            url.Contains("/me") ? Json("""{"display_name":"제이","id":"jay"}""")
+                : Json("""{"access_token":"at","refresh_token":"rt","expires_in":3600}"""));
+
+        string? why = null;
+        var session = await account.ExchangeCodeAsync("code", "https://box/cb", w => why = w);
+
+        Assert.Equal("제이", session!.Value.User);
+        Assert.Null(why);
+    }
+
     // ---- 라이브러리 전량 조회 ----
 
     [Fact]
