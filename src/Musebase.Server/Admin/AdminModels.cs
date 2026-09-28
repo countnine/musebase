@@ -70,11 +70,11 @@ public sealed record SpotifyState(bool Connected, bool Known, bool Saved)
 
 /// <summary>
 /// 검색 화면 칩에 붙는 건수. <see cref="All"/>을 뺀 나머지는 서로 겹치지 않으므로 합이 전체를
-/// 넘지 않는다(<see cref="Loved"/>만 다른 축이라 예외다).
+/// 넘지 않는다(<see cref="Loved"/>·<see cref="Spotify"/>만 다른 축이라 예외다).
 /// </summary>
 /// <param name="Pending">한 번도 의미를 만들어 보지 않은 곡 — 일괄 생성이 실제로 처리할 대상.</param>
 public sealed record SongCounts(
-    int All, int Ok, int Pending, int Insufficient, int NoSource, int Failed, int Loved)
+    int All, int Ok, int Pending, int Insufficient, int NoSource, int Failed, int Loved, int Spotify = 0)
 {
     public int For(string? filter) => filter switch
     {
@@ -86,6 +86,7 @@ public sealed record SongCounts(
         LyricsStore.MeaningFilterNoSource => NoSource,
         LyricsStore.MeaningFilterFailed => Failed,
         LyricsStore.FilterLoved => Loved,
+        LyricsStore.FilterSpotify => Spotify,
         _ => All,
     };
 }

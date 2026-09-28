@@ -53,6 +53,46 @@ public enum BulkStep
     Stop,
 }
 
+/// <summary>
+/// 일괄 작업이 돌 범위. 검색 화면의 <b>칩과는 다른 축</b>이다 — 칩은 서로 겹치지 않는 단일 선택이라
+/// "Spotify 좋아요 ∩ 아직 번역 없음" 같은 조합을 담을 수 없다(칩마다 건수를 박아 두어 합이 전체를
+/// 넘으면 안 되기 때문). 그래서 범위(여기)와 "이미 있으면 건너뛰기"를 따로 둔다.
+/// </summary>
+public static class BulkScope
+{
+    /// <summary>보관 중인 곡 전부(최근 갱신순).</summary>
+    public const string All = "all";
+
+    public const string LovedLastFm = "loved-lastfm";
+    public const string LovedSpotify = "loved-spotify";
+
+    /// <summary>어느 한쪽에서라도 좋아요한 곡.</summary>
+    public const string LovedAny = "loved-any";
+
+    /// <summary>서버에 없어 기기가 직접 찾은 곡(조회 미스) 중 지금은 서버에 있는 것 — 자주 듣는 곡.</summary>
+    public const string Misses = "misses";
+
+    /// <summary><see cref="All"/>과 같은 순서의 앞쪽 — 최근 올라온 곡부터.</summary>
+    public const string Recent = "recent";
+
+    public static readonly IReadOnlyList<string> Known =
+        [All, LovedLastFm, LovedSpotify, LovedAny, Misses, Recent];
+
+    /// <summary>주소로 들어온 값을 그대로 믿지 않는다(목록 뷰의 화이트리스트 관례와 같다).</summary>
+    public static bool IsKnown(string? scope) =>
+        scope is not null && Known.Contains(scope, StringComparer.Ordinal);
+
+    public static string Label(string scope) => scope switch
+    {
+        LovedLastFm => "Last.fm 좋아요",
+        LovedSpotify => "Spotify 좋아요",
+        LovedAny => "좋아요(Last.fm·Spotify)",
+        Misses => "조회 미스 상위",
+        Recent => "최근 올라온 곡",
+        _ => "전체",
+    };
+}
+
 /// <summary>일괄 작업의 대상 한 곡.</summary>
 public sealed record BulkTarget(string Key, string Title, string Artist)
 {

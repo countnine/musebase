@@ -185,6 +185,16 @@ public sealed class LyricsStore : IDisposable
             AddColumnIfMissing("song_links", "spotify_at", "TEXT");
             Execute("PRAGMA user_version = 9;");
         }
+
+        if (version < 10)
+        {
+            // Spotify 라이브러리("좋아요한 곡") 동기화 결과. <c>spotify_uri</c>와는 다른 축이다 —
+            // 저쪽은 "이 곡의 트랙 URI를 아는가", 이쪽은 "그 계정 라이브러리에 담겨 있는가"다.
+            // Last.fm의 loved와 같은 규칙으로 쓴다(동기화가 먼저 전부 0으로 내린다).
+            AddColumnIfMissing("song_links", "spotify_saved", "INTEGER");
+            AddColumnIfMissing("song_links", "spotify_saved_at", "TEXT");
+            Execute("PRAGMA user_version = 10;");
+        }
     }
 
     // ---- 곡 바깥 링크(커버·Last.fm) ----
@@ -1195,6 +1205,13 @@ public sealed class LyricsStore : IDisposable
     /// <summary>Last.fm 좋아요한 곡만. 의미 상태와 다른 축이라 같은 자리에서 배타적으로 고른다.</summary>
     public const string FilterLoved = "loved";
 
+    /// <summary>Spotify 라이브러리에 담긴 곡만. <see cref="FilterLoved"/>와 같은 축(다른 서비스).</summary>
+    public const string FilterSpotify = "spotify";
+
+    /// <summary><c>song_links</c>를 봐야 하는 필터인가 — 그럴 때만 조인한다.</summary>
+    private static bool NeedsLinks(string? filter) =>
+        filter is FilterLoved or FilterSpotify;
+
     private static string MeaningWhere(string? filter) => filter switch
     {
         MeaningFilterOk => " m.status = 'ok' ",
@@ -1204,6 +1221,7 @@ public sealed class LyricsStore : IDisposable
         MeaningFilterNoSource => " m.status = 'no-source' ",
         MeaningFilterFailed => " m.status = 'failed' ",
         FilterLoved => " s.loved = 1 ",
+        FilterSpotify => " s.spotify_saved = 1 ",
         _ => "",
     };
 
@@ -1227,16 +1245,17 @@ public sealed class LyricsStore : IDisposable
                 + "SUM(CASE WHEN m.status = 'insufficient' THEN 1 ELSE 0 END), "
                 + "SUM(CASE WHEN m.status = 'no-source' THEN 1 ELSE 0 END), "
                 + "SUM(CASE WHEN m.status = 'failed' THEN 1 ELSE 0 END), "
-                + "SUM(CASE WHEN s.loved = 1 THEN 1 ELSE 0 END) "
+                + "SUM(CASE WHEN s.loved = 1 THEN 1 ELSE 0 END), "
+                + "SUM(CASE WHEN s.spotify_saved = 1 THEN 1 ELSE 0 END) "
                 + "FROM lyrics l LEFT JOIN meanings m ON m.key = l.key "
                 + "LEFT JOIN song_links s ON s.key = l.key" + where + ";";
             if (like is not null) cmd.Parameters.AddWithValue("$like", like);
 
             using var reader = cmd.ExecuteReader();
-            if (!reader.Read()) return new SongCounts(0, 0, 0, 0, 0, 0, 0);
+            if (!reader.Read()) return new SongCounts(0, 0, 0, 0, 0, 0, 0, 0);
 
             int At(int i) => reader.IsDBNull(i) ? 0 : reader.GetInt32(i);
-            return new SongCounts(At(0), At(1), At(2), At(3), At(4), At(5), At(6));
+            return new SongCounts(At(0), At(1), At(2), At(3), At(4), At(5), At(6), At(7));
         }
     }
 
@@ -1283,6 +1302,57 @@ public sealed class LyricsStore : IDisposable
     }
 
     /// <summary>
+    /// Spotify 라이브러리 목록을 통째로 받아 <c>song_links.spotify_saved</c>를 맞춘다.
+    /// <see cref="SyncLoved"/>와 같은 규칙 — 먼저 전부 0으로 내린 뒤 맞은 것만 올린다.
+    ///
+    /// <b>덤으로 트랙 URI도 채운다.</b> 곡마다 <c>/search</c>로 찾아야 했던 값을 여기서는
+    /// Spotify가 직접 주므로, 한 번 동기화해 두면 그만큼 검색을 부르지 않는다.
+    ///
+    /// 우리 카탈로그에 없는 곡(아직 가사가 없는 곡)은 그냥 건너뛴다.
+    /// <c>MeaningMatch.IsSameSong</c>은 쓰지 않는다 — 그것은 검색 결과의 거짓 상위를 거르는
+    /// 판정이고, 여기서는 Spotify가 준 정확한 메타데이터를 <see cref="Get"/>의 느슨한 키로 맞춘다.
+    /// </summary>
+    public (int Matched, int Total) SyncSpotifySaved(IReadOnlyList<SpotifySavedTrack> saved)
+    {
+        var at = UtcNow();
+        lock (_lock)
+        {
+            using var tx = _conn.BeginTransaction();
+
+            using (var clear = _conn.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "UPDATE song_links SET spotify_saved = 0, spotify_saved_at = $at;";
+                clear.Parameters.AddWithValue("$at", at);
+                clear.ExecuteNonQuery();
+            }
+
+            var matched = 0;
+            foreach (var track in saved)
+            {
+                var entry = Get(track.Title, track.Artist);
+                if (entry?.Key is not { Length: > 0 } key) continue;
+
+                using var set = _conn.CreateCommand();
+                set.Transaction = tx;
+                set.CommandText =
+                    "INSERT INTO song_links (key, spotify_saved, spotify_saved_at, spotify_uri, spotify_at, updated_at) "
+                    + "VALUES ($k, 1, $at, $uri, $at, $at) "
+                    + "ON CONFLICT(key) DO UPDATE SET spotify_saved = 1, spotify_saved_at = $at, "
+                    + "spotify_uri = $uri, spotify_at = $at, updated_at = $at;";
+                set.Parameters.AddWithValue("$k", key);
+                set.Parameters.AddWithValue("$at", at);
+                set.Parameters.AddWithValue("$uri", track.Uri);
+                set.ExecuteNonQuery();
+                matched++;
+            }
+
+            tx.Commit();
+            return (matched, saved.Count);
+        }
+    }
+
+    /// <summary>
     /// 제목·아티스트 부분 일치 검색(대소문자 무시). 질의가 비면 최근 갱신순 목록.
     /// 곡 수가 수백 규모라 LIKE 풀스캔으로 충분하다(`%…%`는 어차피 인덱스를 못 탄다).
     /// </summary>
@@ -1297,8 +1367,8 @@ public sealed class LyricsStore : IDisposable
 
         var where = conditions.Count == 0 ? "" : " WHERE " + string.Join(" AND ", conditions);
 
-        // 좋아요 필터만 song_links를 본다 — 늘 조인하면 목록 쿼리가 이유 없이 무거워진다.
-        var join = meaning == FilterLoved ? " LEFT JOIN song_links s ON s.key = l.key" : "";
+        // 좋아요·Spotify 필터만 song_links를 본다 — 늘 조인하면 목록 쿼리가 이유 없이 무거워진다.
+        var join = NeedsLinks(meaning) ? " LEFT JOIN song_links s ON s.key = l.key" : "";
 
         lock (_lock)
         {
@@ -1322,6 +1392,104 @@ public sealed class LyricsStore : IDisposable
             cmd.Parameters.AddWithValue("$limit", limit);
             return ReadSongs(cmd);
         }
+    }
+
+    // ---- 일괄 작업 대상 ----
+
+    /// <summary>
+    /// 일괄 작업(의미 생성·번역)이 돌 곡 목록.
+    ///
+    /// <paramref name="withoutLang"/>은 <b>대상 언어 태그가 없는 곡</b>만 남긴다.
+    /// <c>langs</c>는 쉼표로 이은 문자열이라 <c>LIKE '%ko%'</c>는 <c>kok</c>에도 걸린다 —
+    /// 양끝에 쉼표를 붙여 경계를 강제한다. <see cref="WithoutTranslation"/>(<c>langs = ''</c>)를
+    /// 쓰면 안 되는 이유도 같다: 언어 미상 제공자 번역(<c>tr</c>)만 있는 곡을 "번역 있음"으로 센다.
+    ///
+    /// <see cref="BulkScope.Misses"/>는 SQL이 아니라 <see cref="TopMisses"/>를 그대로 쓴다 —
+    /// 그쪽에 이미 "미스로 기록됐지만 지금은 서버에 있는 곡"을 찾아 주는 로직이 있어서,
+    /// 같은 집계를 SQL로 한 벌 더 만들면 둘이 갈린다.
+    /// </summary>
+    /// <param name="limit">0이면 상한 없음.</param>
+    public IReadOnlyList<BulkTarget> BulkTargets(
+        string scope, string? withoutLang, bool withoutMeaning, int limit, string? missesSinceUtc = null)
+    {
+        if (scope != BulkScope.Misses) return TargetRows(scope, withoutLang, withoutMeaning, limit);
+
+        lock (_lock)
+        {
+            // 미스 순서를 유지한 채 "지금 대상인 곡"만 남긴다.
+            var eligible = TargetRows(BulkScope.All, withoutLang, withoutMeaning, limit: 0)
+                .ToDictionary(t => t.Key, StringComparer.Ordinal);
+
+            var since = missesSinceUtc ?? DateTimeOffset.UtcNow.AddDays(-30).ToString(TimeFormat);
+            var ordered = TopMisses(since, limit <= 0 ? 500 : Math.Max(limit * 3, 50))
+                .Where(m => m.Key is { Length: > 0 } && eligible.ContainsKey(m.Key))
+                .Select(m => eligible[m.Key!]);
+
+            return (limit <= 0 ? ordered : ordered.Take(limit)).ToList();
+        }
+    }
+
+    /// <summary>같은 조건의 대상 곡 수(상한 없이). 확인 화면이 "몇 곡을 돌리는지" 보여 줄 때 쓴다.</summary>
+    public int BulkCount(string scope, string? withoutLang, bool withoutMeaning, string? missesSinceUtc = null)
+    {
+        if (scope == BulkScope.Misses)
+            return BulkTargets(scope, withoutLang, withoutMeaning, limit: 0, missesSinceUtc).Count;
+
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM lyrics l"
+                + Joins(scope, withoutMeaning) + Where(scope, withoutLang, withoutMeaning, cmd) + ";";
+            return Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+        }
+    }
+
+    private IReadOnlyList<BulkTarget> TargetRows(
+        string scope, string? withoutLang, bool withoutMeaning, int limit)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT l.key, l.title, l.artist FROM lyrics l"
+                + Joins(scope, withoutMeaning) + Where(scope, withoutLang, withoutMeaning, cmd)
+                + " ORDER BY l.updated_at DESC"
+                + (limit > 0 ? " LIMIT $limit" : "") + ";";
+            if (limit > 0) cmd.Parameters.AddWithValue("$limit", limit);
+
+            using var reader = cmd.ExecuteReader();
+            var rows = new List<BulkTarget>();
+            while (reader.Read())
+                rows.Add(new BulkTarget(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            return rows;
+        }
+    }
+
+    private static string Joins(string scope, bool withoutMeaning) =>
+        (withoutMeaning ? " LEFT JOIN meanings m ON m.key = l.key" : "")
+        + (scope is BulkScope.LovedLastFm or BulkScope.LovedSpotify or BulkScope.LovedAny
+            ? " LEFT JOIN song_links s ON s.key = l.key" : "");
+
+    private static string Where(string scope, string? withoutLang, bool withoutMeaning, SqliteCommand cmd)
+    {
+        var conditions = new List<string>();
+
+        switch (scope)
+        {
+            case BulkScope.LovedLastFm: conditions.Add(" s.loved = 1 "); break;
+            case BulkScope.LovedSpotify: conditions.Add(" s.spotify_saved = 1 "); break;
+            case BulkScope.LovedAny: conditions.Add(" (s.loved = 1 OR s.spotify_saved = 1) "); break;
+        }
+
+        if (withoutMeaning) conditions.Add(" m.key IS NULL ");
+
+        if (!string.IsNullOrWhiteSpace(withoutLang))
+        {
+            // 양끝 쉼표로 경계를 강제한다 — "ko"가 "kok"에 걸리면 안 된다.
+            conditions.Add(" (',' || l.langs || ',') NOT LIKE ('%,' || $lang || ',%') ");
+            cmd.Parameters.AddWithValue("$lang", withoutLang!.Trim().ToLowerInvariant());
+        }
+
+        return conditions.Count == 0 ? "" : " WHERE " + string.Join(" AND ", conditions);
     }
 
     /// <summary>번역이 하나도 없는 곡 — 일괄 사전번역 대상 후보.</summary>

@@ -153,6 +153,82 @@ public class SpotifyAccountTests
         Assert.Equal(2, calls.Count(c => c.Url.Contains("accounts.spotify.com")));
     }
 
+    // ---- 라이브러리 전량 조회 ----
+
+    [Fact]
+    public async Task 라이브러리를_쪽으로_나눠_끝까지_받는다()
+    {
+        var urls = new List<string>();
+        var account = Routed(urls, url =>
+            url.Contains("offset=0") ? Json(Page(50)) :
+            url.Contains("offset=50") ? Json(Page(7)) :
+            Json("""{"access_token":"at","expires_in":3600}"""));
+
+        var saved = await account.GetSavedTracksAsync("rt");
+
+        Assert.NotNull(saved);
+        Assert.Equal(57, saved!.Count);
+        // 마지막 쪽이 요청한 수보다 적게 왔으므로 세 번째 쪽은 부르지 않는다.
+        Assert.DoesNotContain(urls, u => u.Contains("offset=100"));
+        Assert.Equal("곡 0", saved[0].Title);
+        Assert.Equal("spotify:track:0", saved[0].Uri);
+        Assert.Equal("가수 A, 가수 B", saved[0].Artist);
+    }
+
+    [Fact]
+    public async Task 도중에_실패하면_통째로_버리고_이유를_알린다()
+    {
+        // 부분만 저장하면 못 받은 곡이 "좋아요 해제"로 보인다(동기화가 먼저 전부 0으로 내린다).
+        var account = Routed(new List<string>(), url =>
+            url.Contains("offset=0") ? Json(Page(50)) :
+            url.Contains("offset=50") ? new HttpResponseMessage(HttpStatusCode.Forbidden) :
+            Json("""{"access_token":"at","expires_in":3600}"""));
+
+        string? why = null;
+        var saved = await account.GetSavedTracksAsync("rt", onFailure: w => why = w);
+
+        Assert.Null(saved);
+        Assert.Equal("HTTP 403", why);   // 조용히 작은 limit으로 강등하지 않는다
+    }
+
+    [Fact]
+    public async Task 라이브러리가_비어_있으면_빈_목록이다()
+    {
+        var account = Routed(new List<string>(), url =>
+            url.Contains("/me/tracks") ? Json("""{"items":[],"total":0}""")
+                                       : Json("""{"access_token":"at","expires_in":3600}"""));
+
+        var saved = await account.GetSavedTracksAsync("rt");
+
+        Assert.NotNull(saved);
+        Assert.Empty(saved!);            // "없음"과 "못 받음"은 다르다
+    }
+
+    /// <summary>items가 <paramref name="count"/>개인 <c>/me/tracks</c> 응답.</summary>
+    private static string Page(int count)
+    {
+        var items = Enumerable.Range(0, count).Select(i =>
+            "{\"track\":{\"name\":\"곡 " + i + "\",\"uri\":\"spotify:track:" + i + "\","
+            + "\"artists\":[{\"name\":\"가수 A\"},{\"name\":\"가수 B\"}]}}");
+        return "{\"items\":[" + string.Join(",", items) + "],\"total\":" + count + "}";
+    }
+
+    private static SpotifyAccount Routed(List<string> urls, Func<string, HttpResponseMessage> respond) =>
+        new("id", "secret", new HttpClient(new RouteHandler(urls, respond)));
+
+    /// <summary>URL마다 다른 응답을 주는 스텁(페이징을 보려면 필요하다).</summary>
+    private sealed class RouteHandler(List<string> urls, Func<string, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            urls.Add(url);
+            return Task.FromResult(respond(url));
+        }
+    }
+
     // ---- 도구 ----
 
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)

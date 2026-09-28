@@ -488,6 +488,39 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString($"Spotify에 연결했습니다: {session.Value.User}")}");
         });
 
+        // Last.fm 동기화와 같은 규칙 — 사람이 누를 때만, 실패하면 아무것도 바꾸지 않는다.
+        app.MapPost(Routes.Base + "/spotify/sync", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var refresh = store.GetSetting(SpotifyAccount.RefreshSetting);
+            if (string.IsNullOrWhiteSpace(refresh))
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify 계정이 연결돼 있지 않습니다.")}");
+
+            // 실패 이유(상태 코드)는 반드시 남긴다 — /me/tracks의 limit=50은 아직 실측 전이고,
+            // 2026-02에 /search의 상한이 50→10으로 내려간 전례가 있다.
+            string? failure = null;
+            var saved = await spotify.GetSavedTracksAsync(refresh!, onFailure: why => failure = why);
+
+            if (saved is null)
+            {
+                app.Logger.LogWarning("Spotify 라이브러리 동기화 실패: {Why}", failure ?? "사유 없음");
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    $"Spotify 좋아요 목록을 받지 못했습니다({failure ?? "사유 없음"}) — 아무것도 바꾸지 않았습니다.")}");
+            }
+
+            var (matched, total) = store.SyncSpotifySaved(saved);
+            app.Logger.LogInformation("Spotify 라이브러리 동기화: {Total}곡 중 {Matched}곡 매칭", total, matched);
+
+            var notice = $"Spotify 좋아요 {total}곡 중 {matched}곡을 서버 곡과 맞췄습니다"
+                + (matched < total ? " (나머지는 아직 서버에 없는 곡입니다)." : ".")
+                + (failure is null ? "" : $" ⚠ {failure}");
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+        });
+
         app.MapPost(Routes.Base + "/spotify/disconnect", async (HttpRequest req) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));

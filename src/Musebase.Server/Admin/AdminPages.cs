@@ -328,6 +328,7 @@ public static class AdminPages
             (LyricsStore.MeaningFilterNoSource, "자료 없음"),
             (LyricsStore.MeaningFilterFailed, "생성 실패"),
             (LyricsStore.FilterLoved, "♥ 즐겨찾기"),
+            (LyricsStore.FilterSpotify, "Spotify 좋아요"),
         ];
 
         var chips = all
@@ -587,11 +588,19 @@ public static class AdminPages
                 """;
 
         return $"""
-            <form method="post" action="{Routes.Base}/spotify/disconnect" class="inline" style="margin:0">
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <button type="submit">Spotify 연결 해제</button>
-              <span class="meta">연결됨: <b>{Esc(link.User)}</b></span>
-            </form>
+            <div class="actions">
+              <form method="post" action="{Routes.Base}/spotify/sync" class="inline" style="margin:0" data-busy>
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">Spotify 좋아요 동기화</button>
+              </form>
+              <form method="post" action="{Routes.Base}/spotify/disconnect" class="inline" style="margin:0">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">Spotify 연결 해제</button>
+              </form>
+            </div>
+            <p class="meta">연결됨: <b>{Esc(link.User)}</b> ·
+            <b>동기화</b>는 라이브러리를 통째로 받아 곡 목록의 Spotify 칩에 반영하고
+            트랙 URI도 함께 채웁니다(저쪽에서 뺀 곡도 함께 내립니다).</p>
             {register}
             """;
     }
