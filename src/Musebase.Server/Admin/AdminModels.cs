@@ -69,6 +69,37 @@ public sealed record SpotifyState(bool Connected, bool Known, bool Saved)
 }
 
 /// <summary>
+/// 일괄 작업 확인 화면이 보여 줄 값 — <b>실행 전에</b> 무엇을 얼마나 쓰는지 사람이 보고 정한다.
+/// </summary>
+/// <param name="Targets">이 범위의 대상 곡 수(상한 적용 전).</param>
+/// <param name="Limit">이번에 돌릴 곡 수.</param>
+/// <param name="Units">추정 사용량(의미는 곡 수, 번역은 캐시 적중분을 뺀 문자 수).</param>
+/// <param name="Budget">상한 입력칸의 기본값.</param>
+/// <param name="Cost">예상 비용 문구. 환산할 수 없으면 null(무료 엔진·토큰 과금).</param>
+/// <param name="Warning">엔진에 대한 경고(있으면 화면에 상시 띄운다).</param>
+public sealed record JobPlan(
+    BulkJobKind Kind,
+    string Scope,
+    bool SkipExisting,
+    string? Lang,
+    int Targets,
+    int Limit,
+    long Units,
+    string UnitName,
+    long Budget,
+    string? Cost,
+    string? Warning,
+    string Engine,
+    bool Enabled)
+{
+    /// <summary>주소에 실어 보내는 현재 선택(범위를 바꿔도 나머지는 유지된다).</summary>
+    public string Query(string? scope = null, bool? skip = null) =>
+        $"kind={(Kind == BulkJobKind.Meaning ? "meaning" : "translate")}"
+        + $"&scope={scope ?? Scope}&skip={((skip ?? SkipExisting) ? "1" : "0")}"
+        + $"&lang={Lang ?? ""}&limit={Limit}";
+}
+
+/// <summary>
 /// 검색 화면 칩에 붙는 건수. <see cref="All"/>을 뺀 나머지는 서로 겹치지 않으므로 합이 전체를
 /// 넘지 않는다(<see cref="Loved"/>·<see cref="Spotify"/>만 다른 축이라 예외다).
 /// </summary>

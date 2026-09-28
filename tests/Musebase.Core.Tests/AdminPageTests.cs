@@ -298,7 +298,7 @@ public class AdminPageTests
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
         Assert.Contains("엔진 미구성", html);
-        Assert.DoesNotContain($"{Routes.Base}/meanings/backfill", html);
+        Assert.DoesNotContain($"{Routes.Base}/jobs/new?kind=meaning", html);
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public class AdminPageTests
 
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
-        Assert.Contains($"{Routes.Base}/meanings/backfill", html);
+        Assert.Contains($"{Routes.Base}/jobs/new?kind=meaning", html);
         Assert.Contains("의미 일괄 생성 (30곡)", html);
     }
 
@@ -323,7 +323,7 @@ public class AdminPageTests
             Meanings = new MeaningSummary(5, 1, 0, Pending: 0, Enabled: true),
         };
 
-        Assert.DoesNotContain($"{Routes.Base}/meanings/backfill",
+        Assert.DoesNotContain($"{Routes.Base}/jobs/new?kind=meaning",
             AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
     }
 
@@ -832,6 +832,47 @@ public class AdminPageTests
     {
         Assert.Equal("'sha256-x/QOLeu8wH8PKkb9psnX6qIgjfUmm28PaiDMfMQwV+k='", AdminHtml.ScriptCsp);
     }
+
+    [Fact]
+    public void 실행_확인_화면은_모든_대상_범위를_보여_준다()
+    {
+        var html = AdminPages.JobConfirmPage(Plan(), "csrf");
+
+        foreach (var scope in BulkScope.Known)
+            Assert.Contains($"scope={scope}", html);
+        Assert.Contains("30곡", html);                 // 대상 곡 수
+        Assert.Contains("/jobs/start", html);
+    }
+
+    [Fact]
+    public void 대상이_없거나_엔진이_없으면_실행_버튼을_주지_않는다()
+    {
+        // 누를 수 없는 버튼을 그려 두면 사람이 눌러 보고 알림으로 거절당한다.
+        Assert.DoesNotContain("/jobs/start", AdminPages.JobConfirmPage(Plan() with { Targets = 0 }, "csrf"));
+        Assert.DoesNotContain("/jobs/start", AdminPages.JobConfirmPage(Plan() with { Enabled = false }, "csrf"));
+    }
+
+    [Fact]
+    public void 확인_화면은_추정과_상한을_함께_보여_준다()
+    {
+        var plan = Plan() with
+        {
+            Kind = BulkJobKind.Translation, Lang = "KO", UnitName = "자",
+            Units = 123_456, Budget = 130_000, Cost = "약 $2.47", Warning = "MyMemory는 줄마다 요청을 보냅니다",
+        };
+
+        var html = AdminPages.JobConfirmPage(plan, "csrf");
+
+        Assert.Contains("123,456자", html);
+        Assert.Contains("약 $2.47", html);
+        Assert.Contains("130000", html);               // 상한 입력칸의 기본값
+        Assert.Contains("MyMemory는 줄마다", html);
+    }
+
+    private static JobPlan Plan() => new(
+        BulkJobKind.Meaning, BulkScope.All, SkipExisting: true, Lang: null,
+        Targets: 30, Limit: 30, Units: 30, UnitName: "곡", Budget: 30,
+        Cost: null, Warning: null, Engine: "gemini / gemini-2.5-flash-lite", Enabled: true);
 
     private static BulkJobState JobState(BulkJobStatus status) => new(
         BulkJobKind.Meaning, status, "의미 일괄 생성 (3곡)",

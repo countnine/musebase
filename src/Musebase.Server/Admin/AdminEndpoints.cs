@@ -632,26 +632,67 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("server.env 설정으로 되돌렸습니다.")}");
         });
 
-        app.MapPost(Routes.Base + "/meanings/backfill", async (HttpRequest req) =>
+        // ---- 일괄 작업 ----
+
+        // 실행 확인 화면. GET이라 새로고침·범위 바꿔 보기가 안전하다(아무것도 바꾸지 않는다).
+        app.MapGet(Routes.Base + "/jobs/new", (HttpRequest req, string? kind, string? scope, string? skip,
+            string? lang, int? limit) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+
+            var jobKind = kind == "translate" ? BulkJobKind.Translation : BulkJobKind.Meaning;
+            if (jobKind == BulkJobKind.Translation)
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("가사 일괄 번역은 아직 없습니다.")}");
+
+            // 주소로 들어온 값을 그대로 믿지 않는다(목록 뷰 화이트리스트와 같은 관례).
+            var useScope = BulkScope.IsKnown(scope) ? scope! : BulkScope.All;
+            var skipExisting = skip != "0";
+            var useLimit = Math.Clamp(limit ?? MeaningOptionsNow().BackfillLimit, 1, 5000);
+
+            var targets = store.BulkCount(useScope, null, skipExisting, MissesSince());
+            var engine = MeaningOptionsNow();
+            var plan = new JobPlan(
+                Kind: jobKind, Scope: useScope, SkipExisting: skipExisting, Lang: null,
+                Targets: targets, Limit: useLimit,
+                Units: Math.Min(targets, useLimit), UnitName: "곡",
+                Budget: Math.Min(targets, useLimit),
+                Cost: null, Warning: null,
+                Engine: engine.Engine is Musebase.Core.Meaning.MeaningWriterRegistry.None
+                    ? "끔" : $"{engine.Engine} / {engine.EffectiveModel}",
+                Enabled: MeaningsNow().IsEnabled);
+
+            return Html(AdminPages.JobConfirmPage(plan, AdminAuth.Csrf(options.Token, Cookie(req) ?? "")));
+        });
+
+        app.MapPost(Routes.Base + "/jobs/start", async (HttpRequest req) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var form = await req.ReadFormAsync();
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
+            if (form["kind"].ToString() == "translate")
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("가사 일괄 번역은 아직 없습니다.")}");
+
             if (!MeaningsNow().IsEnabled)
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
 
-            var targets = store.SongsWithoutMeaning(MeaningOptionsNow().BackfillLimit)
-                .Select(t => new BulkTarget(t.Key, t.Title, t.Artist))
-                .ToList();
+            var scope = form["scope"].ToString();
+            if (!BulkScope.IsKnown(scope)) scope = BulkScope.All;
+            var skipExisting = form["skip"].ToString() != "0";
+            var limit = int.TryParse(form["limit"].ToString(), out var l)
+                ? Math.Clamp(l, 1, 5000) : MeaningOptionsNow().BackfillLimit;
+            var budget = long.TryParse(form["budget"].ToString(), out var b) ? Math.Max(b, 1) : limit;
+
+            var targets = store.BulkTargets(scope, null, skipExisting, limit, MissesSince());
 
             // 곡 사이 간격은 시작할 때 한 번 읽는다 — 잡이 도는 동안 구성이 바뀌어도
             // 한 잡 안에서 규칙이 갈리지 않게 한다("쓸 때마다 읽는다"의 의도적 예외).
             var delayMs = MeaningOptionsNow().BackfillDelayMs;
 
             var started = jobs.TryStart(
-                BulkJobKind.Meaning, $"의미 일괄 생성 ({targets.Count}곡)", targets,
+                BulkJobKind.Meaning,
+                $"의미 일괄 생성 — {BulkScope.Label(scope)} ({targets.Count}곡)", targets,
                 async (target, ct) =>
                 {
                     var outcome = await GenerateStatusAsync(target.Key, target.Title, target.Artist);
@@ -672,14 +713,13 @@ public static class AdminEndpoints
                         _ => new BulkStepResult(BulkStep.Failed, outcome.Detail, 1),
                     };
                 },
-                delayMs: delayMs, budget: targets.Count, unitName: "곡", out var refusal);
+                delayMs: delayMs, budget: budget, unitName: "곡", out var refusal);
 
             return started
                 ? SeeOther($"{Routes.Base}/jobs")
                 : SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(refusal!)}");
         });
 
-        // ---- 일괄 작업 ----
 
         app.MapGet(Routes.Base + "/jobs", (HttpRequest req, string? notice) =>
         {
@@ -700,6 +740,11 @@ public static class AdminEndpoints
                 : "실행 중인 작업이 없습니다.";
             return SeeOther($"{Routes.Base}/jobs?notice={Uri.EscapeDataString(notice)}");
         });
+
+        // "조회 미스 상위" 범위가 볼 기간. 대시보드의 미스 목록(7일)보다 넉넉하게 본다 —
+        // 일괄 작업은 "자주 듣는 곡"을 찾는 것이라 지난달에 두 번 튼 곡도 후보다.
+        static string MissesSince() =>
+            DateTimeOffset.UtcNow.AddDays(-30).ToString(LyricsStore.TimeFormat);
 
         // 일괄 생성이 멈춘 이유 — "다시 눌러 봐야 소용없다"와 "잠시 후 다시"를 가르는 문장이다.
         static string BackfillStopReason(MeaningOutcome outcome) =>

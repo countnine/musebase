@@ -138,12 +138,10 @@ public static class AdminPages
         var backfill = !m.Meanings.Enabled || m.Meanings.Pending == 0
             ? ""
             : $"""
-              <form method="post" action="{Routes.Base}/meanings/backfill" class="inline" data-busy>
-                <input type="hidden" name="csrf" value="{Esc(m.Csrf)}">
-                <button type="submit">의미 일괄 생성 ({m.Meanings.Pending}곡)</button>
-              </form>
-              <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.
-              누르면 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면으로 가며, 생성은 그 뒤에서 계속 돕니다(중간에 멈출 수 있습니다).</span>
+              <p><a class="chip on" href="{Routes.Base}/jobs/new?kind=meaning&scope=all&skip=1">
+              의미 일괄 생성 ({m.Meanings.Pending}곡) →</a></p>
+              <span class="meta">다음 화면에서 <b>대상 범위</b>(좋아요한 곡·조회 미스 상위 등)와 곡 수를 고릅니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.
+              생성은 뒤에서 돌고 진행 상황은 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면에서 봅니다(중간에 멈출 수 있습니다).</span>
               """;
 
         var lastfm = LastFmCard(m.LastFm, m.Csrf) + SpotifyCard(m.Spotify, m.Csrf);
@@ -240,6 +238,77 @@ public static class AdminPages
             <p class="meta">서버를 재시작하면 이 기록은 사라집니다 — 이미 저장된 결과는 남습니다
             (잡은 곡 단위로 저장합니다). 요약 한 줄은 <code>journalctl -u musebase-server</code>에도 남습니다.</p>
             """, "jobs", state.IsRunning ? """<meta http-equiv="refresh" content="2">""" : null);
+    }
+
+    /// <summary>
+    /// 일괄 작업 실행 확인 화면. <b>GET이다</b> — 아무것도 바꾸지 않으므로 새로고침해도 안전하고,
+    /// 범위를 바꿔 보는 것이 그냥 링크를 누르는 일이 된다(POST였다면 매번 CSRF·PRG가 붙는다).
+    ///
+    /// 여기서 보여 주는 것은 <b>실행 전에 알아야 하는 것</b>뿐이다: 대상 곡 수, 추정 사용량,
+    /// 예상 비용, 그리고 이번 실행에서 넘지 않을 상한. 상한은 곡 <b>경계</b>에서만 걸린다.
+    /// </summary>
+    public static string JobConfirmPage(JobPlan plan, string csrf)
+    {
+        var kindName = plan.Kind == BulkJobKind.Meaning ? "의미 일괄 생성" : "가사 일괄 번역";
+
+        var scopes = string.Concat(BulkScope.Known.Select(s =>
+        {
+            var on = s == plan.Scope ? " on" : "";
+            return $"<a class=\"chip{on}\" href=\"{Routes.Base}/jobs/new?{plan.Query(scope: s)}\">"
+                 + $"{Esc(BulkScope.Label(s))}</a>";
+        }));
+
+        var skipLabel = plan.Kind == BulkJobKind.Meaning
+            ? "의미를 한 번도 만들어 보지 않은 곡만"
+            : $"{Esc(plan.Lang ?? "")} 번역이 없는 곡만";
+        var skip = $"""
+            <div class="chips">
+              <a class="chip{(plan.SkipExisting ? " on" : "")}"
+                 href="{Routes.Base}/jobs/new?{plan.Query(skip: true)}">{skipLabel}</a>
+              <a class="chip{(plan.SkipExisting ? "" : " on")}"
+                 href="{Routes.Base}/jobs/new?{plan.Query(skip: false)}">범위의 곡 전부(다시 만들기)</a>
+            </div>
+            """;
+
+        var estimate = string.Concat(
+            Tile("대상", $"{plan.Targets}곡", plan.Targets > plan.Limit ? $"이번에는 앞의 {plan.Limit}곡" : "전부 이번에"),
+            Tile($"추정 {plan.UnitName}", $"{plan.Units:N0}{plan.UnitName}",
+                plan.Kind == BulkJobKind.Translation ? "캐시에 이미 있는 줄은 뺐습니다" : "곡당 1회 호출"),
+            Tile("예상 비용", plan.Cost ?? "환산 불가", plan.Cost is null ? "무료 한도 또는 토큰 과금" : "요청 기준 추정"),
+            Tile("엔진", plan.Engine, plan.Enabled ? "구성됨" : "구성되지 않음"));
+
+        var run = !plan.Enabled
+            ? $"<p class=\"bad\">엔진이 구성되지 않았습니다 — <a href=\"{Routes.Base}\">대시보드</a>에서 먼저 설정하세요.</p>"
+            : plan.Targets == 0
+            ? "<p class=\"meta\">이 범위에 처리할 곡이 없습니다 — 위에서 범위를 바꿔 보세요.</p>"
+            : $"""
+              <form method="post" action="{Routes.Base}/jobs/start" class="inline" data-busy
+                    data-confirm="{Esc($"{Math.Min(plan.Targets, plan.Limit)}곡 · 약 {plan.Units:N0}{plan.UnitName}를 처리합니다. 시작할까요?")}">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <input type="hidden" name="kind" value="{(plan.Kind == BulkJobKind.Meaning ? "meaning" : "translate")}">
+                <input type="hidden" name="scope" value="{Esc(plan.Scope)}">
+                <input type="hidden" name="skip" value="{(plan.SkipExisting ? "1" : "0")}">
+                <input type="hidden" name="lang" value="{Esc(plan.Lang ?? "")}">
+                <label class="meta">곡 수 <input type="number" name="limit" value="{plan.Limit}" min="1" max="5000"></label>
+                <label class="meta">{Esc(plan.UnitName)} 상한 <input type="number" name="budget" value="{plan.Budget}" min="1"></label>
+                <button type="submit">실행</button>
+              </form>
+              <p class="meta">상한에 닿으면 <b>곡 경계에서</b> 멈추고 남은 곡은 손대지 않습니다 —
+              처리 중에 끊으면 반쯤 만들어진 결과가 저장됩니다.</p>
+              """;
+
+        return Layout($"{kindName} — 실행 확인", $"""
+            <h2>{Esc(kindName)}</h2>
+            <p class="meta">대상 범위</p>
+            <div class="chips">{scopes}</div>
+            <p class="meta">건너뛰기</p>
+            {skip}
+            <div class="tiles">{estimate}</div>
+            {(plan.Warning is null ? "" : $"<p class=\"warn\">{Esc(plan.Warning)}</p>")}
+            {run}
+            <p class="meta">진행 상황은 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면에서 봅니다.
+            한 번에 하나만 돌 수 있습니다.</p>
+            """, "jobs");
     }
 
     private static string StatusText(BulkJobStatus status) => status switch
