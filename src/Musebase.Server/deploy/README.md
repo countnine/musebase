@@ -64,11 +64,13 @@ MUSEBASE_ADMIN_PASSWORD=pbkdf2$210000$…$…
 
 ## 3. 빌드 · 전송 (개발 PC)
 
-**지금 운영 중인 서버는 x86_64**다(Ubuntu 24.04). 새 VM이면 `uname -m`으로 먼저 확인한다 —
-`aarch64`(Oracle 무료 티어의 Ampere A1)면 `linux-arm64`로 바꾼다. 아키텍처가 틀리면 바이너리가 아예 실행되지 않는다.
+**지금 운영 중인 서버는 `aarch64`**다(Oracle 무료 티어의 Ampere A1, Ubuntu 24.04.5).
+2026-09-28 실측 — 이 문서에 한동안 x86_64로 적혀 있었으나 **틀린 값이었다**(배포된 바이너리도
+`file`로 보면 ARM aarch64다). 배포 전에 `uname -m`으로 한 번 확인하고, 아키텍처가 틀리면
+바이너리가 아예 실행되지 않는다.
 
 ```powershell
-dotnet publish src/Musebase.Server/Musebase.Server.csproj -c Release -r linux-x64 `
+dotnet publish src/Musebase.Server/Musebase.Server.csproj -c Release -r linux-arm64 `
   --self-contained true -p:PublishSingleFile=true -o publish-server
 scp -r publish-server/* oracle:/tmp/musebase-server/
 ```
