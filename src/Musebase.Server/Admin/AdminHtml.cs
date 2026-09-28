@@ -78,7 +78,13 @@ public static class AdminHtml
         $"'sha256-{Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(BusyScript)))}'";
 
     /// <summary>공통 레이아웃 — 다크 표 스타일 + 상단 네비게이션.</summary>
-    public static string Layout(string title, string body, string? activeNav = null)
+    /// <param name="headExtra">
+    /// <c>&lt;head&gt;</c>에 그대로 들어갈 태그. 일괄 작업 진행 화면의
+    /// <c>&lt;meta http-equiv="refresh"&gt;</c> 하나를 위해 있다 — 스크립트로 폴링하면
+    /// <see cref="ScriptCsp"/> 해시가 바뀌고 CSP를 손대야 하는데, meta 새로고침은 CSP가 막지 않는다.
+    /// 호출자가 만든 문자열이 그대로 나가므로 <b>사람 입력을 넣지 말 것</b>.
+    /// </param>
+    public static string Layout(string title, string body, string? activeNav = null, string? headExtra = null)
     {
         string Nav(string href, string label, string id, string? extra = null)
         {
@@ -94,6 +100,7 @@ public static class AdminHtml
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <meta name="robots" content="noindex">
+            {{headExtra ?? ""}}
             <title>{{Esc(title)}} — Musebase 가사 서버</title>
             <style>
             :root{--bg:#111;--panel:#1c1c1c;--line:#333;--text:#eee;--dim:#888;--accent:#7cc4ff;
@@ -173,6 +180,7 @@ public static class AdminHtml
             <nav>
               {{Nav(Routes.Base, "대시보드", "home")}}
               {{Nav(Routes.Base + "/search", "가사 검색", "search")}}
+              {{Nav(Routes.Base + "/jobs", "일괄 작업", "jobs")}}
               {{Nav(Routes.Base + "/logout", "로그아웃", "logout", "out")}}
             </nav>
             {{body}}

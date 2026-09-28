@@ -790,6 +790,58 @@ public class AdminPageTests
         Assert.Null(MeaningEngineCard.Hint(null));
     }
 
+    // ---- 일괄 작업 화면 ----
+
+    [Fact]
+    public void 잡이_도는_동안에만_자동_새로고침이_붙는다()
+    {
+        var running = JobState(BulkJobStatus.Running);
+        var done = JobState(BulkJobStatus.Done);
+
+        Assert.Contains("http-equiv=\"refresh\"", AdminPages.JobPage(running, "csrf", Kst));
+        // 끝난 뒤에도 새로고침이 남으면 아무도 안 보는 화면을 2초마다 계속 그린다.
+        Assert.DoesNotContain("http-equiv=\"refresh\"", AdminPages.JobPage(done, "csrf", Kst));
+        Assert.DoesNotContain("http-equiv=\"refresh\"", AdminPages.JobPage(null, "csrf", Kst));
+    }
+
+    [Fact]
+    public void 잡이_도는_동안에만_중지_버튼이_보인다()
+    {
+        Assert.Contains("/jobs/cancel", AdminPages.JobPage(JobState(BulkJobStatus.Running), "csrf", Kst));
+        Assert.DoesNotContain("/jobs/cancel", AdminPages.JobPage(JobState(BulkJobStatus.Done), "csrf", Kst));
+    }
+
+    [Fact]
+    public void 멈춘_잡은_사유를_화면에_적는다()
+    {
+        var html = AdminPages.JobPage(
+            JobState(BulkJobStatus.Stopped) with { Detail = "HTTP 402 · 잔액 부족" }, "csrf", Kst);
+
+        Assert.Contains("HTTP 402", html);
+        Assert.Contains("멈춤", html);
+    }
+
+    /// <summary>
+    /// 관리 화면은 스크립트 <b>하나의 해시만</b> 허용한다(`script-src 'sha256-…'`). BusyScript를
+    /// 고치면 이 값이 바뀌고, 그 사실을 모른 채 배포하면 제출 스피너가 조용히 죽는다 —
+    /// 해시는 자동으로 따라가지만 <b>바뀌었다는 것을 사람이 알아야</b> 하므로 값을 못 박는다.
+    /// (의도한 변경이면 이 기대값을 새 값으로 바꾸고, 관리 화면의 폼 제출을 직접 눌러 확인할 것.)
+    /// </summary>
+    [Fact]
+    public void 스크립트_CSP_해시는_BusyScript를_고칠_때만_바뀐다()
+    {
+        Assert.Equal("'sha256-x/QOLeu8wH8PKkb9psnX6qIgjfUmm28PaiDMfMQwV+k='", AdminHtml.ScriptCsp);
+    }
+
+    private static BulkJobState JobState(BulkJobStatus status) => new(
+        BulkJobKind.Meaning, status, "의미 일괄 생성 (3곡)",
+        Total: 3, Done: 1, Ok: 1, Skipped: 0, NoSource: 0, Failed: 0,
+        Units: 1, Budget: 3, UnitName: "곡",
+        CurrentLabel: status == BulkJobStatus.Running ? "아티스트 - 곡" : null,
+        Detail: null,
+        StartedAt: DateTimeOffset.Parse("2026-09-28T00:00:00Z"),
+        EndedAt: status == BulkJobStatus.Running ? null : DateTimeOffset.Parse("2026-09-28T00:01:00Z"));
+
     private static string SongPage(SongLinks? links = null, LoveState? love = null) =>
         AdminPages.SongPage(
             new LyricsEntry { Key = "kids|mgmt", Title = "Kids", Artist = "MGMT", Lrc = "[00:01.00]hello" },

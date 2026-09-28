@@ -83,7 +83,8 @@ public static class AdminEndpoints
 
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
-        MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras)
+        MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras,
+        BulkJobRunner jobs)
     {
         // 구성은 화면에서 바뀔 수 있으므로 값을 붙잡지 않고 쓸 때마다 읽는다.
         MeaningOptions MeaningOptionsNow() => meaningSettings.Current;
@@ -608,43 +609,72 @@ public static class AdminEndpoints
             if (!MeaningsNow().IsEnabled)
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
 
-            var targets = store.SongsWithoutMeaning(MeaningOptionsNow().BackfillLimit);
-            int ok = 0, none = 0, failed = 0, done = 0;
-            MeaningOutcome? stoppedBy = null;
-            foreach (var (key, title, artist) in targets)
-            {
-                var delay = MeaningOptionsNow().BackfillDelayMs;
-                if (done > 0 && delay > 0) await Task.Delay(delay);
+            var targets = store.SongsWithoutMeaning(MeaningOptionsNow().BackfillLimit)
+                .Select(t => new BulkTarget(t.Key, t.Title, t.Artist))
+                .ToList();
 
-                var outcome = await GenerateStatusAsync(key, title, artist);
-                var status = outcome.Status;
+            // 곡 사이 간격은 시작할 때 한 번 읽는다 — 잡이 도는 동안 구성이 바뀌어도
+            // 한 잡 안에서 규칙이 갈리지 않게 한다("쓸 때마다 읽는다"의 의도적 예외).
+            var delayMs = MeaningOptionsNow().BackfillDelayMs;
 
-                // 일시적 실패(쿼타·네트워크)나 설정 문제(잔액·키·모델)면 여기서 멈춘다. 계속 돌아 봐야
-                // 남은 곡까지 같은 벽에 부딪힐 뿐이고, 중단해도 아무것도 망가지지 않는다 — 저장을 안
-                // 했으므로 다음에 다시 누르면 이 곡부터 그대로 이어진다.
-                if (Musebase.Core.Meaning.SongMeaning.IsUnsaved(status)) { stoppedBy = outcome; break; }
+            var started = jobs.TryStart(
+                BulkJobKind.Meaning, $"의미 일괄 생성 ({targets.Count}곡)", targets,
+                async (target, ct) =>
+                {
+                    var outcome = await GenerateStatusAsync(target.Key, target.Title, target.Artist);
 
-                done++;
-                // 자료 부족은 "자료 없음"과 같은 칸에 센다 — 둘 다 "의미를 만들지 못함"이다.
-                if (status == Musebase.Core.Meaning.SongMeaning.Ok) ok++;
-                else if (status is Musebase.Core.Meaning.SongMeaning.NoSource
-                                or Musebase.Core.Meaning.SongMeaning.Insufficient) none++;
-                else failed++;
-            }
+                    // 일시적 실패(쿼타·네트워크)나 설정 문제(잔액·키·모델)면 잡을 멈춘다. 계속 돌아 봐야
+                    // 남은 곡까지 같은 벽에 부딪힐 뿐이고, 멈춰도 아무것도 망가지지 않는다 — 저장을 안
+                    // 했으므로 다시 시작하면 이 곡부터 그대로 이어진다.
+                    if (Musebase.Core.Meaning.SongMeaning.IsUnsaved(outcome.Status))
+                        return new BulkStepResult(BulkStep.Stop, BackfillStopReason(outcome));
 
-            var counts = $"생성 {ok} · 자료 없음 {none} · 실패 {failed}";
-            var summary = stoppedBy switch
-            {
-                null => $"{targets.Count}곡 처리 — {counts}",
-                { Status: Musebase.Core.Meaning.SongMeaning.Config } =>
-                    $"{done}곡 처리 후 중단 — {counts}. 엔진 설정 문제입니다({stoppedBy.Detail ?? "사유 없음"}). "
-                    + "결제 잔액·키·모델을 확인한 뒤 다시 눌러 주세요. 남은 곡은 손대지 않았습니다.",
-                _ =>
-                    $"{done}곡 처리 후 중단 — {counts}. 쿼타·네트워크 문제로 보입니다({stoppedBy.Detail ?? "사유 없음"}). "
-                    + "남은 곡은 손대지 않았으니 잠시 후 다시 눌러 주세요.",
-            };
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(summary)}");
+                    return outcome.Status switch
+                    {
+                        Musebase.Core.Meaning.SongMeaning.Ok => new BulkStepResult(BulkStep.Ok, Units: 1),
+                        // 자료 부족은 "자료 없음"과 같은 칸에 센다 — 둘 다 "의미를 만들지 못함"이다.
+                        Musebase.Core.Meaning.SongMeaning.NoSource or
+                        Musebase.Core.Meaning.SongMeaning.Insufficient =>
+                            new BulkStepResult(BulkStep.NoSource, Units: 1),
+                        _ => new BulkStepResult(BulkStep.Failed, outcome.Detail, 1),
+                    };
+                },
+                delayMs: delayMs, budget: targets.Count, unitName: "곡", out var refusal);
+
+            return started
+                ? SeeOther($"{Routes.Base}/jobs")
+                : SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(refusal!)}");
         });
+
+        // ---- 일괄 작업 ----
+
+        app.MapGet(Routes.Base + "/jobs", (HttpRequest req, string? notice) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            return Html(AdminPages.JobPage(
+                jobs.Snapshot(), AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), options.TimeZone, notice));
+        });
+
+        app.MapPost(Routes.Base + "/jobs/cancel", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var notice = jobs.Cancel()
+                ? "중지를 걸었습니다 — 지금 처리 중인 곡이 끝나면 멈춥니다."
+                : "실행 중인 작업이 없습니다.";
+            return SeeOther($"{Routes.Base}/jobs?notice={Uri.EscapeDataString(notice)}");
+        });
+
+        // 일괄 생성이 멈춘 이유 — "다시 눌러 봐야 소용없다"와 "잠시 후 다시"를 가르는 문장이다.
+        static string BackfillStopReason(MeaningOutcome outcome) =>
+            outcome.Status == Musebase.Core.Meaning.SongMeaning.Config
+                ? $"엔진 설정 문제로 멈췄습니다({outcome.Detail ?? "사유 없음"}). "
+                  + "결제 잔액·키·모델을 확인한 뒤 다시 시작하세요. 남은 곡은 손대지 않았습니다."
+                : $"쿼타·네트워크 문제로 보입니다({outcome.Detail ?? "사유 없음"}). "
+                  + "남은 곡은 손대지 않았으니 잠시 후 다시 시작하세요.";
 
         // 단건 생성 후 사람에게 보여 줄 한 줄.
         async Task<string> GenerateMeaningAsync(

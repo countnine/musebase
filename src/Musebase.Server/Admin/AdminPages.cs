@@ -142,7 +142,8 @@ public static class AdminPages
                 <input type="hidden" name="csrf" value="{Esc(m.Csrf)}">
                 <button type="submit">의미 일괄 생성 ({m.Meanings.Pending}곡)</button>
               </form>
-              <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.</span>
+              <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.
+              누르면 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면으로 가며, 생성은 그 뒤에서 계속 돕니다(중간에 멈출 수 있습니다).</span>
               """;
 
         var lastfm = LastFmCard(m.LastFm, m.Csrf) + SpotifyCard(m.Spotify, m.Csrf);
@@ -182,6 +183,83 @@ public static class AdminPages
             </details>
             """, "home");
     }
+
+    /// <summary>
+    /// 일괄 작업 진행 화면.
+    ///
+    /// <b>새로고침은 실행 중일 때만 단다</b> — 끝나면 <c>&lt;meta http-equiv="refresh"&gt;</c>가
+    /// 사라져 폴링이 저절로 멎는다. 스크립트로 폴링하지 않는 이유는 CSP다(관리 화면은 스크립트
+    /// 하나의 해시만 허용한다 — <see cref="AdminHtml.ScriptCsp"/>).
+    ///
+    /// 이 화면은 <b>DB를 건드리지 않는다</b>. 2초마다 도는 자리라 여기서 조회를 하면
+    /// 잡이 앱의 가사 조회를 막는 원인이 정확히 여기가 된다.
+    /// </summary>
+    public static string JobPage(BulkJobState? state, string csrf, TimeZoneInfo tz, string? notice = null)
+    {
+        var head = notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>";
+
+        if (state is null)
+            return Layout("일괄 작업", $"""
+                {head}
+                <h2>일괄 작업</h2>
+                <p class="meta">이 서버가 켜진 뒤로 실행한 작업이 없습니다.
+                <a href="{Routes.Base}">대시보드</a>에서 시작하세요.</p>
+                """, "jobs");
+
+        var tiles = string.Concat(
+            Tile("진행", $"{state.Done} / {state.Total}곡", $"{state.Percent}% · {FormatElapsed(state.Elapsed)}"),
+            Tile("성공", $"{state.Ok}곡", $"건너뜀 {state.Skipped} · 자료 없음 {state.NoSource} · 실패 {state.Failed}"),
+            Tile($"쓴 {state.UnitName}", $"{state.Units:N0}{state.UnitName}",
+                state.Budget > 0 ? $"상한 {state.Budget:N0}{state.UnitName}" : "상한 없음"),
+            Tile("시작", AdminTime.ToLocal(state.StartedAt.ToString("o"), tz),
+                state.EndedAt is null ? "실행 중" : $"끝 {AdminTime.ToLocal(state.EndedAt.Value.ToString("o"), tz)}"));
+
+        // 진행 중에는 "지금 무엇을" 이 가장 궁금하고, 끝난 뒤에는 "왜 멈췄나"가 가장 궁금하다.
+        var line = state.IsRunning
+            ? $"<p class=\"meta\">지금: {Esc(state.CurrentLabel ?? "준비 중")}</p>"
+            : $"<p class=\"{StatusClass(state.Status)}\">{Esc(StatusText(state.Status))}"
+              + $"{(state.Detail is null ? "" : " — " + Esc(state.Detail))}</p>";
+
+        var cancel = !state.IsRunning ? "" : $"""
+            <form method="post" action="{Routes.Base}/jobs/cancel" class="inline" data-busy
+                  data-confirm="지금 처리 중인 곡이 끝나면 멈춥니다. 중지할까요?">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit" class="danger">중지</button>
+            </form>
+            <p class="meta">중지는 <b>곡 경계</b>에서 먹습니다 — 처리 중인 곡을 반쯤 저장하지 않기 위해서입니다.
+            이미 끝난 곡은 그대로 남고, 남은 곡은 손대지 않습니다.</p>
+            """;
+
+        return Layout($"일괄 작업 — {StatusText(state.Status)}", $"""
+            {head}
+            <h2>{Esc(state.Label)}</h2>
+            <div class="bar" style="margin:.5rem 0 1rem"><span style="width:{state.Percent}%"></span></div>
+            <div class="tiles">{tiles}</div>
+            {line}
+            {cancel}
+            <p class="meta">서버를 재시작하면 이 기록은 사라집니다 — 이미 저장된 결과는 남습니다
+            (잡은 곡 단위로 저장합니다). 요약 한 줄은 <code>journalctl -u musebase-server</code>에도 남습니다.</p>
+            """, "jobs", state.IsRunning ? """<meta http-equiv="refresh" content="2">""" : null);
+    }
+
+    private static string StatusText(BulkJobStatus status) => status switch
+    {
+        BulkJobStatus.Running => "실행 중",
+        BulkJobStatus.Done => "완료",
+        BulkJobStatus.Cancelled => "중지됨",
+        _ => "멈춤",
+    };
+
+    private static string StatusClass(BulkJobStatus status) => status switch
+    {
+        BulkJobStatus.Done => "ok",
+        BulkJobStatus.Stopped => "bad",
+        _ => "warn",
+    };
+
+    private static string FormatElapsed(TimeSpan t) =>
+        t.TotalHours >= 1 ? $"{(int)t.TotalHours}시간 {t.Minutes}분" :
+        t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}분 {t.Seconds}초" : $"{(int)t.TotalSeconds}초";
 
     /// <summary>한 페이지에 보여 주는 곡 수. 30건이면 화면 하나에 들어와 스크롤 없이 훑을 수 있다.</summary>
     public const int PageSize = 30;

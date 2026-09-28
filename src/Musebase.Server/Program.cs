@@ -80,7 +80,10 @@ var extras = new SongExtrasService(
     meaningSettings.Current.LastFmAccount(),
     meaningSettings.Current.SpotifyAccount());
 
-app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras);
+// 일괄 작업(의미 생성·가사 번역)은 HTTP 요청 밖에서 돈다 — 한 번에 하나만.
+var jobs = new BulkJobRunner(app.Services.GetRequiredService<ILogger<BulkJobRunner>>());
+
+app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
