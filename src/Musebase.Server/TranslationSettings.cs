@@ -19,6 +19,18 @@ public sealed class StoreTranslationCache(LyricsStore store) : ITranslationCache
 }
 
 /// <summary>
+/// 번역 서비스를 <b>그때그때</b> 내어 주는 것. 구성이 화면에서 바뀌면 새 서비스가 나온다 —
+/// 붙잡아 두면 옛 엔진이 계속 불린다. (테스트가 스텁 번역기를 물리는 자리이기도 하다.)
+/// </summary>
+public interface ITranslationServiceSource
+{
+    LyricsTranslationService Service { get; }
+
+    /// <summary>엔진과 키가 갖춰져 실제로 번역할 수 있는가.</summary>
+    bool IsEnabled { get; }
+}
+
+/// <summary>
 /// 지금 실제로 쓰는 번역 구성. <c>server.env</c> 위에 <b>DB에 저장된 값을 덮는다</b> —
 /// <see cref="MeaningSettings"/>와 같은 구조이고 같은 이유다: 어느 엔진이 이 가사를 더 잘 옮기는지
 /// 비교하려면 SSH로 파일을 고치고 재시작하는 것이 너무 무겁다. 바꾸면 <b>다음 실행부터</b> 반영된다.
@@ -27,6 +39,7 @@ public sealed class StoreTranslationCache(LyricsStore store) : ITranslationCache
 /// 백업 파일에 함께 담긴다는 뜻이므로, 키를 파일 밖에 두고 싶으면 <c>server.env</c>만 쓴다.
 /// </summary>
 public sealed class TranslationSettings(LyricsStore store, TranslationOptions environment, ITranslationCache cache)
+    : ITranslationServiceSource
 {
     public const string EngineSetting = "translate.engine";
     public const string LangSetting = "translate.lang";
@@ -72,6 +85,9 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
             }
         }
     }
+
+    /// <summary>엔진과 키가 갖춰져 실제로 번역할 수 있는가.</summary>
+    public bool IsEnabled => Current.IsEnabled;
 
     /// <summary>DB에 값을 하나라도 저장해 뒀는가(화면에 "환경변수 사용 중"을 밝히기 위해).</summary>
     public bool Overridden => AllSettings.Any(n => !string.IsNullOrEmpty(store.GetSetting(n)));

@@ -85,8 +85,11 @@ public static class AdminEndpoints
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
         MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras,
-        BulkJobRunner jobs, TranslationSettings translationSettings)
+        BulkJobRunner jobs, TranslationSettings translationSettings, TranslationGenerator translation)
     {
+        // 단가표는 부팅 때 한 번 읽는다(값이 바뀌면 재시작 — 코드 배포보다는 싸다).
+        var prices = TranslationPricing.FromEnvironment();
+
         // 구성은 화면에서 바뀔 수 있으므로 값을 붙잡지 않고 쓸 때마다 읽는다.
         MeaningOptions MeaningOptionsNow() => meaningSettings.Current;
         Musebase.Core.Meaning.SongMeaningService MeaningsNow() => meaningSettings.Service;
@@ -684,25 +687,55 @@ public static class AdminEndpoints
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
 
             var jobKind = kind == "translate" ? BulkJobKind.Translation : BulkJobKind.Meaning;
-            if (jobKind == BulkJobKind.Translation)
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("가사 일괄 번역은 아직 없습니다.")}");
 
             // 주소로 들어온 값을 그대로 믿지 않는다(목록 뷰 화이트리스트와 같은 관례).
             var useScope = BulkScope.IsKnown(scope) ? scope! : BulkScope.All;
             var skipExisting = skip != "0";
-            var useLimit = Math.Clamp(limit ?? MeaningOptionsNow().BackfillLimit, 1, 5000);
+            var translate = TranslationNow();
+            var useLang = TranslationOptions.NormalizeLang(
+                string.IsNullOrWhiteSpace(lang) ? translate.Lang : lang);
 
-            var targets = store.BulkCount(useScope, null, skipExisting, MissesSince());
-            var engine = MeaningOptionsNow();
-            var plan = new JobPlan(
-                Kind: jobKind, Scope: useScope, SkipExisting: skipExisting, Lang: null,
-                Targets: targets, Limit: useLimit,
-                Units: Math.Min(targets, useLimit), UnitName: "곡",
-                Budget: Math.Min(targets, useLimit),
-                Cost: null, Warning: null,
-                Engine: engine.Engine is Musebase.Core.Meaning.MeaningWriterRegistry.None
-                    ? "끔" : $"{engine.Engine} / {engine.EffectiveModel}",
-                Enabled: MeaningsNow().IsEnabled);
+            var useLimit = Math.Clamp(
+                limit ?? (jobKind == BulkJobKind.Translation
+                    ? translate.BatchLimit : MeaningOptionsNow().BackfillLimit),
+                1, 5000);
+
+            JobPlan plan;
+            if (jobKind == BulkJobKind.Translation)
+            {
+                // 건너뛰기를 끄면 "이미 번역된 곡도 다시" — 그때는 언어 조건을 걸지 않는다.
+                var without = skipExisting ? useLang : null;
+                var count = store.BulkCount(useScope, without, false, MissesSince());
+
+                // 추정은 실제로 보낼 문자 수다 — 캐시로 채워질 줄은 실행 루프와 **같은 함수**로 뺀다.
+                var sample = store.BulkTargets(useScope, without, false, useLimit, MissesSince());
+                var chars = sample.Sum(t => translation.Estimate(t.Key, useLang));
+
+                plan = new JobPlan(
+                    Kind: jobKind, Scope: useScope, SkipExisting: skipExisting, Lang: useLang,
+                    Targets: count, Limit: useLimit,
+                    Units: chars, UnitName: "자",
+                    Budget: Math.Max(chars, 1),
+                    Cost: TranslationPricing.Estimate(translate.Engine, chars, prices),
+                    Warning: translate.Warning,
+                    Engine: translate.EngineName
+                        + (translate.EffectiveModel.Length == 0 ? "" : $" / {translate.EffectiveModel}"),
+                    Enabled: translate.IsEnabled);
+            }
+            else
+            {
+                var count = store.BulkCount(useScope, null, skipExisting, MissesSince());
+                var engine = MeaningOptionsNow();
+                plan = new JobPlan(
+                    Kind: jobKind, Scope: useScope, SkipExisting: skipExisting, Lang: null,
+                    Targets: count, Limit: useLimit,
+                    Units: Math.Min(count, useLimit), UnitName: "곡",
+                    Budget: Math.Max(Math.Min(count, useLimit), 1),
+                    Cost: null, Warning: null,
+                    Engine: engine.Engine is Musebase.Core.Meaning.MeaningWriterRegistry.None
+                        ? "끔" : $"{engine.Engine} / {engine.EffectiveModel}",
+                    Enabled: MeaningsNow().IsEnabled);
+            }
 
             return Html(AdminPages.JobConfirmPage(plan, AdminAuth.Csrf(options.Token, Cookie(req) ?? "")));
         });
@@ -714,8 +747,7 @@ public static class AdminEndpoints
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
-            if (form["kind"].ToString() == "translate")
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("가사 일괄 번역은 아직 없습니다.")}");
+            if (form["kind"].ToString() == "translate") return StartTranslation(form);
 
             if (!MeaningsNow().IsEnabled)
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
@@ -783,6 +815,55 @@ public static class AdminEndpoints
                 : "실행 중인 작업이 없습니다.";
             return SeeOther($"{Routes.Base}/jobs?notice={Uri.EscapeDataString(notice)}");
         });
+
+        // 가사 일괄 번역 시작. 의미 쪽과 갈라 두는 것은 단위(자 vs 곡)와 중단 규칙뿐이다.
+        IResult StartTranslation(IFormCollection form)
+        {
+            var now = TranslationNow();
+            if (!now.IsEnabled)
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    "번역 엔진이 구성되지 않았습니다 — 대시보드에서 엔진과 키를 넣으세요.")}");
+
+            var scope = form["scope"].ToString();
+            if (!BulkScope.IsKnown(scope)) scope = BulkScope.All;
+            var skipExisting = form["skip"].ToString() != "0";
+            var lang = TranslationOptions.NormalizeLang(
+                form["lang"].ToString() is { Length: > 0 } l ? l : now.Lang);
+            var limit = int.TryParse(form["limit"].ToString(), out var n)
+                ? Math.Clamp(n, 1, 5000) : now.BatchLimit;
+            var budget = long.TryParse(form["budget"].ToString(), out var b)
+                ? Math.Max(b, 1) : now.CharBudget;
+
+            var targets = store.BulkTargets(
+                scope, skipExisting ? lang : null, false, limit, MissesSince());
+
+            // 구성은 시작할 때 한 번만 읽는다 — 잡이 도는 중에 엔진을 바꾸면 한 잡 안에
+            // 두 엔진 결과가 섞인다("쓸 때마다 읽는다"의 의도적 예외).
+            var delayMs = now.DelayMs;
+
+            var started = jobs.TryStart(
+                BulkJobKind.Translation,
+                $"가사 일괄 번역({lang}) — {BulkScope.Label(scope)} ({targets.Count}곡)", targets,
+                async (target, ct) =>
+                {
+                    var outcome = await translation.TranslateAsync(target.Key, lang, ct);
+                    return outcome.Status switch
+                    {
+                        "ok" => new BulkStepResult(BulkStep.Ok, Units: outcome.Chars),
+                        // 할 일이 없었던 것(이미 있음)과 형식 때문에 건드리지 않은 것은 실패가 아니다.
+                        "skipped" or "lossy" or "unparsable" =>
+                            new BulkStepResult(BulkStep.Skipped, outcome.Detail),
+                        _ => new BulkStepResult(BulkStep.Failed, outcome.Detail, outcome.Chars),
+                    };
+                },
+                delayMs: delayMs, budget: budget, unitName: "자", out var refusal,
+                // 상한을 넘길 곡은 시작조차 하지 않는다 — 처리 중에 끊으면 반쯤 번역된 가사가 남는다.
+                estimate: t => translation.Estimate(t.Key, lang));
+
+            return started
+                ? SeeOther($"{Routes.Base}/jobs")
+                : SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(refusal!)}");
+        }
 
         // "조회 미스 상위" 범위가 볼 기간. 대시보드의 미스 목록(7일)보다 넉넉하게 본다 —
         // 일괄 작업은 "자주 듣는 곡"을 찾는 것이라 지난달에 두 번 튼 곡도 후보다.

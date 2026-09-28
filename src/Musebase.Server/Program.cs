@@ -88,7 +88,12 @@ var jobs = new BulkJobRunner(app.Services.GetRequiredService<ILogger<BulkJobRunn
 var translationSettings = new TranslationSettings(
     store, TranslationOptions.FromEnvironment(), new StoreTranslationCache(store));
 
-app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs, translationSettings);
+var translationGenerator = new TranslationGenerator(
+    store, translationSettings, new StoreTranslationCache(store),
+    app.Services.GetRequiredService<ILogger<TranslationGenerator>>());
+
+app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs,
+    translationSettings, translationGenerator);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>

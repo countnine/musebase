@@ -145,6 +145,15 @@ public static class AdminPages
               생성은 뒤에서 돌고 진행 상황은 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면에서 봅니다(중간에 멈출 수 있습니다).</span>
               """;
 
+        // 번역 엔진이 켜져 있을 때만 진입점을 보여 준다 — 누를 수 없는 링크를 두면 사람이
+        // 눌러 보고 거절 알림을 받는다.
+        var translateJob = m.TranslationEngine is { Enabled: true } t
+            ? $"""
+              <p><a class="chip on" href="{Routes.Base}/jobs/new?kind=translate&scope=loved-any&skip=1&lang={Url(t.Lang)}">
+              가사 일괄 번역 ({Esc(t.Lang)}) →</a></p>
+              """
+            : "";
+
         var lastfm = LastFmCard(m.LastFm, m.Csrf) + SpotifyCard(m.Spotify, m.Csrf);
         var engine = MeaningEngineCardHtml(m.MeaningEngine, m.Csrf)
                    + TranslationEngineCardHtml(m.TranslationEngine, m.Csrf);
@@ -157,6 +166,7 @@ public static class AdminPages
             같은 곡을 반복 재생해도 조회 수는 늘지 않습니다(로컬 캐시 → 서버 → 제공자 검색 순).</p>
             {engine}
             {backfill}
+            {translateJob}
             {lastfm}
 
             <h2>최근 올라온 가사{More(Routes.Base + "/search")}</h2>{uploads}
