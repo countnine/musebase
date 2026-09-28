@@ -26,6 +26,13 @@ public interface ITranslationServiceSource
 {
     LyricsTranslationService Service { get; }
 
+    /// <summary>
+    /// 같은 구성의 번역기 자체. <see cref="Service"/>는 실패를 <b>조용히 삼켜</b> 0을 돌려주도록
+    /// 만들어져 있어(재생 중에 오류창을 띄우지 않으려는 규칙) 왜 실패했는지 알 수 없다 —
+    /// 일괄 작업은 시작 전에 한 번 직접 찔러 보고 이유를 사람에게 보여 준다.
+    /// </summary>
+    ITranslator? Translator { get; }
+
     /// <summary>엔진과 키가 갖춰져 실제로 번역할 수 있는가.</summary>
     bool IsEnabled { get; }
 }
@@ -60,6 +67,7 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
     private readonly object _lock = new();
     private TranslationOptions? _current;
     private LyricsTranslationService? _service;
+    private ITranslator? _translator;
 
     /// <summary><c>server.env</c>만 본 값 — 화면에서 "되돌리면" 여기로 간다.</summary>
     public TranslationOptions Environment => environment;
@@ -82,6 +90,19 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
             {
                 _current ??= Compose();
                 return _service ??= _current.BuildService(cache);
+            }
+        }
+    }
+
+    /// <summary>번역기 자체(실패 이유를 보려는 곳에서 쓴다). 구성이 바뀌면 다시 만든다.</summary>
+    public ITranslator? Translator
+    {
+        get
+        {
+            lock (_lock)
+            {
+                _current ??= Compose();
+                return _translator ??= _current.BuildTranslator();
             }
         }
     }
@@ -137,6 +158,7 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
     {
         _current = null;
         _service = null;
+        _translator = null;
     }
 
     private TranslationOptions Compose()

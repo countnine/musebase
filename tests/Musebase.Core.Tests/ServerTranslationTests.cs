@@ -34,7 +34,16 @@ public class ServerTranslationTests : IDisposable
     private sealed class StubSource(ITranslator translator, ITranslationCache cache) : ITranslationServiceSource
     {
         public LyricsTranslationService Service { get; } = new(translator, cache);
+        public ITranslator? Translator { get; } = translator;
         public bool IsEnabled => true;
+    }
+
+    /// <summary>늘 실패하는 번역기 — "조용히 0"과 "엔진이 죽었다"를 가르는지 보려고 둔다.</summary>
+    private sealed class BrokenTranslator : ITranslator
+    {
+        public Task<IReadOnlyList<string?>> TranslateAsync(
+            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default) =>
+            throw new HttpRequestException("Response status code does not indicate success: 401 (Unauthorized).");
     }
 
     private static LyricsEntry Entry(string title, string artist, string lrc) =>
@@ -185,6 +194,56 @@ public class ServerTranslationTests : IDisposable
         var outcome = await generator.TranslateAsync(LyricsCacheStore.MakeKey("Kids", "MGMT"), "KO");
 
         Assert.Equal("unparsable", outcome.Status);
+    }
+
+    // ---- 엔진이 죽었을 때 ----
+
+    [Fact]
+    public async Task 번역기가_실패하면_건너뜀이_아니라_실패로_센다()
+    {
+        // 키가 틀렸을 때 6곡이 통째로 "건너뜀"으로만 보고돼 원인을 알 수 없었던 실사고가 있었다.
+        using var store = new LyricsStore(_dbPath);
+        var cache = new StoreTranslationCache(store);
+        var generator = Generator(store, cache, new BrokenTranslator());
+
+        store.Upsert(Entry("Kids", "MGMT", Plain), "pc", out _);
+
+        var outcome = await generator.TranslateAsync(LyricsCacheStore.MakeKey("Kids", "MGMT"), "KO");
+
+        Assert.Equal("failed", outcome.Status);
+        Assert.Contains("키를 확인", outcome.Detail);
+    }
+
+    [Fact]
+    public async Task 시작_전_찔러보기가_엔진_오류를_그대로_알린다()
+    {
+        using var store = new LyricsStore(_dbPath);
+        var cache = new StoreTranslationCache(store);
+
+        var broken = Generator(store, cache, new BrokenTranslator());
+        var why = await broken.ProbeAsync("KO");
+        Assert.Contains("401", why);
+
+        // 멀쩡하면 아무 말도 하지 않는다.
+        Assert.Null(await Generator(store, cache, new FakeTranslator()).ProbeAsync("KO"));
+    }
+
+    [Fact]
+    public async Task 정말_할_일이_없으면_건너뜀_그대로다()
+    {
+        using var store = new LyricsStore(_dbPath);
+        var cache = new StoreTranslationCache(store);
+        var generator = Generator(store, cache, new BrokenTranslator());
+
+        // 이미 전부 번역돼 있으면 보낼 것이 없다 — 엔진이 죽어 있어도 실패가 아니다.
+        store.Upsert(
+            Entry("Kids", "MGMT", Plain.Replace("hello\n", "hello\n[00:01.00][tr:ko]안녕\n")
+                                       .Replace("world\n", "world\n[00:05.00][tr:ko]세상\n")),
+            "pc", out _);
+
+        var outcome = await generator.TranslateAsync(LyricsCacheStore.MakeKey("Kids", "MGMT"), "KO");
+
+        Assert.Equal("skipped", outcome.Status);
     }
 
     // ---- 단가 ----
