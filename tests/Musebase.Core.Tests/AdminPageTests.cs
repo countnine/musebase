@@ -298,7 +298,7 @@ public class AdminPageTests
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
         Assert.Contains("엔진 미구성", html);
-        Assert.DoesNotContain($"{Routes.Base}/meanings/backfill", html);
+        Assert.DoesNotContain($"{Routes.Base}/jobs/new?kind=meaning", html);
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public class AdminPageTests
 
         var html = AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst);
 
-        Assert.Contains($"{Routes.Base}/meanings/backfill", html);
+        Assert.Contains($"{Routes.Base}/jobs/new?kind=meaning", html);
         Assert.Contains("의미 일괄 생성 (30곡)", html);
     }
 
@@ -323,7 +323,7 @@ public class AdminPageTests
             Meanings = new MeaningSummary(5, 1, 0, Pending: 0, Enabled: true),
         };
 
-        Assert.DoesNotContain($"{Routes.Base}/meanings/backfill",
+        Assert.DoesNotContain($"{Routes.Base}/jobs/new?kind=meaning",
             AdminPages.Dashboard(model, DateTimeOffset.UtcNow, Kst));
     }
 
@@ -789,6 +789,144 @@ public class AdminPageTests
         Assert.Null(MeaningEngineCard.Hint(""));
         Assert.Null(MeaningEngineCard.Hint(null));
     }
+
+    // ---- 일괄 작업 화면 ----
+
+    [Fact]
+    public void 잡이_도는_동안에만_자동_새로고침이_붙는다()
+    {
+        var running = JobState(BulkJobStatus.Running);
+        var done = JobState(BulkJobStatus.Done);
+
+        Assert.Contains("http-equiv=\"refresh\"", AdminPages.JobPage(running, "csrf", Kst));
+        // 끝난 뒤에도 새로고침이 남으면 아무도 안 보는 화면을 2초마다 계속 그린다.
+        Assert.DoesNotContain("http-equiv=\"refresh\"", AdminPages.JobPage(done, "csrf", Kst));
+        Assert.DoesNotContain("http-equiv=\"refresh\"", AdminPages.JobPage(null, "csrf", Kst));
+    }
+
+    [Fact]
+    public void 잡이_도는_동안에만_중지_버튼이_보인다()
+    {
+        Assert.Contains("/jobs/cancel", AdminPages.JobPage(JobState(BulkJobStatus.Running), "csrf", Kst));
+        Assert.DoesNotContain("/jobs/cancel", AdminPages.JobPage(JobState(BulkJobStatus.Done), "csrf", Kst));
+    }
+
+    [Fact]
+    public void 멈춘_잡은_사유를_화면에_적는다()
+    {
+        var html = AdminPages.JobPage(
+            JobState(BulkJobStatus.Stopped) with { Detail = "HTTP 402 · 잔액 부족" }, "csrf", Kst);
+
+        Assert.Contains("HTTP 402", html);
+        Assert.Contains("멈춤", html);
+    }
+
+    /// <summary>
+    /// 관리 화면은 스크립트 <b>하나의 해시만</b> 허용한다(`script-src 'sha256-…'`). BusyScript를
+    /// 고치면 이 값이 바뀌고, 그 사실을 모른 채 배포하면 제출 스피너가 조용히 죽는다 —
+    /// 해시는 자동으로 따라가지만 <b>바뀌었다는 것을 사람이 알아야</b> 하므로 값을 못 박는다.
+    /// (의도한 변경이면 이 기대값을 새 값으로 바꾸고, 관리 화면의 폼 제출을 직접 눌러 확인할 것.)
+    /// </summary>
+    [Fact]
+    public void 스크립트_CSP_해시는_BusyScript를_고칠_때만_바뀐다()
+    {
+        Assert.Equal("'sha256-x/QOLeu8wH8PKkb9psnX6qIgjfUmm28PaiDMfMQwV+k='", AdminHtml.ScriptCsp);
+    }
+
+    [Fact]
+    public void 실행_확인_화면은_모든_대상_범위를_보여_준다()
+    {
+        var html = AdminPages.JobConfirmPage(Plan(), "csrf");
+
+        foreach (var scope in BulkScope.Known)
+            Assert.Contains($"scope={scope}", html);
+        Assert.Contains("30곡", html);                 // 대상 곡 수
+        Assert.Contains("/jobs/start", html);
+    }
+
+    [Fact]
+    public void 대상이_없거나_엔진이_없으면_실행_버튼을_주지_않는다()
+    {
+        // 누를 수 없는 버튼을 그려 두면 사람이 눌러 보고 알림으로 거절당한다.
+        Assert.DoesNotContain("/jobs/start", AdminPages.JobConfirmPage(Plan() with { Targets = 0 }, "csrf"));
+        Assert.DoesNotContain("/jobs/start", AdminPages.JobConfirmPage(Plan() with { Enabled = false }, "csrf"));
+    }
+
+    [Fact]
+    public void 확인_화면은_추정과_상한을_함께_보여_준다()
+    {
+        var plan = Plan() with
+        {
+            Kind = BulkJobKind.Translation, Lang = "KO", UnitName = "자",
+            Units = 123_456, Budget = 130_000, Cost = "약 $2.47", Warning = "MyMemory는 줄마다 요청을 보냅니다",
+        };
+
+        var html = AdminPages.JobConfirmPage(plan, "csrf");
+
+        Assert.Contains("123,456자", html);
+        Assert.Contains("약 $2.47", html);
+        Assert.Contains("130000", html);               // 상한 입력칸의 기본값
+        Assert.Contains("MyMemory는 줄마다", html);
+    }
+
+    // ---- 번역 엔진 카드 ----
+
+    [Fact]
+    public void 번역_엔진_목록은_레지스트리를_따라간다()
+    {
+        // 코어에 엔진이 늘면 화면도 저절로 늘어야 한다(의미 카드처럼 손으로 적어 두지 않는다).
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with { TranslationEngine = Card() }, DateTimeOffset.UtcNow, Kst);
+
+        foreach (var descriptor in Musebase.Core.Translation.TranslatorRegistry.All)
+            Assert.Contains($"value=\"{descriptor.Id}\"", html);
+        Assert.Contains("value=\"none\"", html);
+    }
+
+    [Fact]
+    public void 번역_카드는_키를_끝_네_글자만_보여_준다()
+    {
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with { TranslationEngine = Card() }, DateTimeOffset.UtcNow, Kst);
+
+        Assert.DoesNotContain("super-secret", html);
+        Assert.Contains("…k123", html);
+    }
+
+    [Fact]
+    public void 일괄_작업에_위험한_엔진은_카드에_경고를_띄운다()
+    {
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with
+            {
+                TranslationEngine = Card() with { Engine = "mymemory", Warning = "줄마다 요청을 보냅니다" },
+            },
+            DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("줄마다 요청을 보냅니다", html);
+    }
+
+    private static TranslationEngineCard Card() => TranslationEngineCard.From(
+        new TranslationOptions(
+            Engine: "deepl", Lang: "KO", DeeplApiKey: "super-secret-k123", GoogleApiKey: null,
+            MyMemoryEmail: null, LibreEndpoint: null, LibreApiKey: null,
+            OpenRouterApiKey: null, OpenRouterModel: null,
+            BatchLimit: 30, DelayMs: 0, CharBudget: 50_000),
+        overridden: false, cacheRows: 12);
+
+    private static JobPlan Plan() => new(
+        BulkJobKind.Meaning, BulkScope.All, SkipExisting: true, Lang: null,
+        Targets: 30, Limit: 30, Units: 30, UnitName: "곡", Budget: 30,
+        Cost: null, Warning: null, Engine: "gemini / gemini-2.5-flash-lite", Enabled: true);
+
+    private static BulkJobState JobState(BulkJobStatus status) => new(
+        BulkJobKind.Meaning, status, "의미 일괄 생성 (3곡)",
+        Total: 3, Done: 1, Ok: 1, Skipped: 0, NoSource: 0, Failed: 0,
+        Units: 1, Budget: 3, UnitName: "곡",
+        CurrentLabel: status == BulkJobStatus.Running ? "아티스트 - 곡" : null,
+        Detail: null,
+        StartedAt: DateTimeOffset.Parse("2026-09-28T00:00:00Z"),
+        EndedAt: status == BulkJobStatus.Running ? null : DateTimeOffset.Parse("2026-09-28T00:01:00Z"));
 
     private static string SongPage(SongLinks? links = null, LoveState? love = null) =>
         AdminPages.SongPage(

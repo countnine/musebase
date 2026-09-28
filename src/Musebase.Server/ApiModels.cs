@@ -13,7 +13,11 @@ public sealed record LyricsEntry
     public string? Key { get; init; }
     public required string Title { get; init; }
     public required string Artist { get; init; }
-    /// <summary>확장 LRC 전문(번역 첨부 포함). 서버는 이 문자열을 변형하지 않고 그대로 보관한다.</summary>
+    /// <summary>
+    /// 확장 LRC 전문(번역 첨부 포함). 서버는 이 문자열을 변형하지 않고 그대로 보관한다 —
+    /// 예외는 관리자가 화면에서 시작한 서버 번역 잡뿐이고, 그때는 번역이 실제로 늘었고 형식이
+    /// 보존됐을 때만 다시 쓴다(<see cref="LyricsStore"/> 주석 참고).
+    /// </summary>
     public required string Lrc { get; init; }
     public string? Service { get; init; }
     /// <summary>"provider" 또는 "user"(사용자 편집본 — 자동 검색이 덮어쓰지 못한다).</summary>

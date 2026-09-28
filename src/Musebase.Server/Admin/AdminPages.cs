@@ -1,3 +1,4 @@
+using Musebase.Core.Translation;
 using static Musebase.Server.AdminHtml;
 
 namespace Musebase.Server;
@@ -138,15 +139,24 @@ public static class AdminPages
         var backfill = !m.Meanings.Enabled || m.Meanings.Pending == 0
             ? ""
             : $"""
-              <form method="post" action="{Routes.Base}/meanings/backfill" class="inline" data-busy>
-                <input type="hidden" name="csrf" value="{Esc(m.Csrf)}">
-                <button type="submit">의미 일괄 생성 ({m.Meanings.Pending}곡)</button>
-              </form>
-              <span class="meta">한 번에 처리할 곡 수는 <code>MUSEBASE_MEANING_BACKFILL_LIMIT</code>로 정합니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.</span>
+              <p><a class="chip on" href="{Routes.Base}/jobs/new?kind=meaning&scope=all&skip=1">
+              의미 일괄 생성 ({m.Meanings.Pending}곡) →</a></p>
+              <span class="meta">다음 화면에서 <b>대상 범위</b>(좋아요한 곡·조회 미스 상위 등)와 곡 수를 고릅니다{(m.MeaningEngine is { Engine: not "none" } e ? $" · 모델 {e.Engine} / {Esc(e.Model)}" : "")}.
+              생성은 뒤에서 돌고 진행 상황은 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면에서 봅니다(중간에 멈출 수 있습니다).</span>
               """;
 
+        // 번역 엔진이 켜져 있을 때만 진입점을 보여 준다 — 누를 수 없는 링크를 두면 사람이
+        // 눌러 보고 거절 알림을 받는다.
+        var translateJob = m.TranslationEngine is { Enabled: true } t
+            ? $"""
+              <p><a class="chip on" href="{Routes.Base}/jobs/new?kind=translate&scope=loved-any&skip=1&lang={Url(t.Lang)}">
+              가사 일괄 번역 ({Esc(t.Lang)}) →</a></p>
+              """
+            : "";
+
         var lastfm = LastFmCard(m.LastFm, m.Csrf) + SpotifyCard(m.Spotify, m.Csrf);
-        var engine = MeaningEngineCardHtml(m.MeaningEngine, m.Csrf);
+        var engine = MeaningEngineCardHtml(m.MeaningEngine, m.Csrf)
+                   + TranslationEngineCardHtml(m.TranslationEngine, m.Csrf);
 
         return Layout("대시보드", $"""
             {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
@@ -156,6 +166,7 @@ public static class AdminPages
             같은 곡을 반복 재생해도 조회 수는 늘지 않습니다(로컬 캐시 → 서버 → 제공자 검색 순).</p>
             {engine}
             {backfill}
+            {translateJob}
             {lastfm}
 
             <h2>최근 올라온 가사{More(Routes.Base + "/search")}</h2>{uploads}
@@ -182,6 +193,154 @@ public static class AdminPages
             </details>
             """, "home");
     }
+
+    /// <summary>
+    /// 일괄 작업 진행 화면.
+    ///
+    /// <b>새로고침은 실행 중일 때만 단다</b> — 끝나면 <c>&lt;meta http-equiv="refresh"&gt;</c>가
+    /// 사라져 폴링이 저절로 멎는다. 스크립트로 폴링하지 않는 이유는 CSP다(관리 화면은 스크립트
+    /// 하나의 해시만 허용한다 — <see cref="AdminHtml.ScriptCsp"/>).
+    ///
+    /// 이 화면은 <b>DB를 건드리지 않는다</b>. 2초마다 도는 자리라 여기서 조회를 하면
+    /// 잡이 앱의 가사 조회를 막는 원인이 정확히 여기가 된다.
+    /// </summary>
+    public static string JobPage(BulkJobState? state, string csrf, TimeZoneInfo tz, string? notice = null)
+    {
+        var head = notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>";
+
+        if (state is null)
+            return Layout("일괄 작업", $"""
+                {head}
+                <h2>일괄 작업</h2>
+                <p class="meta">이 서버가 켜진 뒤로 실행한 작업이 없습니다.
+                <a href="{Routes.Base}">대시보드</a>에서 시작하세요.</p>
+                """, "jobs");
+
+        var tiles = string.Concat(
+            Tile("진행", $"{state.Done} / {state.Total}곡", $"{state.Percent}% · {FormatElapsed(state.Elapsed)}"),
+            Tile("성공", $"{state.Ok}곡", $"건너뜀 {state.Skipped} · 자료 없음 {state.NoSource} · 실패 {state.Failed}"),
+            Tile($"쓴 {state.UnitName}", $"{state.Units:N0}{state.UnitName}",
+                state.Budget > 0 ? $"상한 {state.Budget:N0}{state.UnitName}" : "상한 없음"),
+            Tile("시작", AdminTime.ToLocal(state.StartedAt.ToString("o"), tz),
+                state.EndedAt is null ? "실행 중" : $"끝 {AdminTime.ToLocal(state.EndedAt.Value.ToString("o"), tz)}"));
+
+        // 진행 중에는 "지금 무엇을" 이 가장 궁금하고, 끝난 뒤에는 "왜 멈췄나"가 가장 궁금하다.
+        var line = state.IsRunning
+            ? $"<p class=\"meta\">지금: {Esc(state.CurrentLabel ?? "준비 중")}</p>"
+            : $"<p class=\"{StatusClass(state.Status)}\">{Esc(StatusText(state.Status))}"
+              + $"{(state.Detail is null ? "" : " — " + Esc(state.Detail))}</p>";
+
+        var cancel = !state.IsRunning ? "" : $"""
+            <form method="post" action="{Routes.Base}/jobs/cancel" class="inline" data-busy
+                  data-confirm="지금 처리 중인 곡이 끝나면 멈춥니다. 중지할까요?">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit" class="danger">중지</button>
+            </form>
+            <p class="meta">중지는 <b>곡 경계</b>에서 먹습니다 — 처리 중인 곡을 반쯤 저장하지 않기 위해서입니다.
+            이미 끝난 곡은 그대로 남고, 남은 곡은 손대지 않습니다.</p>
+            """;
+
+        return Layout($"일괄 작업 — {StatusText(state.Status)}", $"""
+            {head}
+            <h2>{Esc(state.Label)}</h2>
+            <div class="bar" style="margin:.5rem 0 1rem"><span style="width:{state.Percent}%"></span></div>
+            <div class="tiles">{tiles}</div>
+            {line}
+            {cancel}
+            <p class="meta">서버를 재시작하면 이 기록은 사라집니다 — 이미 저장된 결과는 남습니다
+            (잡은 곡 단위로 저장합니다). 요약 한 줄은 <code>journalctl -u musebase-server</code>에도 남습니다.</p>
+            """, "jobs", state.IsRunning ? """<meta http-equiv="refresh" content="2">""" : null);
+    }
+
+    /// <summary>
+    /// 일괄 작업 실행 확인 화면. <b>GET이다</b> — 아무것도 바꾸지 않으므로 새로고침해도 안전하고,
+    /// 범위를 바꿔 보는 것이 그냥 링크를 누르는 일이 된다(POST였다면 매번 CSRF·PRG가 붙는다).
+    ///
+    /// 여기서 보여 주는 것은 <b>실행 전에 알아야 하는 것</b>뿐이다: 대상 곡 수, 추정 사용량,
+    /// 예상 비용, 그리고 이번 실행에서 넘지 않을 상한. 상한은 곡 <b>경계</b>에서만 걸린다.
+    /// </summary>
+    public static string JobConfirmPage(JobPlan plan, string csrf)
+    {
+        var kindName = plan.Kind == BulkJobKind.Meaning ? "의미 일괄 생성" : "가사 일괄 번역";
+
+        var scopes = string.Concat(BulkScope.Known.Select(s =>
+        {
+            var on = s == plan.Scope ? " on" : "";
+            return $"<a class=\"chip{on}\" href=\"{Routes.Base}/jobs/new?{plan.Query(scope: s)}\">"
+                 + $"{Esc(BulkScope.Label(s))}</a>";
+        }));
+
+        var skipLabel = plan.Kind == BulkJobKind.Meaning
+            ? "의미를 한 번도 만들어 보지 않은 곡만"
+            : $"{Esc(plan.Lang ?? "")} 번역이 없는 곡만";
+        var skip = $"""
+            <div class="chips">
+              <a class="chip{(plan.SkipExisting ? " on" : "")}"
+                 href="{Routes.Base}/jobs/new?{plan.Query(skip: true)}">{skipLabel}</a>
+              <a class="chip{(plan.SkipExisting ? "" : " on")}"
+                 href="{Routes.Base}/jobs/new?{plan.Query(skip: false)}">범위의 곡 전부(다시 만들기)</a>
+            </div>
+            """;
+
+        var estimate = string.Concat(
+            Tile("대상", $"{plan.Targets}곡", plan.Targets > plan.Limit ? $"이번에는 앞의 {plan.Limit}곡" : "전부 이번에"),
+            Tile($"추정 {plan.UnitName}", $"{plan.Units:N0}{plan.UnitName}",
+                plan.Kind == BulkJobKind.Translation ? "캐시에 이미 있는 줄은 뺐습니다" : "곡당 1회 호출"),
+            Tile("예상 비용", plan.Cost ?? "환산 불가", plan.Cost is null ? "무료 한도 또는 토큰 과금" : "요청 기준 추정"),
+            Tile("엔진", plan.Engine, plan.Enabled ? "구성됨" : "구성되지 않음"));
+
+        var run = !plan.Enabled
+            ? $"<p class=\"bad\">엔진이 구성되지 않았습니다 — <a href=\"{Routes.Base}\">대시보드</a>에서 먼저 설정하세요.</p>"
+            : plan.Targets == 0
+            ? "<p class=\"meta\">이 범위에 처리할 곡이 없습니다 — 위에서 범위를 바꿔 보세요.</p>"
+            : $"""
+              <form method="post" action="{Routes.Base}/jobs/start" class="inline" data-busy
+                    data-confirm="{Esc($"{Math.Min(plan.Targets, plan.Limit)}곡 · 약 {plan.Units:N0}{plan.UnitName}를 처리합니다. 시작할까요?")}">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <input type="hidden" name="kind" value="{(plan.Kind == BulkJobKind.Meaning ? "meaning" : "translate")}">
+                <input type="hidden" name="scope" value="{Esc(plan.Scope)}">
+                <input type="hidden" name="skip" value="{(plan.SkipExisting ? "1" : "0")}">
+                <input type="hidden" name="lang" value="{Esc(plan.Lang ?? "")}">
+                <label class="meta">곡 수 <input type="number" name="limit" value="{plan.Limit}" min="1" max="5000"></label>
+                <label class="meta">{Esc(plan.UnitName)} 상한 <input type="number" name="budget" value="{plan.Budget}" min="1"></label>
+                <button type="submit">실행</button>
+              </form>
+              <p class="meta">상한에 닿으면 <b>곡 경계에서</b> 멈추고 남은 곡은 손대지 않습니다 —
+              처리 중에 끊으면 반쯤 만들어진 결과가 저장됩니다.</p>
+              """;
+
+        return Layout($"{kindName} — 실행 확인", $"""
+            <h2>{Esc(kindName)}</h2>
+            <p class="meta">대상 범위</p>
+            <div class="chips">{scopes}</div>
+            <p class="meta">건너뛰기</p>
+            {skip}
+            <div class="tiles">{estimate}</div>
+            {(plan.Warning is null ? "" : $"<p class=\"warn\">{Esc(plan.Warning)}</p>")}
+            {run}
+            <p class="meta">진행 상황은 <a href="{Routes.Base}/jobs">일괄 작업</a> 화면에서 봅니다.
+            한 번에 하나만 돌 수 있습니다.</p>
+            """, "jobs");
+    }
+
+    private static string StatusText(BulkJobStatus status) => status switch
+    {
+        BulkJobStatus.Running => "실행 중",
+        BulkJobStatus.Done => "완료",
+        BulkJobStatus.Cancelled => "중지됨",
+        _ => "멈춤",
+    };
+
+    private static string StatusClass(BulkJobStatus status) => status switch
+    {
+        BulkJobStatus.Done => "ok",
+        BulkJobStatus.Stopped => "bad",
+        _ => "warn",
+    };
+
+    private static string FormatElapsed(TimeSpan t) =>
+        t.TotalHours >= 1 ? $"{(int)t.TotalHours}시간 {t.Minutes}분" :
+        t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}분 {t.Seconds}초" : $"{(int)t.TotalSeconds}초";
 
     /// <summary>한 페이지에 보여 주는 곡 수. 30건이면 화면 하나에 들어와 스크롤 없이 훑을 수 있다.</summary>
     public const int PageSize = 30;
@@ -250,6 +409,7 @@ public static class AdminPages
             (LyricsStore.MeaningFilterNoSource, "자료 없음"),
             (LyricsStore.MeaningFilterFailed, "생성 실패"),
             (LyricsStore.FilterLoved, "♥ 즐겨찾기"),
+            (LyricsStore.FilterSpotify, "Spotify 좋아요"),
         ];
 
         var chips = all
@@ -488,6 +648,77 @@ public static class AdminPages
     }
 
     /// <summary>
+    /// 번역 엔진 카드. 엔진 목록은 <b>레지스트리에서 만든다</b> — 코어에 엔진이 늘면 이 화면도
+    /// 저절로 따라 늘어야 한다(의미 카드는 두 개를 손으로 적어 두었다).
+    ///
+    /// 키 입력칸은 그 엔진이 키를 쓸 때만 그린다. 엔진마다 값을 따로 보관하므로 엔진을 바꿔도
+    /// 넣어 둔 키는 남는다(설정 화면의 규칙과 같다).
+    /// </summary>
+    private static string TranslationEngineCardHtml(TranslationEngineCard? card, string csrf)
+    {
+        if (card is null) return "";
+
+        var state = card.Enabled
+            ? $"지금 번역 엔진: <b>{Esc(card.EngineName)}</b>"
+              + (card.Model.Length == 0 ? "" : $" / <b>{Esc(card.Model)}</b>")
+              + $" → <b>{Esc(card.Lang)}</b>"
+            : "번역 엔진이 <b>꺼져 있습니다</b> — 엔진을 고르고 그 엔진의 키를 넣으세요.";
+
+        var origin = card.Overridden
+            ? $"""
+              <form method="post" action="{Routes.Base}/translate/engine/reset" class="inline" style="display:inline-flex"
+                    data-confirm="화면에서 저장한 번역 설정을 지우고 server.env 값으로 되돌립니다. 계속할까요?">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">환경변수로 되돌리기</button>
+              </form>
+              """
+            : "<span class=\"meta\">지금은 <code>server.env</code> 값을 그대로 쓰고 있습니다.</span>";
+
+        // 엔진 목록은 레지스트리 순서 그대로 + 맨 끝에 "끔".
+        var engines = string.Concat(TranslatorRegistry.All.Select(d =>
+            $"<option value=\"{Esc(d.Id)}\"{(d.Id == card.Engine ? " selected" : "")}>{Esc(d.DisplayName)}</option>"))
+            + $"<option value=\"{TranslatorRegistry.None}\""
+            + $"{(card.Engine == TranslatorRegistry.None ? " selected" : "")}>끔</option>";
+
+        string Key(string name, string label, string? hint)
+        {
+            var placeholder = hint is null ? label : $"{label} {hint} — 비워 두면 유지";
+            return $"<input type=\"password\" name=\"{name}\" autocomplete=\"off\" "
+                 + $"placeholder=\"{Esc(placeholder)}\">";
+        }
+
+        return $"""
+            <h2>가사 번역 엔진</h2>
+            <p>{state}</p>
+            <form method="post" action="{Routes.Base}/translate/engine" class="inline" data-busy>
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <select name="engine">{engines}</select>
+              <input type="text" name="lang" value="{Esc(card.Lang)}" style="min-width:6rem"
+                     placeholder="대상 언어 (KO)">
+              {Key("deeplKey", "DeepL 키", card.DeeplKeyHint)}
+              {Key("googleKey", "Google 키", card.GoogleKeyHint)}
+              {Key("openRouterKey", "OpenRouter 키", card.OpenRouterKeyHint)}
+              <input type="text" name="openRouterModel" value="{Esc(card.OpenRouterModel ?? "")}"
+                     placeholder="OpenRouter 모델 (예: google/gemini-2.5-flash)">
+              <input type="text" name="libreEndpoint" value="{Esc(card.LibreEndpoint ?? "")}"
+                     placeholder="LibreTranslate 주소 (자체 호스팅)">
+              {Key("libreKey", "LibreTranslate 키", card.LibreKeyHint)}
+              <input type="text" name="myMemoryEmail" value="{Esc(card.MyMemoryEmail ?? "")}"
+                     placeholder="MyMemory 이메일 (선택)">
+              <button type="submit">저장</button>
+            </form>
+            <p class="meta">저장하면 <b>다음 실행부터 바로</b> 적용됩니다(재시작 불필요). {origin}<br>
+            대상 언어는 DeepL식 대문자로 적습니다(<code>KO</code>·<code>EN-US</code>·<code>ZH-HANT</code>) —
+            기기와 같은 표기여야 같은 줄을 두 번 번역하지 않습니다 · 캐시에 쌓인 줄 {card.CacheRows:N0}개<br>
+            ⚠ 여기 넣은 API 키는 <b>DB에 평문으로</b> 저장되어 백업 파일에도 들어갑니다 —
+            그게 싫으면 <code>server.env</code>만 쓰세요.<br>
+            ⚠ 번역 캐시는 <b>엔진을 구분하지 않습니다</b> — 엔진을 바꿔도 이미 캐시된 줄은
+            옛 엔진의 번역이 그대로 쓰입니다(비용에는 이득, 품질 비교에는 방해).</p>
+            {(card.Warning is null ? "" : $"<p class=\"warn\">{Esc(card.Warning)}</p>")}
+            """;
+    }
+
+    /// <summary>
     /// Spotify 카드. Last.fm과 달리 <b>콜백 주소를 앱 대시보드에 미리 등록</b>해야 하므로,
     /// 넣어야 할 값을 그대로 띄워 복사하게 한다 — 이걸 안 적어 두면 승인이 조용히 실패한다.
     /// </summary>
@@ -509,11 +740,19 @@ public static class AdminPages
                 """;
 
         return $"""
-            <form method="post" action="{Routes.Base}/spotify/disconnect" class="inline" style="margin:0">
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <button type="submit">Spotify 연결 해제</button>
-              <span class="meta">연결됨: <b>{Esc(link.User)}</b></span>
-            </form>
+            <div class="actions">
+              <form method="post" action="{Routes.Base}/spotify/sync" class="inline" style="margin:0" data-busy>
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">Spotify 좋아요 동기화</button>
+              </form>
+              <form method="post" action="{Routes.Base}/spotify/disconnect" class="inline" style="margin:0">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">Spotify 연결 해제</button>
+              </form>
+            </div>
+            <p class="meta">연결됨: <b>{Esc(link.User)}</b> ·
+            <b>동기화</b>는 라이브러리를 통째로 받아 곡 목록의 Spotify 칩에 반영하고
+            트랙 URI도 함께 채웁니다(저쪽에서 뺀 곡도 함께 내립니다).</p>
             {register}
             """;
     }

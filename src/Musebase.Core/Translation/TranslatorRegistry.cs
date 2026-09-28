@@ -9,7 +9,17 @@ public sealed record TranslatorOptions(
     string? GoogleApiKey = null,
     string? OpenRouterApiKey = null,
     /// <summary>비우면 <see cref="OpenRouterTranslator.DefaultModel"/>. 예: <c>anthropic/claude-opus-5</c>.</summary>
-    string? OpenRouterModel = null);
+    string? OpenRouterModel = null,
+    /// <summary>
+    /// 번역기가 쓸 <see cref="HttpClient"/>. 비우면 각 번역기의 기본값
+    /// (<c>LyricsHttp.Client</c> — 타임아웃 15초)이라 <b>앱 동작은 그대로다</b>.
+    ///
+    /// 서버의 일괄 번역처럼 <b>오래 걸려도 되는</b> 호출에는 여유 있는 클라이언트를 넣는다.
+    /// 15초는 재생 중 화면 응답성에 맞춰 둔 값이라 LLM 번역의 예산(OpenRouter는 기본 60초,
+    /// 최대 180초)을 몰래 자른다 — 의미 생성 쪽이 같은 이유로 전용 클라이언트를 따로 둔다
+    /// (<c>MeaningHttp</c>).
+    /// </summary>
+    HttpClient? Http = null);
 
 /// <summary>
 /// 번역 엔진 설명자. 키 필요 여부·무료 여부(UI/기본값 판단)와 생성 팩토리.
@@ -53,23 +63,25 @@ public static class TranslatorRegistry
     public static IReadOnlyList<TranslatorDescriptor> All { get; } = new TranslatorDescriptor[]
     {
         new("mymemory", "MyMemory (무료·무키)", RequiresApiKey: false, IsFree: true,
-            o => new MyMemoryTranslator(o.MyMemoryEmail),
+            o => new MyMemoryTranslator(o.MyMemoryEmail, o.Http),
             ShortName: "MyMemory"),
         new("libretranslate", "LibreTranslate (자체호스팅/키)", RequiresApiKey: false, IsFree: true,
             o => new LibreTranslateTranslator(
                 string.IsNullOrWhiteSpace(o.LibreEndpoint) ? DefaultLibreEndpoint : o.LibreEndpoint!,
-                o.LibreApiKey),
+                o.LibreApiKey, o.Http),
             AcceptsApiKey: true, ShortName: "LibreTranslate"),
         new("deepl", "DeepL", RequiresApiKey: true, IsFree: false,
-            o => string.IsNullOrWhiteSpace(o.DeeplApiKey) ? null : new DeeplTranslator(o.DeeplApiKey!),
+            o => string.IsNullOrWhiteSpace(o.DeeplApiKey) ? null : new DeeplTranslator(o.DeeplApiKey!, o.Http),
             ShortName: "DeepL"),
         new("google", "Google Cloud Translation (API 키)", RequiresApiKey: true, IsFree: false,
-            o => string.IsNullOrWhiteSpace(o.GoogleApiKey) ? null : new GoogleTranslateTranslator(o.GoogleApiKey!),
+            o => string.IsNullOrWhiteSpace(o.GoogleApiKey)
+                ? null
+                : new GoogleTranslateTranslator(o.GoogleApiKey!, o.Http),
             ShortName: "Google Cloud Translation"),
         new("openrouter", "OpenRouter (LLM·모델 자유 선택)", RequiresApiKey: true, IsFree: false,
             o => string.IsNullOrWhiteSpace(o.OpenRouterApiKey)
                 ? null
-                : new OpenRouterTranslator(o.OpenRouterApiKey!, o.OpenRouterModel),
+                : new OpenRouterTranslator(o.OpenRouterApiKey!, o.OpenRouterModel, o.Http),
             ShortName: "OpenRouter"),
     };
 

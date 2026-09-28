@@ -97,4 +97,41 @@ public class RegistryTests
         Assert.Null(TranslatorRegistry.Build("none", new TranslatorOptions()));
         Assert.Null(TranslatorRegistry.Build("", new TranslatorOptions()));
     }
+
+    /// <summary>
+    /// 레지스트리로 만든 번역기는 <b>넘겨준 HttpClient를 쓴다</b>. 서버의 일괄 번역은 오래 걸려도
+    /// 되는 호출이라 여유 있는 클라이언트를 넣는데, 이 통로가 막히면 기본값(15초)이 LLM 번역의
+    /// 예산을 몰래 자른다(의미 생성 쪽에서 이미 겪은 함정이다).
+    /// </summary>
+    [Fact]
+    public async Task TranslatorBuild_UsesInjectedHttpClient()
+    {
+        var calls = 0;
+        var http = new HttpClient(new CountingHandler(() => calls++));
+
+        var google = TranslatorRegistry.Build("google", new TranslatorOptions(GoogleApiKey: "AIza-test", Http: http));
+        await google!.TranslateAsync(["hello"], "KO");
+
+        Assert.Equal(1, calls);
+    }
+
+    /// <summary>넘기지 않으면 기본 클라이언트를 쓴다 — 앱 동작이 그대로여야 한다.</summary>
+    [Fact]
+    public void TranslatorOptions_HttpIsOptional() =>
+        Assert.Null(new TranslatorOptions(GoogleApiKey: "k").Http);
+
+    private sealed class CountingHandler(Action onCall) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            onCall();
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"data":{"translations":[{"translatedText":"안녕"}]}}""",
+                    System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
+    }
 }

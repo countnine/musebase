@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Musebase.Core.Translation;
 
 namespace Musebase.Server;
 
@@ -83,11 +84,16 @@ public static class AdminEndpoints
 
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
-        MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras)
+        MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras,
+        BulkJobRunner jobs, TranslationSettings translationSettings, TranslationGenerator translation)
     {
+        // 단가표는 부팅 때 한 번 읽는다(값이 바뀌면 재시작 — 코드 배포보다는 싸다).
+        var prices = TranslationPricing.FromEnvironment();
+
         // 구성은 화면에서 바뀔 수 있으므로 값을 붙잡지 않고 쓸 때마다 읽는다.
         MeaningOptions MeaningOptionsNow() => meaningSettings.Current;
         Musebase.Core.Meaning.SongMeaningService MeaningsNow() => meaningSettings.Service;
+        TranslationOptions TranslationNow() => translationSettings.Current;
 
         // 스크립트는 딱 하나(제출 스피너)뿐이라 'unsafe-inline' 대신 **그 해시만** 허용한다 —
         // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
@@ -487,6 +493,39 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString($"Spotify에 연결했습니다: {session.Value.User}")}");
         });
 
+        // Last.fm 동기화와 같은 규칙 — 사람이 누를 때만, 실패하면 아무것도 바꾸지 않는다.
+        app.MapPost(Routes.Base + "/spotify/sync", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var refresh = store.GetSetting(SpotifyAccount.RefreshSetting);
+            if (string.IsNullOrWhiteSpace(refresh))
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Spotify 계정이 연결돼 있지 않습니다.")}");
+
+            // 실패 이유(상태 코드)는 반드시 남긴다 — /me/tracks의 limit=50은 아직 실측 전이고,
+            // 2026-02에 /search의 상한이 50→10으로 내려간 전례가 있다.
+            string? failure = null;
+            var saved = await spotify.GetSavedTracksAsync(refresh!, onFailure: why => failure = why);
+
+            if (saved is null)
+            {
+                app.Logger.LogWarning("Spotify 라이브러리 동기화 실패: {Why}", failure ?? "사유 없음");
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    $"Spotify 좋아요 목록을 받지 못했습니다({failure ?? "사유 없음"}) — 아무것도 바꾸지 않았습니다.")}");
+            }
+
+            var (matched, total) = store.SyncSpotifySaved(saved);
+            app.Logger.LogInformation("Spotify 라이브러리 동기화: {Total}곡 중 {Matched}곡 매칭", total, matched);
+
+            var notice = $"Spotify 좋아요 {total}곡 중 {matched}곡을 서버 곡과 맞췄습니다"
+                + (matched < total ? " (나머지는 아직 서버에 없는 곡입니다)." : ".")
+                + (failure is null ? "" : $" ⚠ {failure}");
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+        });
+
         app.MapPost(Routes.Base + "/spotify/disconnect", async (HttpRequest req) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
@@ -598,53 +637,246 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("server.env 설정으로 되돌렸습니다.")}");
         });
 
-        app.MapPost(Routes.Base + "/meanings/backfill", async (HttpRequest req) =>
+        // 번역 엔진·키·대상 언어. 의미 엔진과 같은 규칙(빈 칸은 유지, 저장 즉시 반영).
+        app.MapPost(Routes.Base + "/translate/engine", async (HttpRequest req) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
             var form = await req.ReadFormAsync();
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
+            translationSettings.Save(
+                engine: form["engine"].ToString(),
+                lang: form["lang"].ToString(),
+                deeplKey: form["deeplKey"].ToString(),
+                googleKey: form["googleKey"].ToString(),
+                myMemoryEmail: form["myMemoryEmail"].ToString(),
+                libreEndpoint: form["libreEndpoint"].ToString(),
+                libreKey: form["libreKey"].ToString(),
+                openRouterKey: form["openRouterKey"].ToString(),
+                openRouterModel: form["openRouterModel"].ToString());
+
+            var now = TranslationNow();
+            var notice = now.Engine == TranslatorRegistry.None
+                ? "가사 번역을 껐습니다."
+                : now.IsEnabled
+                    ? $"{now.EngineName}{(now.EffectiveModel.Length == 0 ? "" : $" / {now.EffectiveModel}")}"
+                      + $" → {now.Lang} 로 바꿨습니다."
+                    : $"{now.EngineName}를 골랐지만 API 키가 없어 아직 꺼져 있습니다.";
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+        });
+
+        app.MapPost(Routes.Base + "/translate/engine/reset", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            translationSettings.Reset();
+            return SeeOther(
+                $"{Routes.Base}?notice={Uri.EscapeDataString("번역 설정을 server.env 값으로 되돌렸습니다.")}");
+        });
+
+        // ---- 일괄 작업 ----
+
+        // 실행 확인 화면. GET이라 새로고침·범위 바꿔 보기가 안전하다(아무것도 바꾸지 않는다).
+        app.MapGet(Routes.Base + "/jobs/new", (HttpRequest req, string? kind, string? scope, string? skip,
+            string? lang, int? limit) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+
+            var jobKind = kind == "translate" ? BulkJobKind.Translation : BulkJobKind.Meaning;
+
+            // 주소로 들어온 값을 그대로 믿지 않는다(목록 뷰 화이트리스트와 같은 관례).
+            var useScope = BulkScope.IsKnown(scope) ? scope! : BulkScope.All;
+            var skipExisting = skip != "0";
+            var translate = TranslationNow();
+            var useLang = TranslationOptions.NormalizeLang(
+                string.IsNullOrWhiteSpace(lang) ? translate.Lang : lang);
+
+            var useLimit = Math.Clamp(
+                limit ?? (jobKind == BulkJobKind.Translation
+                    ? translate.BatchLimit : MeaningOptionsNow().BackfillLimit),
+                1, 5000);
+
+            JobPlan plan;
+            if (jobKind == BulkJobKind.Translation)
+            {
+                // 건너뛰기를 끄면 "이미 번역된 곡도 다시" — 그때는 언어 조건을 걸지 않는다.
+                var without = skipExisting ? useLang : null;
+                var count = store.BulkCount(useScope, without, false, MissesSince());
+
+                // 추정은 실제로 보낼 문자 수다 — 캐시로 채워질 줄은 실행 루프와 **같은 함수**로 뺀다.
+                var sample = store.BulkTargets(useScope, without, false, useLimit, MissesSince());
+                var chars = sample.Sum(t => translation.Estimate(t.Key, useLang));
+
+                plan = new JobPlan(
+                    Kind: jobKind, Scope: useScope, SkipExisting: skipExisting, Lang: useLang,
+                    Targets: count, Limit: useLimit,
+                    Units: chars, UnitName: "자",
+                    Budget: Math.Max(chars, 1),
+                    Cost: TranslationPricing.Estimate(translate.Engine, chars, prices),
+                    Warning: translate.Warning,
+                    Engine: translate.EngineName
+                        + (translate.EffectiveModel.Length == 0 ? "" : $" / {translate.EffectiveModel}"),
+                    Enabled: translate.IsEnabled);
+            }
+            else
+            {
+                var count = store.BulkCount(useScope, null, skipExisting, MissesSince());
+                var engine = MeaningOptionsNow();
+                plan = new JobPlan(
+                    Kind: jobKind, Scope: useScope, SkipExisting: skipExisting, Lang: null,
+                    Targets: count, Limit: useLimit,
+                    Units: Math.Min(count, useLimit), UnitName: "곡",
+                    Budget: Math.Max(Math.Min(count, useLimit), 1),
+                    Cost: null, Warning: null,
+                    Engine: engine.Engine is Musebase.Core.Meaning.MeaningWriterRegistry.None
+                        ? "끔" : $"{engine.Engine} / {engine.EffectiveModel}",
+                    Enabled: MeaningsNow().IsEnabled);
+            }
+
+            return Html(AdminPages.JobConfirmPage(plan, AdminAuth.Csrf(options.Token, Cookie(req) ?? "")));
+        });
+
+        app.MapPost(Routes.Base + "/jobs/start", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            if (form["kind"].ToString() == "translate") return StartTranslation(form);
+
             if (!MeaningsNow().IsEnabled)
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
 
-            var targets = store.SongsWithoutMeaning(MeaningOptionsNow().BackfillLimit);
-            int ok = 0, none = 0, failed = 0, done = 0;
-            MeaningOutcome? stoppedBy = null;
-            foreach (var (key, title, artist) in targets)
-            {
-                var delay = MeaningOptionsNow().BackfillDelayMs;
-                if (done > 0 && delay > 0) await Task.Delay(delay);
+            var scope = form["scope"].ToString();
+            if (!BulkScope.IsKnown(scope)) scope = BulkScope.All;
+            var skipExisting = form["skip"].ToString() != "0";
+            var limit = int.TryParse(form["limit"].ToString(), out var l)
+                ? Math.Clamp(l, 1, 5000) : MeaningOptionsNow().BackfillLimit;
+            var budget = long.TryParse(form["budget"].ToString(), out var b) ? Math.Max(b, 1) : limit;
 
-                var outcome = await GenerateStatusAsync(key, title, artist);
-                var status = outcome.Status;
+            var targets = store.BulkTargets(scope, null, skipExisting, limit, MissesSince());
 
-                // 일시적 실패(쿼타·네트워크)나 설정 문제(잔액·키·모델)면 여기서 멈춘다. 계속 돌아 봐야
-                // 남은 곡까지 같은 벽에 부딪힐 뿐이고, 중단해도 아무것도 망가지지 않는다 — 저장을 안
-                // 했으므로 다음에 다시 누르면 이 곡부터 그대로 이어진다.
-                if (Musebase.Core.Meaning.SongMeaning.IsUnsaved(status)) { stoppedBy = outcome; break; }
+            // 곡 사이 간격은 시작할 때 한 번 읽는다 — 잡이 도는 동안 구성이 바뀌어도
+            // 한 잡 안에서 규칙이 갈리지 않게 한다("쓸 때마다 읽는다"의 의도적 예외).
+            var delayMs = MeaningOptionsNow().BackfillDelayMs;
 
-                done++;
-                // 자료 부족은 "자료 없음"과 같은 칸에 센다 — 둘 다 "의미를 만들지 못함"이다.
-                if (status == Musebase.Core.Meaning.SongMeaning.Ok) ok++;
-                else if (status is Musebase.Core.Meaning.SongMeaning.NoSource
-                                or Musebase.Core.Meaning.SongMeaning.Insufficient) none++;
-                else failed++;
-            }
+            var started = jobs.TryStart(
+                BulkJobKind.Meaning,
+                $"의미 일괄 생성 — {BulkScope.Label(scope)} ({targets.Count}곡)", targets,
+                async (target, ct) =>
+                {
+                    var outcome = await GenerateStatusAsync(target.Key, target.Title, target.Artist);
 
-            var counts = $"생성 {ok} · 자료 없음 {none} · 실패 {failed}";
-            var summary = stoppedBy switch
-            {
-                null => $"{targets.Count}곡 처리 — {counts}",
-                { Status: Musebase.Core.Meaning.SongMeaning.Config } =>
-                    $"{done}곡 처리 후 중단 — {counts}. 엔진 설정 문제입니다({stoppedBy.Detail ?? "사유 없음"}). "
-                    + "결제 잔액·키·모델을 확인한 뒤 다시 눌러 주세요. 남은 곡은 손대지 않았습니다.",
-                _ =>
-                    $"{done}곡 처리 후 중단 — {counts}. 쿼타·네트워크 문제로 보입니다({stoppedBy.Detail ?? "사유 없음"}). "
-                    + "남은 곡은 손대지 않았으니 잠시 후 다시 눌러 주세요.",
-            };
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(summary)}");
+                    // 일시적 실패(쿼타·네트워크)나 설정 문제(잔액·키·모델)면 잡을 멈춘다. 계속 돌아 봐야
+                    // 남은 곡까지 같은 벽에 부딪힐 뿐이고, 멈춰도 아무것도 망가지지 않는다 — 저장을 안
+                    // 했으므로 다시 시작하면 이 곡부터 그대로 이어진다.
+                    if (Musebase.Core.Meaning.SongMeaning.IsUnsaved(outcome.Status))
+                        return new BulkStepResult(BulkStep.Stop, BackfillStopReason(outcome));
+
+                    return outcome.Status switch
+                    {
+                        Musebase.Core.Meaning.SongMeaning.Ok => new BulkStepResult(BulkStep.Ok, Units: 1),
+                        // 자료 부족은 "자료 없음"과 같은 칸에 센다 — 둘 다 "의미를 만들지 못함"이다.
+                        Musebase.Core.Meaning.SongMeaning.NoSource or
+                        Musebase.Core.Meaning.SongMeaning.Insufficient =>
+                            new BulkStepResult(BulkStep.NoSource, Units: 1),
+                        _ => new BulkStepResult(BulkStep.Failed, outcome.Detail, 1),
+                    };
+                },
+                delayMs: delayMs, budget: budget, unitName: "곡", out var refusal);
+
+            return started
+                ? SeeOther($"{Routes.Base}/jobs")
+                : SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(refusal!)}");
         });
+
+
+        app.MapGet(Routes.Base + "/jobs", (HttpRequest req, string? notice) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            return Html(AdminPages.JobPage(
+                jobs.Snapshot(), AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), options.TimeZone, notice));
+        });
+
+        app.MapPost(Routes.Base + "/jobs/cancel", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var notice = jobs.Cancel()
+                ? "중지를 걸었습니다 — 지금 처리 중인 곡이 끝나면 멈춥니다."
+                : "실행 중인 작업이 없습니다.";
+            return SeeOther($"{Routes.Base}/jobs?notice={Uri.EscapeDataString(notice)}");
+        });
+
+        // 가사 일괄 번역 시작. 의미 쪽과 갈라 두는 것은 단위(자 vs 곡)와 중단 규칙뿐이다.
+        IResult StartTranslation(IFormCollection form)
+        {
+            var now = TranslationNow();
+            if (!now.IsEnabled)
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    "번역 엔진이 구성되지 않았습니다 — 대시보드에서 엔진과 키를 넣으세요.")}");
+
+            var scope = form["scope"].ToString();
+            if (!BulkScope.IsKnown(scope)) scope = BulkScope.All;
+            var skipExisting = form["skip"].ToString() != "0";
+            var lang = TranslationOptions.NormalizeLang(
+                form["lang"].ToString() is { Length: > 0 } l ? l : now.Lang);
+            var limit = int.TryParse(form["limit"].ToString(), out var n)
+                ? Math.Clamp(n, 1, 5000) : now.BatchLimit;
+            var budget = long.TryParse(form["budget"].ToString(), out var b)
+                ? Math.Max(b, 1) : now.CharBudget;
+
+            var targets = store.BulkTargets(
+                scope, skipExisting ? lang : null, false, limit, MissesSince());
+
+            // 구성은 시작할 때 한 번만 읽는다 — 잡이 도는 중에 엔진을 바꾸면 한 잡 안에
+            // 두 엔진 결과가 섞인다("쓸 때마다 읽는다"의 의도적 예외).
+            var delayMs = now.DelayMs;
+
+            var started = jobs.TryStart(
+                BulkJobKind.Translation,
+                $"가사 일괄 번역({lang}) — {BulkScope.Label(scope)} ({targets.Count}곡)", targets,
+                async (target, ct) =>
+                {
+                    var outcome = await translation.TranslateAsync(target.Key, lang, ct);
+                    return outcome.Status switch
+                    {
+                        "ok" => new BulkStepResult(BulkStep.Ok, Units: outcome.Chars),
+                        // 할 일이 없었던 것(이미 있음)과 형식 때문에 건드리지 않은 것은 실패가 아니다.
+                        "skipped" or "lossy" or "unparsable" =>
+                            new BulkStepResult(BulkStep.Skipped, outcome.Detail),
+                        _ => new BulkStepResult(BulkStep.Failed, outcome.Detail, outcome.Chars),
+                    };
+                },
+                delayMs: delayMs, budget: budget, unitName: "자", out var refusal,
+                // 상한을 넘길 곡은 시작조차 하지 않는다 — 처리 중에 끊으면 반쯤 번역된 가사가 남는다.
+                estimate: t => translation.Estimate(t.Key, lang));
+
+            return started
+                ? SeeOther($"{Routes.Base}/jobs")
+                : SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(refusal!)}");
+        }
+
+        // "조회 미스 상위" 범위가 볼 기간. 대시보드의 미스 목록(7일)보다 넉넉하게 본다 —
+        // 일괄 작업은 "자주 듣는 곡"을 찾는 것이라 지난달에 두 번 튼 곡도 후보다.
+        static string MissesSince() =>
+            DateTimeOffset.UtcNow.AddDays(-30).ToString(LyricsStore.TimeFormat);
+
+        // 일괄 생성이 멈춘 이유 — "다시 눌러 봐야 소용없다"와 "잠시 후 다시"를 가르는 문장이다.
+        static string BackfillStopReason(MeaningOutcome outcome) =>
+            outcome.Status == Musebase.Core.Meaning.SongMeaning.Config
+                ? $"엔진 설정 문제로 멈췄습니다({outcome.Detail ?? "사유 없음"}). "
+                  + "결제 잔액·키·모델을 확인한 뒤 다시 시작하세요. 남은 곡은 손대지 않았습니다."
+                : $"쿼타·네트워크 문제로 보입니다({outcome.Detail ?? "사유 없음"}). "
+                  + "남은 곡은 손대지 않았으니 잠시 후 다시 시작하세요.";
 
         // 단건 생성 후 사람에게 보여 줄 한 줄.
         async Task<string> GenerateMeaningAsync(
@@ -701,7 +933,9 @@ public static class AdminEndpoints
                 // 쓸 수 없는 구성이면 null — 카드를 아예 그리지 않는다(Last.fm과 같은 규칙).
                 Spotify: spotify.CanConnect
                     ? new SpotifyLink(store.GetSetting(SpotifyAccount.UserSetting), SpotifyCallback(req))
-                    : null);
+                    : null,
+                TranslationEngine: TranslationEngineCard.From(
+                    TranslationNow(), translationSettings.Overridden, store.TranslationCacheRows()));
         }
 
         MeaningSummary MeaningSummaryOf()

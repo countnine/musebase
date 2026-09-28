@@ -80,7 +80,20 @@ var extras = new SongExtrasService(
     meaningSettings.Current.LastFmAccount(),
     meaningSettings.Current.SpotifyAccount());
 
-app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras);
+// 일괄 작업(의미 생성·가사 번역)은 HTTP 요청 밖에서 돈다 — 한 번에 하나만.
+var jobs = new BulkJobRunner(app.Services.GetRequiredService<ILogger<BulkJobRunner>>());
+
+// 가사 번역 — 의미 생성과 같은 방식(환경변수 위에 DB 덮어쓰기, 재시작 없이 반영).
+// 줄 단위 캐시는 가사 DB의 같은 커넥션을 쓴다(두 번째 커넥션은 SQLITE_BUSY로 조용히 샌다).
+var translationSettings = new TranslationSettings(
+    store, TranslationOptions.FromEnvironment(), new StoreTranslationCache(store));
+
+var translationGenerator = new TranslationGenerator(
+    store, translationSettings, new StoreTranslationCache(store),
+    app.Services.GetRequiredService<ILogger<TranslationGenerator>>());
+
+app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs,
+    translationSettings, translationGenerator);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>

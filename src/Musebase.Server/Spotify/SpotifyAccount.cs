@@ -8,6 +8,9 @@ namespace Musebase.Server;
 /// <summary>이 곡의 Spotify 상태 — 라이브러리에 담겨 있는가와 그 트랙의 URI.</summary>
 public sealed record SpotifyTrackState(bool Saved, string Uri);
 
+/// <summary>라이브러리("좋아요한 곡")에 담긴 트랙 하나.</summary>
+public sealed record SpotifySavedTrack(string Title, string Artist, string Uri);
+
 /// <summary>
 /// Spotify 라이브러리("좋아요한 곡")를 읽고 쓴다 — Last.fm 좋아요를 Spotify에도 함께 반영하려는 것.
 ///
@@ -122,6 +125,87 @@ public sealed class SpotifyAccount
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 라이브러리에 담긴 곡 전부(<c>GET /me/tracks</c>). 한 곡씩 <c>/me/library/contains</c>로 물으면
+    /// 목록 한 화면에 수백 번을 부르게 되므로 통째로 받아 DB에 적어 두고 화면은 DB만 본다
+    /// (<see cref="LastFmAccount.GetLovedTracksAsync"/>와 같은 구조다).
+    ///
+    /// 실패는 예외가 아니라 <c>null</c>이다 — 부분만 받아 저장하면 <b>못 받은 곡이 좋아요 해제로
+    /// 보인다</b>(동기화가 먼저 전부 0으로 내리기 때문). 그래서 도중에 실패하면 통째로 버린다.
+    ///
+    /// ⚠ <c>limit=50</c>은 아직 실측으로 확인하지 못했다 — 2026-02에 <c>/search</c>의 상한이
+    /// 50에서 10으로 내려간 전례가 있다. 그래서 실패하면 조용히 작은 값으로 내려가지 않고
+    /// <paramref name="onFailure"/>로 상태 코드를 그대로 알린다(조용한 강등은 원인을 감춘다).
+    /// </summary>
+    /// <param name="maxPages">한 번의 클릭이 무한정 돌지 않게 하는 상한(50곡 × 40 = 2000곡).</param>
+    public async Task<IReadOnlyList<SpotifySavedTrack>?> GetSavedTracksAsync(
+        string refresh, int maxPages = 40, Action<string>? onFailure = null, CancellationToken ct = default)
+    {
+        var access = await AccessAsync(refresh, ct).ConfigureAwait(false);
+        if (access is null)
+        {
+            onFailure?.Invoke("액세스 토큰을 받지 못했습니다(클라이언트 ID·시크릿과 연결 상태를 확인하세요).");
+            return null;
+        }
+
+        const int PageSize = 50;
+        var all = new List<SpotifySavedTrack>();
+
+        for (var page = 0; page < maxPages; page++)
+        {
+            var url = $"{ApiBase}/me/tracks?limit={PageSize}&offset={page * PageSize}";
+            var (status, body) = await SendRawAsync(HttpMethod.Get, url, access, ct).ConfigureAwait(false);
+            if (body is null)
+            {
+                onFailure?.Invoke(status == 0 ? "요청이 실패했습니다(네트워크·타임아웃)." : $"HTTP {status}");
+                return null;
+            }
+
+            int count;
+            try
+            {
+                using var document = JsonDocument.Parse(body);
+                if (!document.RootElement.TryGetProperty("items", out var items)
+                    || items.ValueKind != JsonValueKind.Array)
+                {
+                    onFailure?.Invoke("응답에 items가 없습니다 — API 형식이 바뀌었을 수 있습니다.");
+                    return null;
+                }
+
+                count = items.GetArrayLength();
+                foreach (var item in items.EnumerateArray()) Add(item, all);
+            }
+            catch (JsonException)
+            {
+                onFailure?.Invoke("응답을 해석하지 못했습니다.");
+                return null;
+            }
+
+            // 마지막 쪽은 요청한 수보다 적게 온다. 정확히 나누어떨어지면 다음 쪽이 비어 한 번 더 돈다.
+            if (count < PageSize) return all;
+        }
+
+        // 상한까지 다 돌았다 — 더 있을 수 있다는 사실을 삼키지 않는다.
+        onFailure?.Invoke($"{maxPages * PageSize}곡까지만 받았습니다 — 라이브러리가 더 크면 상한을 올려야 합니다.");
+        return all;
+
+        static void Add(JsonElement item, List<SpotifySavedTrack> into)
+        {
+            if (!item.TryGetProperty("track", out var track)) return;
+
+            var title = track.TryGetProperty("name", out var n) ? n.GetString() : null;
+            var uri = track.TryGetProperty("uri", out var u) ? u.GetString() : null;
+            var artist = track.TryGetProperty("artists", out var artists) && artists.ValueKind == JsonValueKind.Array
+                ? string.Join(", ", artists.EnumerateArray()
+                    .Select(a => a.TryGetProperty("name", out var an) ? an.GetString() : null)
+                    .Where(a => !string.IsNullOrWhiteSpace(a)))
+                : "";
+
+            if (!string.IsNullOrWhiteSpace(title) && uri is { Length: > 0 })
+                into.Add(new SpotifySavedTrack(title!, artist, uri));
         }
     }
 
@@ -277,7 +361,15 @@ public sealed class SpotifyAccount
     }
 
     /// <summary>요청 한 번. 성공이면 본문(없으면 빈 문자열), 실패면 null.</summary>
-    private async Task<string?> SendAsync(HttpMethod method, string url, string access, CancellationToken ct)
+    private async Task<string?> SendAsync(HttpMethod method, string url, string access, CancellationToken ct) =>
+        (await SendRawAsync(method, url, access, ct).ConfigureAwait(false)).Body;
+
+    /// <summary>
+    /// <see cref="SendAsync"/>와 같지만 <b>왜 실패했는지</b>도 돌려준다(상태 코드, 예외면 0).
+    /// 곡 상세의 조용한 강등과 달리, 일괄 동기화는 실패 이유를 사람에게 보여 줘야 한다.
+    /// </summary>
+    private async Task<(int Status, string? Body)> SendRawAsync(
+        HttpMethod method, string url, string access, CancellationToken ct)
     {
         try
         {
@@ -288,13 +380,14 @@ public sealed class SpotifyAccount
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access);
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            var status = (int)response.StatusCode;
+            if (!response.IsSuccessStatusCode) return (status, null);
 
-            return await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            return (status, await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
         }
         catch (Exception)
         {
-            return null; // 조용한 강등
+            return (0, null); // 조용한 강등
         }
     }
 }

@@ -69,12 +69,43 @@ public sealed record SpotifyState(bool Connected, bool Known, bool Saved)
 }
 
 /// <summary>
+/// 일괄 작업 확인 화면이 보여 줄 값 — <b>실행 전에</b> 무엇을 얼마나 쓰는지 사람이 보고 정한다.
+/// </summary>
+/// <param name="Targets">이 범위의 대상 곡 수(상한 적용 전).</param>
+/// <param name="Limit">이번에 돌릴 곡 수.</param>
+/// <param name="Units">추정 사용량(의미는 곡 수, 번역은 캐시 적중분을 뺀 문자 수).</param>
+/// <param name="Budget">상한 입력칸의 기본값.</param>
+/// <param name="Cost">예상 비용 문구. 환산할 수 없으면 null(무료 엔진·토큰 과금).</param>
+/// <param name="Warning">엔진에 대한 경고(있으면 화면에 상시 띄운다).</param>
+public sealed record JobPlan(
+    BulkJobKind Kind,
+    string Scope,
+    bool SkipExisting,
+    string? Lang,
+    int Targets,
+    int Limit,
+    long Units,
+    string UnitName,
+    long Budget,
+    string? Cost,
+    string? Warning,
+    string Engine,
+    bool Enabled)
+{
+    /// <summary>주소에 실어 보내는 현재 선택(범위를 바꿔도 나머지는 유지된다).</summary>
+    public string Query(string? scope = null, bool? skip = null) =>
+        $"kind={(Kind == BulkJobKind.Meaning ? "meaning" : "translate")}"
+        + $"&scope={scope ?? Scope}&skip={((skip ?? SkipExisting) ? "1" : "0")}"
+        + $"&lang={Lang ?? ""}&limit={Limit}";
+}
+
+/// <summary>
 /// 검색 화면 칩에 붙는 건수. <see cref="All"/>을 뺀 나머지는 서로 겹치지 않으므로 합이 전체를
-/// 넘지 않는다(<see cref="Loved"/>만 다른 축이라 예외다).
+/// 넘지 않는다(<see cref="Loved"/>·<see cref="Spotify"/>만 다른 축이라 예외다).
 /// </summary>
 /// <param name="Pending">한 번도 의미를 만들어 보지 않은 곡 — 일괄 생성이 실제로 처리할 대상.</param>
 public sealed record SongCounts(
-    int All, int Ok, int Pending, int Insufficient, int NoSource, int Failed, int Loved)
+    int All, int Ok, int Pending, int Insufficient, int NoSource, int Failed, int Loved, int Spotify = 0)
 {
     public int For(string? filter) => filter switch
     {
@@ -86,6 +117,7 @@ public sealed record SongCounts(
         LyricsStore.MeaningFilterNoSource => NoSource,
         LyricsStore.MeaningFilterFailed => Failed,
         LyricsStore.FilterLoved => Loved,
+        LyricsStore.FilterSpotify => Spotify,
         _ => All,
     };
 }
@@ -126,7 +158,9 @@ public sealed record DashboardModel(
     /// <summary>지금 쓰는 의미 생성 엔진·모델(카드에 표시 + 화면에서 변경).</summary>
     MeaningEngineCard? MeaningEngine = null,
     /// <summary>Spotify 연결 상태 — 쓸 수 없는 구성이면 <c>null</c>이라 카드를 안 그린다.</summary>
-    SpotifyLink? Spotify = null);
+    SpotifyLink? Spotify = null,
+    /// <summary>지금 쓰는 번역 엔진(카드에 표시 + 화면에서 변경).</summary>
+    TranslationEngineCard? TranslationEngine = null);
 
 /// <summary>대시보드의 Last.fm 카드 — 연결한 아이디(없으면 미연결).</summary>
 public sealed record LastFmLink(string? User);
@@ -158,6 +192,26 @@ public sealed record MeaningEngineCard(
         var k = (key ?? "").Trim();
         return k.Length == 0 ? null : k.Length <= 4 ? "…" : "…" + k[^4..];
     }
+}
+
+/// <summary>
+/// 번역 엔진 카드. 의미 엔진 카드와 같은 규칙(키는 끝 네 글자만, 빈 칸 저장은 유지)이지만
+/// 엔진 목록은 <b>레지스트리에서 만든다</b> — 코어에 엔진이 늘면 화면도 따라 늘어야 한다.
+/// </summary>
+/// <param name="Warning">일괄 작업에 쓸 때 미리 알려야 하는 것(없으면 null).</param>
+public sealed record TranslationEngineCard(
+    string Engine, string EngineName, string Model, string Lang, bool Enabled, bool Overridden,
+    string? DeeplKeyHint, string? GoogleKeyHint, string? MyMemoryEmail,
+    string? LibreEndpoint, string? LibreKeyHint,
+    string? OpenRouterKeyHint, string? OpenRouterModel,
+    string? Warning, int CacheRows)
+{
+    public static TranslationEngineCard From(TranslationOptions o, bool overridden, int cacheRows) => new(
+        o.Engine, o.EngineName, o.EffectiveModel, o.Lang, o.IsEnabled, overridden,
+        MeaningEngineCard.Hint(o.DeeplApiKey), MeaningEngineCard.Hint(o.GoogleApiKey), o.MyMemoryEmail,
+        o.LibreEndpoint, MeaningEngineCard.Hint(o.LibreApiKey),
+        MeaningEngineCard.Hint(o.OpenRouterApiKey), o.OpenRouterModel,
+        o.Warning, cacheRows);
 }
 
 
