@@ -193,6 +193,21 @@ public sealed class LyricsStore : IDisposable
             // Last.fm의 loved와 같은 규칙으로 쓴다(동기화가 먼저 전부 0으로 내린다).
             AddColumnIfMissing("song_links", "spotify_saved", "INTEGER");
             AddColumnIfMissing("song_links", "spotify_saved_at", "TEXT");
+
+            // 줄 단위 번역 캐시. 스키마는 클라이언트의 SqliteTranslationCache와 **글자 그대로 같게**
+            // 둔다(나중에 파일을 주고받거나 코어 캐시로 되돌려도 호환되도록).
+            // 코어 클래스를 그대로 쓰지 않는 이유는 커넥션이다 — 같은 파일에 두 번째 커넥션을 열면
+            // busy_timeout이 없는 지금 구성에서 쓰기 충돌이 SQLITE_BUSY로 조용히 실패하고,
+            // 캐시 쓰기 실패는 곧 다음 실행에서 같은 줄을 또 번역하는 돈으로 샌다.
+            Execute("""
+                CREATE TABLE IF NOT EXISTS translation_cache (
+                    text        TEXT NOT NULL,
+                    target_lang TEXT NOT NULL,
+                    translation TEXT NOT NULL,
+                    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (text, target_lang)
+                );
+                """);
             Execute("PRAGMA user_version = 10;");
         }
     }
@@ -1391,6 +1406,52 @@ public sealed class LyricsStore : IDisposable
             cmd.CommandText = $"{SongSelect} ORDER BY l.updated_at DESC LIMIT $limit;";
             cmd.Parameters.AddWithValue("$limit", limit);
             return ReadSongs(cmd);
+        }
+    }
+
+    // ---- 줄 단위 번역 캐시 ----
+
+    /// <summary>캐시된 번역(없으면 null). 키는 원문과 대상 언어 표기 그대로다 — 클라이언트와
+    /// 같은 표기(대문자 <c>KO</c>)로 넣어야 캐시가 갈리지 않는다.</summary>
+    public string? GetTranslation(string text, string targetLang)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "SELECT translation FROM translation_cache WHERE text = $t AND target_lang = $l;";
+            cmd.Parameters.AddWithValue("$t", text);
+            cmd.Parameters.AddWithValue("$l", targetLang);
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    /// <summary>번역 한 줄을 캐시에 넣는다(이미 있으면 덮어쓴다).</summary>
+    public void SetTranslation(string text, string targetLang, string translation)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "INSERT INTO translation_cache (text, target_lang, translation, created_at) "
+                + "VALUES ($t, $l, $v, $at) "
+                + "ON CONFLICT(text, target_lang) DO UPDATE SET translation = $v, created_at = $at;";
+            cmd.Parameters.AddWithValue("$t", text);
+            cmd.Parameters.AddWithValue("$l", targetLang);
+            cmd.Parameters.AddWithValue("$v", translation);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>캐시에 쌓인 줄 수(대시보드 표시용).</summary>
+    public int TranslationCacheRows()
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM translation_cache;";
+            return Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
         }
     }
 

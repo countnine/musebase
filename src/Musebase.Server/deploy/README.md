@@ -395,6 +395,41 @@ MUSEBASE_SPOTIFY_CLIENT_SECRET=...
   Spotify 라이브러리 쓰기 자격증명이 함께 들어간다. 지우려면 대시보드의 **[Spotify 연결 해제]**,
   또는 Spotify 계정 설정 > 앱에서 권한 자체를 회수한다.
 
+## 14. 가사 번역 (선택)
+
+서버가 직접 가사를 번역해 채운다. 그러면 기기마다 같은 곡을 각자 번역하지 않고, PC·폰이
+꺼져 있어도 서버가 미리 채워 둘 수 있다. **엔진을 고르지 않으면 통째로 꺼져 있고**
+(기본 `none`) 지금까지처럼 기기가 만든 번역을 저장·병합만 한다.
+
+엔진·키·대상 언어는 **관리 화면에서 바꾸는 쪽이 편하다**(대시보드의 "가사 번역 엔진" 카드 —
+저장하면 재시작 없이 다음 실행부터 적용된다). 환경변수는 그 바닥값이다.
+
+```
+MUSEBASE_TRANSLATE_ENGINE=deepl             # deepl | google | openrouter | libretranslate | mymemory | none(기본)
+MUSEBASE_TRANSLATE_LANG=KO                  # DeepL식 대문자 — 기기와 같은 표기여야 캐시가 갈리지 않는다
+MUSEBASE_DEEPL_API_KEY=...
+MUSEBASE_GOOGLE_TRANSLATE_KEY=...
+MUSEBASE_TRANSLATE_OPENROUTER_KEY=...       # 의미 생성 쪽 키와 별개다(같이 쓰려면 같은 값을 둘 다 넣는다)
+MUSEBASE_TRANSLATE_OPENROUTER_MODEL=google/gemini-2.5-flash
+MUSEBASE_LIBRETRANSLATE_ENDPOINT=https://내-인스턴스
+MUSEBASE_LIBRETRANSLATE_KEY=...
+MUSEBASE_MYMEMORY_EMAIL=...                 # 선택 — 무키 무료 엔진의 한도를 조금 늘려 준다
+MUSEBASE_TRANSLATE_BATCH_LIMIT=30           # 일괄 번역 1회 처리 곡 수(화면에서 바꿀 수 있다)
+MUSEBASE_TRANSLATE_DELAY_MS=0               # 곡 사이 간격
+MUSEBASE_TRANSLATE_CHAR_BUDGET=50000        # 확인 화면 "문자 상한" 입력칸의 바닥값
+```
+
+- **MyMemory를 일괄 작업에 쓰지 말 것.** 줄마다 요청을 하나씩, 간격 없이 보낸다(앱에서 한 곡을
+  번역하는 용도로 만든 엔진이다) — 무료 일일 한도를 곧바로 태운다. 한 곡 확인용으로만 쓴다.
+- **번역 캐시는 엔진을 구분하지 않는다**(`translation_cache`의 키는 원문 + 대상 언어). 엔진을
+  바꿔도 이미 캐시된 줄은 옛 엔진 번역이 그대로 쓰인다 — 비용에는 이득, 품질 비교에는 방해다.
+- **화면에 넣은 키는 DB에 평문으로 저장된다**(Last.fm 세션 키·Spotify 갱신 토큰과 같은 자리)
+  → 백업 파일에도 들어간다. 그게 싫으면 `server.env`만 쓰고 화면에는 넣지 않는다.
+- 비용은 미리 센다 — 실행 확인 화면이 **캐시 적중분을 뺀 문자 수**와 예상 비용을 보여 주고,
+  이번 실행의 상한을 받는다. 상한에 닿으면 **곡 경계에서** 멈추고 남은 곡은 손대지 않는다.
+- Google Cloud Translation으로 대량 작업을 돌리면 **무료 한도(월 50만 자) 알림이 울린다** —
+  임계값을 먼저 확인할 것.
+
 ## 업데이트
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에

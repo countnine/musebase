@@ -869,6 +869,51 @@ public class AdminPageTests
         Assert.Contains("MyMemory는 줄마다", html);
     }
 
+    // ---- 번역 엔진 카드 ----
+
+    [Fact]
+    public void 번역_엔진_목록은_레지스트리를_따라간다()
+    {
+        // 코어에 엔진이 늘면 화면도 저절로 늘어야 한다(의미 카드처럼 손으로 적어 두지 않는다).
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with { TranslationEngine = Card() }, DateTimeOffset.UtcNow, Kst);
+
+        foreach (var descriptor in Musebase.Core.Translation.TranslatorRegistry.All)
+            Assert.Contains($"value=\"{descriptor.Id}\"", html);
+        Assert.Contains("value=\"none\"", html);
+    }
+
+    [Fact]
+    public void 번역_카드는_키를_끝_네_글자만_보여_준다()
+    {
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with { TranslationEngine = Card() }, DateTimeOffset.UtcNow, Kst);
+
+        Assert.DoesNotContain("super-secret", html);
+        Assert.Contains("…k123", html);
+    }
+
+    [Fact]
+    public void 일괄_작업에_위험한_엔진은_카드에_경고를_띄운다()
+    {
+        var html = AdminPages.Dashboard(
+            EmptyDashboard() with
+            {
+                TranslationEngine = Card() with { Engine = "mymemory", Warning = "줄마다 요청을 보냅니다" },
+            },
+            DateTimeOffset.UtcNow, Kst);
+
+        Assert.Contains("줄마다 요청을 보냅니다", html);
+    }
+
+    private static TranslationEngineCard Card() => TranslationEngineCard.From(
+        new TranslationOptions(
+            Engine: "deepl", Lang: "KO", DeeplApiKey: "super-secret-k123", GoogleApiKey: null,
+            MyMemoryEmail: null, LibreEndpoint: null, LibreApiKey: null,
+            OpenRouterApiKey: null, OpenRouterModel: null,
+            BatchLimit: 30, DelayMs: 0, CharBudget: 50_000),
+        overridden: false, cacheRows: 12);
+
     private static JobPlan Plan() => new(
         BulkJobKind.Meaning, BulkScope.All, SkipExisting: true, Lang: null,
         Targets: 30, Limit: 30, Units: 30, UnitName: "곡", Budget: 30,

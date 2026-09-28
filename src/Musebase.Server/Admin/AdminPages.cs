@@ -1,3 +1,4 @@
+using Musebase.Core.Translation;
 using static Musebase.Server.AdminHtml;
 
 namespace Musebase.Server;
@@ -145,7 +146,8 @@ public static class AdminPages
               """;
 
         var lastfm = LastFmCard(m.LastFm, m.Csrf) + SpotifyCard(m.Spotify, m.Csrf);
-        var engine = MeaningEngineCardHtml(m.MeaningEngine, m.Csrf);
+        var engine = MeaningEngineCardHtml(m.MeaningEngine, m.Csrf)
+                   + TranslationEngineCardHtml(m.TranslationEngine, m.Csrf);
 
         return Layout("대시보드", $"""
             {(notice is null ? "" : $"<p class=\"ok\">{Esc(notice)}</p>")}
@@ -632,6 +634,77 @@ public static class AdminPages
             <p class="meta">저장하면 <b>다음 생성부터 바로</b> 적용됩니다(재시작 불필요). {origin}<br>
             ⚠ 여기 넣은 API 키는 <b>DB에 평문으로</b> 저장되어 백업 파일에도 들어갑니다 —
             그게 싫으면 화면에 넣지 말고 <code>server.env</code>만 쓰세요.</p>
+            """;
+    }
+
+    /// <summary>
+    /// 번역 엔진 카드. 엔진 목록은 <b>레지스트리에서 만든다</b> — 코어에 엔진이 늘면 이 화면도
+    /// 저절로 따라 늘어야 한다(의미 카드는 두 개를 손으로 적어 두었다).
+    ///
+    /// 키 입력칸은 그 엔진이 키를 쓸 때만 그린다. 엔진마다 값을 따로 보관하므로 엔진을 바꿔도
+    /// 넣어 둔 키는 남는다(설정 화면의 규칙과 같다).
+    /// </summary>
+    private static string TranslationEngineCardHtml(TranslationEngineCard? card, string csrf)
+    {
+        if (card is null) return "";
+
+        var state = card.Enabled
+            ? $"지금 번역 엔진: <b>{Esc(card.EngineName)}</b>"
+              + (card.Model.Length == 0 ? "" : $" / <b>{Esc(card.Model)}</b>")
+              + $" → <b>{Esc(card.Lang)}</b>"
+            : "번역 엔진이 <b>꺼져 있습니다</b> — 엔진을 고르고 그 엔진의 키를 넣으세요.";
+
+        var origin = card.Overridden
+            ? $"""
+              <form method="post" action="{Routes.Base}/translate/engine/reset" class="inline" style="display:inline-flex"
+                    data-confirm="화면에서 저장한 번역 설정을 지우고 server.env 값으로 되돌립니다. 계속할까요?">
+                <input type="hidden" name="csrf" value="{Esc(csrf)}">
+                <button type="submit">환경변수로 되돌리기</button>
+              </form>
+              """
+            : "<span class=\"meta\">지금은 <code>server.env</code> 값을 그대로 쓰고 있습니다.</span>";
+
+        // 엔진 목록은 레지스트리 순서 그대로 + 맨 끝에 "끔".
+        var engines = string.Concat(TranslatorRegistry.All.Select(d =>
+            $"<option value=\"{Esc(d.Id)}\"{(d.Id == card.Engine ? " selected" : "")}>{Esc(d.DisplayName)}</option>"))
+            + $"<option value=\"{TranslatorRegistry.None}\""
+            + $"{(card.Engine == TranslatorRegistry.None ? " selected" : "")}>끔</option>";
+
+        string Key(string name, string label, string? hint)
+        {
+            var placeholder = hint is null ? label : $"{label} {hint} — 비워 두면 유지";
+            return $"<input type=\"password\" name=\"{name}\" autocomplete=\"off\" "
+                 + $"placeholder=\"{Esc(placeholder)}\">";
+        }
+
+        return $"""
+            <h2>가사 번역 엔진</h2>
+            <p>{state}</p>
+            <form method="post" action="{Routes.Base}/translate/engine" class="inline" data-busy>
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <select name="engine">{engines}</select>
+              <input type="text" name="lang" value="{Esc(card.Lang)}" style="min-width:6rem"
+                     placeholder="대상 언어 (KO)">
+              {Key("deeplKey", "DeepL 키", card.DeeplKeyHint)}
+              {Key("googleKey", "Google 키", card.GoogleKeyHint)}
+              {Key("openRouterKey", "OpenRouter 키", card.OpenRouterKeyHint)}
+              <input type="text" name="openRouterModel" value="{Esc(card.OpenRouterModel ?? "")}"
+                     placeholder="OpenRouter 모델 (예: google/gemini-2.5-flash)">
+              <input type="text" name="libreEndpoint" value="{Esc(card.LibreEndpoint ?? "")}"
+                     placeholder="LibreTranslate 주소 (자체 호스팅)">
+              {Key("libreKey", "LibreTranslate 키", card.LibreKeyHint)}
+              <input type="text" name="myMemoryEmail" value="{Esc(card.MyMemoryEmail ?? "")}"
+                     placeholder="MyMemory 이메일 (선택)">
+              <button type="submit">저장</button>
+            </form>
+            <p class="meta">저장하면 <b>다음 실행부터 바로</b> 적용됩니다(재시작 불필요). {origin}<br>
+            대상 언어는 DeepL식 대문자로 적습니다(<code>KO</code>·<code>EN-US</code>·<code>ZH-HANT</code>) —
+            기기와 같은 표기여야 같은 줄을 두 번 번역하지 않습니다 · 캐시에 쌓인 줄 {card.CacheRows:N0}개<br>
+            ⚠ 여기 넣은 API 키는 <b>DB에 평문으로</b> 저장되어 백업 파일에도 들어갑니다 —
+            그게 싫으면 <code>server.env</code>만 쓰세요.<br>
+            ⚠ 번역 캐시는 <b>엔진을 구분하지 않습니다</b> — 엔진을 바꿔도 이미 캐시된 줄은
+            옛 엔진의 번역이 그대로 쓰입니다(비용에는 이득, 품질 비교에는 방해).</p>
+            {(card.Warning is null ? "" : $"<p class=\"warn\">{Esc(card.Warning)}</p>")}
             """;
     }
 

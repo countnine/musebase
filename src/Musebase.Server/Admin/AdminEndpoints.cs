@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Musebase.Core.Translation;
 
 namespace Musebase.Server;
 
@@ -84,11 +85,12 @@ public static class AdminEndpoints
     public static void MapAdmin(
         this WebApplication app, LyricsStore store, AdminOptions options,
         MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras,
-        BulkJobRunner jobs)
+        BulkJobRunner jobs, TranslationSettings translationSettings)
     {
         // 구성은 화면에서 바뀔 수 있으므로 값을 붙잡지 않고 쓸 때마다 읽는다.
         MeaningOptions MeaningOptionsNow() => meaningSettings.Current;
         Musebase.Core.Meaning.SongMeaningService MeaningsNow() => meaningSettings.Service;
+        TranslationOptions TranslationNow() => translationSettings.Current;
 
         // 스크립트는 딱 하나(제출 스피너)뿐이라 'unsafe-inline' 대신 **그 해시만** 허용한다 —
         // 다른 스크립트는 여전히 한 줄도 실행되지 않는다(AdminHtml.BusyScript 참고).
@@ -632,6 +634,47 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("server.env 설정으로 되돌렸습니다.")}");
         });
 
+        // 번역 엔진·키·대상 언어. 의미 엔진과 같은 규칙(빈 칸은 유지, 저장 즉시 반영).
+        app.MapPost(Routes.Base + "/translate/engine", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            translationSettings.Save(
+                engine: form["engine"].ToString(),
+                lang: form["lang"].ToString(),
+                deeplKey: form["deeplKey"].ToString(),
+                googleKey: form["googleKey"].ToString(),
+                myMemoryEmail: form["myMemoryEmail"].ToString(),
+                libreEndpoint: form["libreEndpoint"].ToString(),
+                libreKey: form["libreKey"].ToString(),
+                openRouterKey: form["openRouterKey"].ToString(),
+                openRouterModel: form["openRouterModel"].ToString());
+
+            var now = TranslationNow();
+            var notice = now.Engine == TranslatorRegistry.None
+                ? "가사 번역을 껐습니다."
+                : now.IsEnabled
+                    ? $"{now.EngineName}{(now.EffectiveModel.Length == 0 ? "" : $" / {now.EffectiveModel}")}"
+                      + $" → {now.Lang} 로 바꿨습니다."
+                    : $"{now.EngineName}를 골랐지만 API 키가 없어 아직 꺼져 있습니다.";
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+        });
+
+        app.MapPost(Routes.Base + "/translate/engine/reset", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            translationSettings.Reset();
+            return SeeOther(
+                $"{Routes.Base}?notice={Uri.EscapeDataString("번역 설정을 server.env 값으로 되돌렸습니다.")}");
+        });
+
         // ---- 일괄 작업 ----
 
         // 실행 확인 화면. GET이라 새로고침·범위 바꿔 보기가 안전하다(아무것도 바꾸지 않는다).
@@ -809,7 +852,9 @@ public static class AdminEndpoints
                 // 쓸 수 없는 구성이면 null — 카드를 아예 그리지 않는다(Last.fm과 같은 규칙).
                 Spotify: spotify.CanConnect
                     ? new SpotifyLink(store.GetSetting(SpotifyAccount.UserSetting), SpotifyCallback(req))
-                    : null);
+                    : null,
+                TranslationEngine: TranslationEngineCard.From(
+                    TranslationNow(), translationSettings.Overridden, store.TranslationCacheRows()));
         }
 
         MeaningSummary MeaningSummaryOf()
