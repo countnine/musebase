@@ -869,6 +869,41 @@ public class AdminPageTests
         Assert.Contains("MyMemory는 줄마다", html);
     }
 
+    // ---- 외부 승인에서 돌아온 결과 화면 ----
+
+    [Fact]
+    public void 연결_결과_화면에는_로그인_폼이_없다()
+    {
+        // 관리자 쿠키가 SameSite=Strict라 외부에서 곧장 돌아오는 이동에는 실리지 않는다 —
+        // 그래서 결과를 대시보드로 넘기면 "로그인했는데 또 로그인하라"는 화면이 됐다.
+        var html = AdminPages.ExternalResult("Spotify에 연결했습니다: 제이", ok: true);
+
+        Assert.DoesNotContain($"{Routes.Base}/login", html);
+        Assert.DoesNotContain("name=\"password\"", html);
+        Assert.Contains("Spotify에 연결했습니다: 제이", html);
+    }
+
+    [Fact]
+    public void 연결_결과_화면은_대시보드로_스스로_넘어간다()
+    {
+        var html = AdminPages.ExternalResult("연결하지 못했습니다 — HTTP 400", ok: false);
+
+        // 우리 페이지에서 시작된 이동이라 그때는 세션 쿠키가 실린다.
+        Assert.Contains("http-equiv=\"refresh\"", html);
+        Assert.Contains($"url={Routes.Base}?notice=", html);
+        Assert.Contains("HTTP 400", html);      // 이유를 삼키지 않는다
+        Assert.Contains("class=\"bad\"", html);
+    }
+
+    [Fact]
+    public void 연결_결과_메시지도_이스케이프된다()
+    {
+        var html = AdminPages.ExternalResult("<script>alert(1)</script>", ok: false);
+
+        Assert.DoesNotContain("<script>alert", html);
+        Assert.Contains("&lt;script&gt;", html);
+    }
+
     // ---- 번역 엔진 카드 ----
 
     [Fact]

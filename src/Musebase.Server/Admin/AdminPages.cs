@@ -195,6 +195,30 @@ public static class AdminPages
     }
 
     /// <summary>
+    /// 외부 계정 승인(Last.fm·Spotify)에서 돌아왔을 때 보여 주는 <b>중간 한 칸</b>.
+    ///
+    /// <b>왜 곧바로 대시보드로 보내지 않는가.</b> 관리자 쿠키는 <c>SameSite=Strict</c>라
+    /// 외부 사이트에서 시작된 이동에는 실리지 않는다 — 콜백에서 쿠키를 다시 구워 줘도
+    /// <b>그 직후의 리다이렉트까지가 같은 크로스사이트 이동</b>이라 쿠키가 빠진 채 도착하고,
+    /// 결과 화면 아래에 로그인 폼이 붙어 "로그인했는데 또 로그인하라"는 화면이 됐다.
+    /// 우리 페이지를 한 번 거치면 그다음 이동은 same-site라 쿠키가 정상으로 실린다.
+    ///
+    /// 그래서 이 화면은 <b>결과만 보여 주고 곧바로 대시보드로 넘긴다</b>(meta refresh —
+    /// 스크립트를 쓰면 CSP 해시가 바뀐다). 넘어간 대시보드에도 같은 문구가 알림으로 다시 뜬다.
+    /// </summary>
+    public static string ExternalResult(string message, bool ok)
+    {
+        var target = $"{Routes.Base}?notice={Url(message)}";
+
+        return Layout(ok ? "연결됨" : "연결 실패", $"""
+            <h2>{(ok ? "연결됐습니다" : "연결하지 못했습니다")}</h2>
+            <p class="{(ok ? "ok" : "bad")}">{Esc(message)}</p>
+            <p class="meta">잠시 후 대시보드로 돌아갑니다 —
+            바로 가려면 <a href="{Esc(target)}">여기</a>를 누르세요.</p>
+            """, null, $"""<meta http-equiv="refresh" content="2;url={Esc(target)}">""");
+    }
+
+    /// <summary>
     /// 일괄 작업 진행 화면.
     ///
     /// <b>새로고침은 실행 중일 때만 단다</b> — 끝나면 <c>&lt;meta http-equiv="refresh"&gt;</c>가

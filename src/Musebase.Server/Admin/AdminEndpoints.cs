@@ -400,22 +400,22 @@ public static class AdminEndpoints
             res.Cookies.Delete(StateCookie, new CookieOptions { Path = Routes.Base + "/lastfm" });
 
             if (string.IsNullOrEmpty(nonce))
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("연결 요청이 만료됐습니다 — 다시 눌러 주세요.")}");
+                return Html(AdminPages.ExternalResult("연결 요청이 만료됐습니다 — 다시 눌러 주세요.", ok: false));
 
             // Spotify 콜백과 같은 이유로 세션을 다시 구워 준다 — 논스가 있다는 것이 곧
             // 로그인한 관리자가 시작한 흐름이라는 증거다(관리자 쿠키는 Strict라 여기 실리지 않는다).
             SetCookie(res);
 
             if (string.IsNullOrWhiteSpace(token))
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("Last.fm이 승인을 거절했습니다.")}");
+                return Html(AdminPages.ExternalResult("Last.fm이 승인을 거절했습니다.", ok: false));
 
             var session = await lastfm.ExchangeTokenAsync(token!);
             if (session is null)
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("세션 키를 받지 못했습니다(토큰은 1회용입니다 — 다시 시도하세요).")}");
+                return Html(AdminPages.ExternalResult("세션 키를 받지 못했습니다(토큰은 1회용입니다 — 다시 시도하세요).", ok: false));
 
             store.SetSetting(LastFmAccount.SessionSetting, session.Value.Session);
             store.SetSetting(LastFmAccount.UserSetting, session.Value.User);
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString($"Last.fm에 연결했습니다: {session.Value.User}")}");
+            return Html(AdminPages.ExternalResult($"Last.fm에 연결했습니다: {session.Value.User}", ok: true));
         });
 
         // 좋아요 목록을 통째로 받아 DB에 적어 둔다. 목록 화면의 즐겨찾기 칩이 이 값을 본다 —
@@ -490,7 +490,7 @@ public static class AdminEndpoints
             {
                 app.Logger.LogWarning("Spotify 연결 실패: state 논스가 없거나 맞지 않습니다(쿠키 {Has})",
                     nonce is null ? "없음" : "있음");
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("연결 요청이 만료됐거나 맞지 않습니다 — 다시 눌러 주세요.")}");
+                return Html(AdminPages.ExternalResult("연결 요청이 만료됐거나 맞지 않습니다 — 다시 눌러 주세요.", ok: false));
             }
 
             // 논스가 맞았다 = **로그인한 관리자가 시작한 흐름**이다(논스는 로그인 뒤에만 발급된다).
@@ -501,8 +501,8 @@ public static class AdminEndpoints
             if (!string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(code))
             {
                 app.Logger.LogWarning("Spotify 연결 실패: 승인 거절 {Error}", error ?? "(코드 없음)");
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
-                    $"Spotify가 승인을 거절했습니다({error ?? "코드 없음"}).")}");
+                return Html(AdminPages.ExternalResult(
+                    $"Spotify가 승인을 거절했습니다({error ?? "코드 없음"}).", ok: false));
             }
 
             string? why = null;
@@ -510,8 +510,8 @@ public static class AdminEndpoints
             if (session is null)
             {
                 app.Logger.LogWarning("Spotify 연결 실패: {Why}", why ?? "사유 없음");
-                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
-                    $"Spotify 토큰을 받지 못했습니다 — {why ?? "사유 없음"}")}");
+                return Html(AdminPages.ExternalResult(
+                    $"Spotify 토큰을 받지 못했습니다 — {why ?? "사유 없음"}", ok: false));
             }
 
             store.SetSetting(SpotifyAccount.RefreshSetting, session.Value.Refresh);
@@ -520,8 +520,8 @@ public static class AdminEndpoints
 
             // 이름만 못 읽은 경우도 연결은 성공이다 — 그 사실을 숨기지 않는다.
             var suffix = why is null ? "" : $" ⚠ {why}";
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
-                $"Spotify에 연결했습니다: {session.Value.User}{suffix}")}");
+            return Html(AdminPages.ExternalResult(
+                $"Spotify에 연결했습니다: {session.Value.User}{suffix}", ok: true));
         });
 
         // Last.fm 동기화와 같은 규칙 — 사람이 누를 때만, 실패하면 아무것도 바꾸지 않는다.
