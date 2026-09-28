@@ -434,6 +434,13 @@ MUSEBASE_TRANSLATE_CHAR_BUDGET=50000        # 확인 화면 "문자 상한" 입�
 
 3~4단계를 반복하면 된다(`systemctl restart musebase-server`). DB는 `/var/lib/musebase`에
 따로 있으므로 배포로 지워지지 않는다. 스키마는 `PRAGMA user_version`으로 자동 이행된다
-(현재 9 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`,
-8에서 `song_links`에 `loved`·`loved_at`, 9에서 `spotify_uri`·`spotify_at` 컬럼 추가).
+(현재 10 = `lyrics` + `lookups` + `meanings` + `ad_titles` + `song_links` + `app_settings`
++ `translation_cache`, 8에서 `song_links`에 `loved`·`loved_at`, 9에서 `spotify_uri`·`spotify_at`,
+10에서 `spotify_saved`·`spotify_saved_at` 컬럼과 `translation_cache` 테이블 추가).
 컬럼·테이블 추가뿐이라 **구 버전 바이너리로 롤백해도 안전하다.**
+
+되돌릴 것에 대비해 덮어쓰기 전에 지금 실행 파일을 남겨 둔다(`install.sh`는 이것을 만들지 않는다):
+
+```bash
+sudo cp /opt/musebase/Musebase.Server /opt/musebase/Musebase.Server.prev
+```
