@@ -97,10 +97,17 @@ public sealed class TranslationGenerator(
         {
             try
             {
-                var probe = await translator.TranslateAsync(["hello"], targetLang, ct).ConfigureAwait(false);
-                results.Add(probe.Count > 0 && probe[0] is { Length: > 0 }
-                    ? new ProbeResult(engineId, true, null)
-                    : new ProbeResult(engineId, false, "빈 응답(키·대상 언어를 확인하세요)"));
+                // 두 줄을 보낸다. 한 줄짜리는 대표성이 없다 — LLM은 1줄 입력에 `[["안녕"]]`처럼
+                // 중첩 배열을 돌려주는 일이 있어(실측) 멀쩡한 엔진이 죽은 것으로 보인다.
+                var probe = await translator
+                    .TranslateAsync(["hello", "goodbye"], targetLang, ct).ConfigureAwait(false);
+
+                // **예외가 없으면 살아 있는 것이다.** 키가 틀리면 이제 상태 코드를 실은 예외가
+                // 올라오므로(비2xx를 삼키지 않는다), 여기서 빈 결과는 "엔진이 죽었다"가 아니라
+                // "이 입력에서 줄 계약을 못 지켰다"는 뜻이다 — 그걸로 작업을 막으면 안 된다.
+                var filled = probe.Any(p => p is { Length: > 0 });
+                results.Add(new ProbeResult(engineId, true,
+                    filled ? null : "응답은 왔지만 줄 수를 지키지 않았습니다(모델을 확인하세요)"));
             }
             catch (OperationCanceledException)
             {
