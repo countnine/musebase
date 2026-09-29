@@ -71,6 +71,37 @@ public sealed class TranslationGenerator(
         return chars;
     }
 
+    /// <summary>
+    /// 엔진이 실제로 대답하는지 <b>시작 전에</b> 한 번 찔러 본다. 정상이면 null, 아니면 사람에게
+    /// 보여 줄 이유.
+    ///
+    /// <see cref="LyricsTranslationService"/>는 실패를 조용히 삼켜 "바뀐 줄 0"으로 돌려준다
+    /// (재생 중에 오류창을 띄우지 않으려는 규칙이다). 그대로 두면 키가 틀렸을 때 일괄 작업이
+    /// <b>"건너뜀 N곡"</b>으로만 끝나 원인을 알 길이 없다 — 실제로 Google 키 자리에 다른 자격증명이
+    /// 들어가 6곡이 통째로 조용히 건너뛰어졌다. 그래서 여기서만 번역기를 직접 부른다.
+    /// </summary>
+    public async Task<string?> ProbeAsync(string targetLang, CancellationToken ct = default)
+    {
+        if (settings.Translator is not { } translator) return "번역 엔진이 구성되지 않았습니다.";
+
+        try
+        {
+            var probe = await translator.TranslateAsync(["hello"], targetLang, ct).ConfigureAwait(false);
+            return probe.Count > 0 && probe[0] is { Length: > 0 }
+                ? null
+                : "번역기가 빈 응답을 돌려줬습니다(키·대상 언어를 확인하세요).";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            // HttpRequestException은 상태 코드를 메시지에 담는다("… 401 (Unauthorized).").
+            return e.Message;
+        }
+    }
+
     /// <summary>한 곡을 번역해 저장한다. 같은 곡·같은 언어 요청이 겹치면 결과를 함께 받는다.</summary>
     public Task<TranslationOutcome> TranslateAsync(string key, string targetLang, CancellationToken ct = default)
     {
@@ -95,7 +126,13 @@ public sealed class TranslationGenerator(
             .ConfigureAwait(false);
 
         // 아무것도 늘지 않았으면 손대지 않는다 — 원본을 재직렬화할 이유가 없다.
-        if (changed == 0) return new TranslationOutcome("skipped", 0, 0);
+        // 단 **보낼 것이 있었는데도** 0이면 그것은 "할 일이 없었다"가 아니라 번역기가 실패한 것이다
+        // (서비스가 실패를 조용히 삼킨다). 그 둘을 같은 칸에 세면 키가 틀려도 "건너뜀"으로만 보인다.
+        if (changed == 0)
+            return expected > 0
+                ? new TranslationOutcome("failed", 0, 0,
+                    "번역기가 한 줄도 돌려주지 않았습니다 — 엔진과 키를 확인하세요")
+                : new TranslationOutcome("skipped", 0, 0);
 
         var rewritten = lyrics.ToString();
         var before = LyricsFacts.From(entry.Lrc);

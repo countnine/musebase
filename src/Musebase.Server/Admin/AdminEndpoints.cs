@@ -778,7 +778,7 @@ public static class AdminEndpoints
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
-            if (form["kind"].ToString() == "translate") return StartTranslation(form);
+            if (form["kind"].ToString() == "translate") return await StartTranslation(form);
 
             if (!MeaningsNow().IsEnabled)
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("의미 엔진이 구성되지 않았습니다.")}");
@@ -848,7 +848,7 @@ public static class AdminEndpoints
         });
 
         // 가사 일괄 번역 시작. 의미 쪽과 갈라 두는 것은 단위(자 vs 곡)와 중단 규칙뿐이다.
-        IResult StartTranslation(IFormCollection form)
+        async Task<IResult> StartTranslation(IFormCollection form)
         {
             var now = TranslationNow();
             if (!now.IsEnabled)
@@ -864,6 +864,15 @@ public static class AdminEndpoints
                 ? Math.Clamp(n, 1, 5000) : now.BatchLimit;
             var budget = long.TryParse(form["budget"].ToString(), out var b)
                 ? Math.Max(b, 1) : now.CharBudget;
+
+            // 시작 전에 엔진을 한 번 찔러 본다 — 키가 틀리면 곡마다 조용히 건너뛰어 끝나기 때문에
+            // (서비스가 실패를 삼킨다) 여기서 막고 이유를 그대로 보여 주는 편이 훨씬 싸다.
+            if (await translation.ProbeAsync(lang) is { } probeFailed)
+            {
+                app.Logger.LogWarning("번역 일괄 작업을 시작하지 못했습니다: {Why}", probeFailed);
+                return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                    $"번역 엔진이 응답하지 않아 시작하지 않았습니다 — {probeFailed}")}");
+            }
 
             var targets = store.BulkTargets(
                 scope, skipExisting ? lang : null, false, limit, MissesSince());
