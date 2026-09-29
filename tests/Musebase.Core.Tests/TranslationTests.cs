@@ -208,4 +208,93 @@ public class CompositeTranslatorTests
         Assert.Equal(["deepl:a"], result);
         Assert.Equal(0, secondary.CallCount);
     }
+
+    /// <summary>줄 일부만 돌려주는 번역기 — LLM이 묶음을 버릴 때 실제로 이렇게 나온다.</summary>
+    private sealed class PartialTranslator(params int[] fillIndexes) : ITranslator
+    {
+        public List<string> Received { get; } = [];
+
+        public Task<IReadOnlyList<string?>> TranslateAsync(
+            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default)
+        {
+            Received.AddRange(texts);
+            return Task.FromResult<IReadOnlyList<string?>>(
+                texts.Select((t, i) => fillIndexes.Contains(i) ? $"ok:{t}" : null).ToList());
+        }
+    }
+
+    /// <summary>
+    /// 부분 실패의 핵심 규칙 — <b>못 채운 줄만</b> 다음 엔진으로 간다. 이미 채운 줄까지 넘기면
+    /// 같은 문자를 두 번 과금하고, 반대로 안 넘기면 구멍이 남는다.
+    /// </summary>
+    [Fact]
+    public async Task 부분_실패는_미채운_줄만_다음_엔진으로_넘긴다()
+    {
+        var primary = new PartialTranslator(0, 2);        // a와 c만 채운다
+        var secondary = new PartialTranslator(0, 1);      // 넘어온 것은 전부 채운다
+        var composite = new CompositeTranslator([("deepl", primary), ("google", secondary)]);
+
+        var result = await composite.TranslateAsync(["a", "b", "c", "d"], "KO");
+
+        Assert.Equal(["ok:a", "ok:b", "ok:c", "ok:d"], result);
+        Assert.Equal(["a", "b", "c", "d"], primary.Received);
+        Assert.Equal(["b", "d"], secondary.Received);     // 이미 채운 a·c는 다시 보내지 않는다
+    }
+
+    [Fact]
+    public async Task 빈_문자열은_채운_것으로_치지_않는다()
+    {
+        // 번역기가 ""를 돌려주는 것은 "이 줄은 번역할 게 없다"가 아니라 대개 실패다.
+        var primary = new PartialTranslator();            // 전부 null
+        var secondary = new EchoTranslator("google");
+        var composite = new CompositeTranslator([("deepl", primary), ("google", secondary)]);
+
+        var result = await composite.TranslateAsync(["a"], "KO");
+
+        Assert.Equal(["google:a"], result);
+    }
+
+    [Fact]
+    public async Task 건너뛰기_술어가_참이면_그_엔진은_아예_부르지_않는다()
+    {
+        // 한도를 맞은 엔진에 곡마다 다시 부딪히지 않게 하는 장치.
+        var skipped = new EchoTranslator("deepl");
+        var next = new EchoTranslator("google");
+        var composite = new CompositeTranslator(
+            [("deepl", skipped), ("google", next)],
+            new CompositeTranslatorHooks(Skip: id => id == "deepl"));
+
+        var result = await composite.TranslateAsync(["a"], "KO");
+
+        Assert.Equal(["google:a"], result);
+        Assert.Equal(0, skipped.CallCount);
+    }
+
+    [Fact]
+    public async Task 누가_몇_줄_몇_자를_채웠는지_보고한다()
+    {
+        // 엔진별 기여는 이 루프 안에서만 알 수 있다 — 사용량 미터와 작업 요약이 여기 걸려 있다.
+        var filled = new List<(string Engine, int Lines, int Chars)>();
+        var composite = new CompositeTranslator(
+            [("deepl", new PartialTranslator(0)), ("google", new EchoTranslator("google"))],
+            new CompositeTranslatorHooks(OnFilled: (e, l, c) => filled.Add((e, l, c))));
+
+        await composite.TranslateAsync(["abc", "de"], "KO");
+
+        Assert.Equal(("deepl", 1, 3), filled[0]);   // "abc"만 채웠다 → 3자
+        Assert.Equal(("google", 1, 2), filled[1]);  // 남은 "de" → 2자
+    }
+
+    [Fact]
+    public async Task 한_줄도_못_채운_엔진은_채움_보고를_하지_않는다()
+    {
+        var filled = new List<string>();
+        var composite = new CompositeTranslator(
+            [("deepl", new PartialTranslator()), ("google", new EchoTranslator("google"))],
+            new CompositeTranslatorHooks(OnFilled: (e, _, _) => filled.Add(e)));
+
+        await composite.TranslateAsync(["a"], "KO");
+
+        Assert.Equal(["google"], filled);
+    }
 }
