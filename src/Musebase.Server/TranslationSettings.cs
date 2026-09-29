@@ -64,12 +64,13 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
     public const string OpenRouterKeySetting = "translate.openrouter.key";
     public const string OpenRouterModelSetting = "translate.openrouter.model";
     public const string FallbackSetting = "translate.fallback";
+    public const string AutoSetting = "translate.auto";
 
     private static readonly string[] AllSettings =
     [
         EngineSetting, LangSetting, DeeplKeySetting, GoogleKeySetting, MyMemoryEmailSetting,
         LibreEndpointSetting, LibreKeySetting, OpenRouterKeySetting, OpenRouterModelSetting,
-        FallbackSetting,
+        FallbackSetting, AutoSetting,
     ];
 
     private readonly object _lock = new();
@@ -131,7 +132,7 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
     public void Save(
         string? engine, string? lang, string? deeplKey, string? googleKey, string? myMemoryEmail,
         string? libreEndpoint, string? libreKey, string? openRouterKey, string? openRouterModel,
-        string? fallback = null)
+        string? fallback = null, bool? auto = null)
     {
         lock (_lock)
         {
@@ -147,6 +148,7 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
             // 폴백은 비밀이 아니라 화면에 그대로 보이는 값이다 — "빈 칸 = 유지" 규칙(키를 다시 치게
             // 하지 않으려는 것)이 여기엔 해당하지 않는다. 빈 값은 "폴백 없음"이라는 뜻이어야 한다.
             PutExact(FallbackSetting, fallback);
+            if (auto is { } on) store.SetSetting(AutoSetting, on ? "1" : "0");
             Invalidate();
         }
 
@@ -200,6 +202,7 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
             OpenRouterApiKey = Get(OpenRouterKeySetting) ?? environment.OpenRouterApiKey,
             OpenRouterModel = Get(OpenRouterModelSetting) ?? environment.OpenRouterModel,
             Fallback = Get(FallbackSetting) ?? environment.Fallback,
+            AutoTranslate = Get(AutoSetting) is { } auto ? auto == "1" : environment.AutoTranslate,
         };
     }
 }
