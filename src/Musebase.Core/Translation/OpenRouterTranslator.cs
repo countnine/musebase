@@ -17,6 +17,11 @@ namespace Musebase.Core.Translation;
 /// 곧 타이밍이라 하나만 밀려도 화면 전체가 어긋나므로, 받은 줄 수가 다르면 <b>그 묶음을 통째로
 /// 버린다</b>(전부 null = 번역 없음). 반쯤 맞은 번역보다 번역이 없는 편이 낫다.
 ///
+/// <b>묶음 크기가 줄 수 정확도를 좌우한다</b>(2026-09 실측, 백로그 10곡 806줄): 40줄 묶음에서는
+/// 어느 모델도 계약을 못 지켰고(24묶음 중 2~4개 폐기), 20줄로 줄이자 <c>gemini-2.5-flash-lite</c>가
+/// 44묶음 전부를 지켰다. 번역 <b>전용</b> 모델(Tencent HY-MT2)은 오히려 더 나빴다 — 우리가 요구하는
+/// 것은 번역 품질이 아니라 지시 따르기이기 때문이다.
+///
 /// 대가로 플랫폼 수수료가 붙는다. 곡을 많이 도는 용도라면 무료 티어가 있는 쪽이 낫다 —
 /// 이 엔진은 "이 곡을 이 모델이 어떻게 옮기나" 보려고 두는 것이다.
 /// </summary>
@@ -27,11 +32,18 @@ public sealed class OpenRouterTranslator : ITranslator
     /// <summary>모델을 안 고르면 이것 — 의미 생성 쪽과 같은 기본값(싸고 빠르다).</summary>
     public const string DefaultModel = "google/gemini-2.5-flash";
 
-    /// <summary>한 번에 보낼 줄 수. 길면 모델이 중간을 빼먹기 쉽고, 짧으면 호출이 늘어난다.</summary>
-    private const int MaxLinesPerRequest = 40;
+    /// <summary>
+    /// 한 번에 보낼 줄 수. <b>이 값이 줄 수 정확도를 좌우한다.</b> 2026-09 실측(백로그 10곡 806줄):
+    /// 40줄 묶음에서는 어느 모델도 계약을 못 지켰고(24묶음 중 2~4개 폐기), <b>20줄로 줄이자
+    /// <c>gemini-2.5-flash-lite</c>가 44묶음 전부를 지켰다</b>. 길면 모델이 중간을 빼먹는다.
+    /// </summary>
+    public const int DefaultMaxLinesPerRequest = 20;
 
     /// <summary>한 번에 보낼 누적 글자 수 — 긴 줄이 섞여도 요청이 비대해지지 않게.</summary>
-    private const int MaxCharsPerRequest = 4000;
+    public const int DefaultMaxCharsPerRequest = 1800;
+
+    /// <summary>출력 토큰 상한의 천장. 모델마다 더 낮을 수 있어 생성자로 좁힐 수 있다.</summary>
+    public const int DefaultMaxOutputTokens = 8000;
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -42,13 +54,28 @@ public sealed class OpenRouterTranslator : ITranslator
     private readonly HttpClient _http;
     private readonly string _apiKey;
     private readonly TimeSpan _timeout;
+    private readonly int _maxOutputTokens;
+    private readonly int _maxLines;
+    private readonly int _maxChars;
 
-    public OpenRouterTranslator(string apiKey, string? model = null, HttpClient? http = null, int timeoutMs = 60_000)
+    /// <param name="maxOutputTokens">
+    /// 이 모델이 받아 주는 출력 토큰 상한(비우면 <see cref="DefaultMaxOutputTokens"/>).
+    /// <b>묶음 크기가 여기서 파생된다</b> — 두 값을 따로 두면 "상한은 4096인데 8000을 요청하는"
+    /// 조합이 생기고, 그러면 응답이 잘려 묶음이 통째로 버려진다. 사람이 상한 하나만 적으면 된다.
+    /// </param>
+    public OpenRouterTranslator(
+        string apiKey, string? model = null, HttpClient? http = null, int timeoutMs = 60_000,
+        int? maxOutputTokens = null)
     {
         _apiKey = (apiKey ?? "").Trim();
         Model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model!.Trim();
         _http = http ?? LyricsHttp.Client;
         _timeout = TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, 1000, 180_000));
+        _maxOutputTokens = Math.Clamp(maxOutputTokens ?? DefaultMaxOutputTokens, 512, 32_000);
+
+        // 출력 상한에서 묶음을 역산한다. max_tokens = 입력길이*2 + 256 이므로 그 역이다.
+        _maxChars = Math.Clamp((_maxOutputTokens - 256) / 2, 200, DefaultMaxCharsPerRequest);
+        _maxLines = DefaultMaxLinesPerRequest;
     }
 
     public string Model { get; }
@@ -90,7 +117,7 @@ public sealed class OpenRouterTranslator : ITranslator
                 Model = Model,
                 // 창의성은 필요 없다 — 같은 줄은 같게 나오는 편이 캐시에도 좋다.
                 Temperature = 0,
-                MaxTokens = Math.Clamp((lines.Sum(l => l.Length) * 2) + 256, 256, 8000),
+                MaxTokens = Math.Clamp((lines.Sum(l => l.Length) * 2) + 256, 256, _maxOutputTokens),
                 Messages = [new ChatMessage { Role = "user", Content = Prompt(lines, language) }],
             };
 
@@ -104,15 +131,20 @@ public sealed class OpenRouterTranslator : ITranslator
             request.Headers.Add("HTTP-Referer", "https://github.com/countnine/musebase");
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            // 상태 코드를 실어 올린다 — 폴백 체인이 456(한도)·401(키)을 구분해야 하는데,
+            // 여기서 null로 삼키면 그 정보가 통째로 사라져 "아무 일도 안 일어난 것"과 같아진다.
+            response.EnsureSuccessStatusCode();
 
             var body = await response.Content.ReadFromJsonAsync<ChatResponse>(Json, cts.Token).ConfigureAwait(false);
             var text = body?.Choices?.FirstOrDefault()?.Message?.Content;
+            // 줄 수 불일치·JSON 파싱 실패는 **엔진이 죽은 게 아니라 그 묶음의 내용 문제**다 —
+            // 그대로 null로 두어 폴백이 그 줄만 다음 엔진으로 넘기게 한다.
             return text is null ? null : ParseLines(text, lines.Count);
         }
-        catch (Exception)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return null; // 조용한 강등 — 번역 실패가 가사 표시를 막으면 안 된다
+            // 우리가 건 타임아웃이다(바깥 취소가 아니다) → 실패로 올린다.
+            throw new TimeoutException($"OpenRouter 응답이 {_timeout.TotalSeconds:0}초 안에 오지 않았습니다.");
         }
     }
 
@@ -171,14 +203,14 @@ public sealed class OpenRouterTranslator : ITranslator
         }
     }
 
-    private static int ChunkSize(IReadOnlyList<string> texts, int offset)
+    private int ChunkSize(IReadOnlyList<string> texts, int offset)
     {
         var count = 0;
         var chars = 0;
-        while (offset + count < texts.Count && count < MaxLinesPerRequest)
+        while (offset + count < texts.Count && count < _maxLines)
         {
             var length = texts[offset + count].Length;
-            if (count > 0 && chars + length > MaxCharsPerRequest) break;
+            if (count > 0 && chars + length > _maxChars) break;
             chars += length;
             count++;
         }
