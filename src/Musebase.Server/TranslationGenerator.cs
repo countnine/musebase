@@ -15,6 +15,9 @@ namespace Musebase.Server;
 /// <param name="Chars">이번에 실제로 번역기에 보낸 문자 수(캐시로 채운 줄은 빼고).</param>
 public sealed record TranslationOutcome(string Status, int ChangedLines, long Chars, string? Detail = null);
 
+/// <summary>엔진 하나를 찔러 본 결과.</summary>
+public sealed record ProbeResult(string EngineId, bool Ok, string? Detail);
+
 /// <summary>
 /// 가사 한 곡을 번역해 저장하는 한 곳. <see cref="MeaningGenerator"/>의 형제다 —
 /// 같은 곡을 동시에 두 번 번역하지 않도록 같은 방식의 게이트를 둔다.
@@ -72,47 +75,59 @@ public sealed class TranslationGenerator(
     }
 
     /// <summary>
-    /// 엔진이 실제로 대답하는지 <b>시작 전에</b> 한 번 찔러 본다. 정상이면 null, 아니면 사람에게
-    /// 보여 줄 이유.
+    /// 체인 구성원 <b>각각</b>이 실제로 대답하는지 시작 전에 확인한다.
     ///
     /// <see cref="LyricsTranslationService"/>는 실패를 조용히 삼켜 "바뀐 줄 0"으로 돌려준다
     /// (재생 중에 오류창을 띄우지 않으려는 규칙이다). 그대로 두면 키가 틀렸을 때 일괄 작업이
     /// <b>"건너뜀 N곡"</b>으로만 끝나 원인을 알 길이 없다 — 실제로 Google 키 자리에 다른 자격증명이
     /// 들어가 6곡이 통째로 조용히 건너뛰어졌다. 그래서 여기서만 번역기를 직접 부른다.
+    ///
+    /// <b>체인을 통째로 찌르면 안 된다</b> — 보조가 살아 있으면 주 엔진의 죽음이 가려져
+    /// 이 함수가 만들어진 이유가 통째로 사라진다. 그래서 멤버를 하나씩 확인한다.
     /// </summary>
-    public async Task<string?> ProbeAsync(string targetLang, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ProbeResult>> ProbeChainAsync(
+        string targetLang, CancellationToken ct = default)
     {
-        if (settings.Translator is not { } translator) return "번역 엔진이 구성되지 않았습니다.";
+        var members = settings.Members;
+        if (members.Count == 0)
+            return [new ProbeResult("none", false, "번역 엔진이 구성되지 않았습니다.")];
 
-        try
+        var results = new List<ProbeResult>();
+        foreach (var (engineId, translator) in members)
         {
-            var probe = await translator.TranslateAsync(["hello"], targetLang, ct).ConfigureAwait(false);
-            return probe.Count > 0 && probe[0] is { Length: > 0 }
-                ? null
-                : "번역기가 빈 응답을 돌려줬습니다(키·대상 언어를 확인하세요).";
+            try
+            {
+                var probe = await translator.TranslateAsync(["hello"], targetLang, ct).ConfigureAwait(false);
+                results.Add(probe.Count > 0 && probe[0] is { Length: > 0 }
+                    ? new ProbeResult(engineId, true, null)
+                    : new ProbeResult(engineId, false, "빈 응답(키·대상 언어를 확인하세요)"));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                // HttpRequestException은 상태 코드를 메시지에 담는다("… 401 (Unauthorized).").
+                results.Add(new ProbeResult(engineId, false, e.Message));
+            }
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception e)
-        {
-            // HttpRequestException은 상태 코드를 메시지에 담는다("… 401 (Unauthorized).").
-            return e.Message;
-        }
+        return results;
     }
 
     /// <summary>한 곡을 번역해 저장한다. 같은 곡·같은 언어 요청이 겹치면 결과를 함께 받는다.</summary>
-    public Task<TranslationOutcome> TranslateAsync(string key, string targetLang, CancellationToken ct = default)
+    public Task<TranslationOutcome> TranslateAsync(
+        string key, string targetLang, CancellationToken ct = default, TranslationRun? run = null)
     {
         var gate = $"{key}|{targetLang}";
-        var task = _inFlight.GetOrAdd(gate, _ => RunAsync(key, targetLang, ct));
+        var task = _inFlight.GetOrAdd(gate, _ => RunAsync(key, targetLang, ct, run));
         _ = task.ContinueWith(
             _ => _inFlight.TryRemove(gate, out Task<TranslationOutcome>? _), TaskScheduler.Default);
         return task;
     }
 
-    private async Task<TranslationOutcome> RunAsync(string key, string targetLang, CancellationToken ct)
+    private async Task<TranslationOutcome> RunAsync(
+        string key, string targetLang, CancellationToken ct, TranslationRun? run = null)
     {
         var entry = store.GetByKey(key);
         if (entry is null) return new TranslationOutcome("failed", 0, 0, "곡을 찾지 못했습니다");
@@ -121,9 +136,12 @@ public sealed class TranslationGenerator(
             return new TranslationOutcome("unparsable", 0, 0, "LRC를 읽지 못했습니다");
 
         var expected = Estimate(lyrics, targetLang);
-        var changed = await settings.Service
-            .EnsureTranslatedAsync(lyrics, targetLang, ct, null)
+        var stats = new TranslationRunStats();
+        // 작업이 있으면 그 작업의 서비스를 쓴다 — 회로 차단과 엔진별 집계가 거기 붙어 있다.
+        var changed = await (run?.Service ?? settings.Service)
+            .EnsureTranslatedAsync(lyrics, targetLang, ct, stats)
             .ConfigureAwait(false);
+        run?.AddCacheHits(stats.CacheHits);
 
         // 아무것도 늘지 않았으면 손대지 않는다 — 원본을 재직렬화할 이유가 없다.
         // 단 **보낼 것이 있었는데도** 0이면 그것은 "할 일이 없었다"가 아니라 번역기가 실패한 것이다

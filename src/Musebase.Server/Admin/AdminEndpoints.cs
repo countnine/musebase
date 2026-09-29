@@ -676,6 +676,11 @@ public static class AdminEndpoints
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
+            // 체크박스는 꺼져 있으면 전송되지 않는다 — 숨은 마커가 있는데 값이 없으면 "폴백 없음"이다.
+            var fallback = form["fallbackSubmitted"].ToString() == "1"
+                ? string.Join(",", form["fallback"].ToArray())
+                : null;
+
             translationSettings.Save(
                 engine: form["engine"].ToString(),
                 lang: form["lang"].ToString(),
@@ -685,7 +690,8 @@ public static class AdminEndpoints
                 libreEndpoint: form["libreEndpoint"].ToString(),
                 libreKey: form["libreKey"].ToString(),
                 openRouterKey: form["openRouterKey"].ToString(),
-                openRouterModel: form["openRouterModel"].ToString());
+                openRouterModel: form["openRouterModel"].ToString(),
+                fallback: fallback);
 
             var now = TranslationNow();
             var notice = now.Engine == TranslatorRegistry.None
@@ -693,6 +699,7 @@ public static class AdminEndpoints
                 : now.IsEnabled
                     ? $"{now.EngineName}{(now.EffectiveModel.Length == 0 ? "" : $" / {now.EffectiveModel}")}"
                       + $" → {now.Lang} 로 바꿨습니다."
+                      + (now.ChainIds.Count > 1 ? $" 폴백: {string.Join(" → ", now.ChainIds.Skip(1))}." : "")
                     : $"{now.EngineName}를 골랐지만 API 키가 없어 아직 꺼져 있습니다.";
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
         });
@@ -713,7 +720,7 @@ public static class AdminEndpoints
 
         // 실행 확인 화면. GET이라 새로고침·범위 바꿔 보기가 안전하다(아무것도 바꾸지 않는다).
         app.MapGet(Routes.Base + "/jobs/new", (HttpRequest req, string? kind, string? scope, string? skip,
-            string? lang, int? limit) =>
+            string? lang, int? limit, string? notice) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
 
@@ -768,7 +775,8 @@ public static class AdminEndpoints
                     Enabled: MeaningsNow().IsEnabled);
             }
 
-            return Html(AdminPages.JobConfirmPage(plan, AdminAuth.Csrf(options.Token, Cookie(req) ?? "")));
+            return Html(AdminPages.JobConfirmPage(
+                plan, AdminAuth.Csrf(options.Token, Cookie(req) ?? ""), notice));
         });
 
         app.MapPost(Routes.Base + "/jobs/start", async (HttpRequest req) =>
@@ -865,14 +873,28 @@ public static class AdminEndpoints
             var budget = long.TryParse(form["budget"].ToString(), out var b)
                 ? Math.Max(b, 1) : now.CharBudget;
 
-            // 시작 전에 엔진을 한 번 찔러 본다 — 키가 틀리면 곡마다 조용히 건너뛰어 끝나기 때문에
-            // (서비스가 실패를 삼킨다) 여기서 막고 이유를 그대로 보여 주는 편이 훨씬 싸다.
-            if (await translation.ProbeAsync(lang) is { } probeFailed)
+            // 시작 전에 체인 구성원을 **각각** 찔러 본다 — 키가 틀리면 곡마다 조용히 건너뛰어
+            // 끝나기 때문에(서비스가 실패를 삼킨다) 여기서 잡고 이유를 그대로 보여 주는 편이 싸다.
+            var probes = await translation.ProbeChainAsync(lang);
+            var alive = probes.Where(p => p.Ok).Select(p => p.EngineId).ToList();
+            var dead = probes.Where(p => !p.Ok).ToList();
+
+            if (alive.Count == 0)
             {
-                app.Logger.LogWarning("번역 일괄 작업을 시작하지 못했습니다: {Why}", probeFailed);
+                var why = string.Join(" · ", dead.Select(d => $"{d.EngineId}: {d.Detail}"));
+                app.Logger.LogWarning("번역 일괄 작업을 시작하지 못했습니다: {Why}", why);
                 return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
-                    $"번역 엔진이 응답하지 않아 시작하지 않았습니다 — {probeFailed}")}");
+                    $"번역 엔진이 응답하지 않아 시작하지 않았습니다 — {why}")}");
             }
+
+            // 주 엔진이 죽었는데 보조가 살아 있는 경우는 **한 번 더 묻는다**. 그냥 통과시키면
+            // 비용·품질 가정이 전부 틀린 채 돌고, 막아 버리면 체인이 있는 이유가 없어진다.
+            if (!probes[0].Ok && form["confirm"].ToString() != "1")
+                return SeeOther($"{Routes.Base}/jobs/new?kind=translate&scope={Uri.EscapeDataString(scope)}"
+                    + $"&skip={(skipExisting ? "1" : "0")}&lang={Uri.EscapeDataString(lang)}&limit={limit}"
+                    + $"&notice={Uri.EscapeDataString(
+                        $"주 엔진({probes[0].EngineId})이 응답하지 않습니다 — {probes[0].Detail}. "
+                        + $"보조({string.Join(", ", alive)})로 계속할까요?")}");
 
             var targets = store.BulkTargets(
                 scope, skipExisting ? lang : null, false, limit, MissesSince());
@@ -880,13 +902,27 @@ public static class AdminEndpoints
             // 구성은 시작할 때 한 번만 읽는다 — 잡이 도는 중에 엔진을 바꾸면 한 잡 안에
             // 두 엔진 결과가 섞인다("쓸 때마다 읽는다"의 의도적 예외).
             var delayMs = now.DelayMs;
+            var run = new TranslationRun(
+                now, new StoreTranslationCache(store), app.Logger,
+                onEngineChars: (engine, chars) => store.AddUsage(engine, chars, UsageMonth()));
+
+            // 찔러보기에서 이미 죽은 것을 안 엔진은 첫 곡을 돌기 전에 닫아 둔다 — 곡마다 같은
+            // 벽에 다시 부딪히지 않는다.
+            foreach (var d in dead) run.Breaker.OpenNow(d.EngineId, d.Detail ?? "응답 없음");
+
+            // 이번 달 이미 무료 한도를 다 쓴 엔진도 미리 닫는다. Google은 넘겨도 4xx가 오지 않아
+            // (월 50만 자는 쿼타가 아니라 $10 크레딧이다) 우리가 세지 않으면 조용히 과금된다.
+            foreach (var engineId in now.ChainIds)
+                if (FreeMonthlyChars(engineId) is { } free
+                    && store.UsageThisMonth(engineId, UsageMonth()) >= free)
+                    run.Breaker.OpenNow(engineId, $"이번 달 무료 한도 {free:N0}자를 채웠습니다");
 
             var started = jobs.TryStart(
                 BulkJobKind.Translation,
                 $"가사 일괄 번역({lang}) — {BulkScope.Label(scope)} ({targets.Count}곡)", targets,
                 async (target, ct) =>
                 {
-                    var outcome = await translation.TranslateAsync(target.Key, lang, ct);
+                    var outcome = await translation.TranslateAsync(target.Key, lang, ct, run);
                     return outcome.Status switch
                     {
                         "ok" => new BulkStepResult(BulkStep.Ok, Units: outcome.Chars),
@@ -898,12 +934,26 @@ public static class AdminEndpoints
                 },
                 delayMs: delayMs, budget: budget, unitName: "자", out var refusal,
                 // 상한을 넘길 곡은 시작조차 하지 않는다 — 처리 중에 끊으면 반쯤 번역된 가사가 남는다.
-                estimate: t => translation.Estimate(t.Key, lang));
+                estimate: t => translation.Estimate(t.Key, lang),
+                note: run.Report);
 
             return started
                 ? SeeOther($"{Routes.Base}/jobs")
                 : SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(refusal!)}");
         }
+
+        // 사용량 미터의 달력 키(UTC 기준 — 서버가 UTC로 돈다).
+        static string UsageMonth() => DateTimeOffset.UtcNow.ToString("yyyy-MM");
+
+        // 이 엔진의 월 무료 한도(문자). 모르는 엔진은 null — 한도를 지어내지 않는다.
+        // 두 곳 다 2026-09 확인: Google은 매월 $10 크레딧(= 50만 자), DeepL Free는 월 50만 자.
+        // DeepL은 넘기면 456으로 스스로 알려 주므로 미터는 사실상 Google 때문에 있다.
+        static long? FreeMonthlyChars(string engineId) => engineId.ToLowerInvariant() switch
+        {
+            "google" => 500_000,
+            "deepl" => 500_000,
+            _ => null,
+        };
 
         // "조회 미스 상위" 범위가 볼 기간. 대시보드의 미스 목록(7일)보다 넉넉하게 본다 —
         // 일괄 작업은 "자주 듣는 곡"을 찾는 것이라 지난달에 두 번 튼 곡도 후보다.
@@ -975,7 +1025,10 @@ public static class AdminEndpoints
                     ? new SpotifyLink(store.GetSetting(SpotifyAccount.UserSetting), SpotifyCallback(req))
                     : null,
                 TranslationEngine: TranslationEngineCard.From(
-                    TranslationNow(), translationSettings.Overridden, store.TranslationCacheRows()));
+                    TranslationNow(), translationSettings.Overridden, store.TranslationCacheRows(),
+                    usage: TranslationNow().ChainIds
+                        .Select(id => (id, store.UsageThisMonth(id, UsageMonth()), FreeMonthlyChars(id)))
+                        .ToList()));
         }
 
         MeaningSummary MeaningSummaryOf()

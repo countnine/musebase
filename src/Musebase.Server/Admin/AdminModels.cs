@@ -204,14 +204,31 @@ public sealed record TranslationEngineCard(
     string? DeeplKeyHint, string? GoogleKeyHint, string? MyMemoryEmail,
     string? LibreEndpoint, string? LibreKeyHint,
     string? OpenRouterKeyHint, string? OpenRouterModel,
-    string? Warning, int CacheRows)
+    string? Warning, int CacheRows,
+    /// <summary>실제로 시도할 엔진 id, 주 엔진 먼저.</summary>
+    IReadOnlyList<string> Chain,
+    /// <summary>폴백에 고를 수 있는 엔진(키가 필요한 엔진만) — 주 엔진은 뺀다.</summary>
+    IReadOnlyList<string> FallbackChoices,
+    /// <summary>지금 폴백으로 켜 둔 엔진.</summary>
+    IReadOnlyList<string> FallbackOn,
+    /// <summary>엔진별 이번 달 사용량과 무료 한도(아는 것만).</summary>
+    IReadOnlyList<(string Engine, long Used, long? Free)> Usage)
 {
-    public static TranslationEngineCard From(TranslationOptions o, bool overridden, int cacheRows) => new(
+    public static TranslationEngineCard From(
+        TranslationOptions o, bool overridden, int cacheRows,
+        IReadOnlyList<(string, long, long?)>? usage = null) => new(
         o.Engine, o.EngineName, o.EffectiveModel, o.Lang, o.IsEnabled, overridden,
         MeaningEngineCard.Hint(o.DeeplApiKey), MeaningEngineCard.Hint(o.GoogleApiKey), o.MyMemoryEmail,
         o.LibreEndpoint, MeaningEngineCard.Hint(o.LibreApiKey),
         MeaningEngineCard.Hint(o.OpenRouterApiKey), o.OpenRouterModel,
-        o.Warning, cacheRows);
+        o.Warning, cacheRows,
+        Chain: o.ChainIds,
+        FallbackChoices: Musebase.Core.Translation.TranslatorRegistry.All
+            .Where(d => TranslationOptions.CanBeFallback(d.Id))
+            .Where(d => !string.Equals(d.Id, o.Engine, StringComparison.OrdinalIgnoreCase))
+            .Select(d => d.Id).ToList(),
+        FallbackOn: o.ChainIds.Skip(1).ToList(),
+        Usage: usage ?? []);
 }
 
 

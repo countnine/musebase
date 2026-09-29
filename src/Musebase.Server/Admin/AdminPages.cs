@@ -283,7 +283,7 @@ public static class AdminPages
     /// 여기서 보여 주는 것은 <b>실행 전에 알아야 하는 것</b>뿐이다: 대상 곡 수, 추정 사용량,
     /// 예상 비용, 그리고 이번 실행에서 넘지 않을 상한. 상한은 곡 <b>경계</b>에서만 걸린다.
     /// </summary>
-    public static string JobConfirmPage(JobPlan plan, string csrf)
+    public static string JobConfirmPage(JobPlan plan, string csrf, string? notice = null)
     {
         var kindName = plan.Kind == BulkJobKind.Meaning ? "의미 일괄 생성" : "가사 일괄 번역";
 
@@ -325,6 +325,7 @@ public static class AdminPages
                 <input type="hidden" name="scope" value="{Esc(plan.Scope)}">
                 <input type="hidden" name="skip" value="{(plan.SkipExisting ? "1" : "0")}">
                 <input type="hidden" name="lang" value="{Esc(plan.Lang ?? "")}">
+                {(notice is null ? "" : "<input type=\"hidden\" name=\"confirm\" value=\"1\">")}
                 <label class="meta">곡 수 <input type="number" name="limit" value="{plan.Limit}" min="1" max="5000"></label>
                 <label class="meta">{Esc(plan.UnitName)} 상한 <input type="number" name="budget" value="{plan.Budget}" min="1"></label>
                 <button type="submit">실행</button>
@@ -335,6 +336,7 @@ public static class AdminPages
 
         return Layout($"{kindName} — 실행 확인", $"""
             <h2>{Esc(kindName)}</h2>
+            {(notice is null ? "" : $"<p class=\"warn\">{Esc(notice)}</p>")}
             <p class="meta">대상 범위</p>
             <div class="chips">{scopes}</div>
             <p class="meta">건너뛰기</p>
@@ -682,11 +684,33 @@ public static class AdminPages
     {
         if (card is null) return "";
 
+        var chain = card.Chain.Count > 1
+            ? " · 체인 <b>" + Esc(string.Join(" → ", card.Chain)) + "</b>"
+            : "";
         var state = card.Enabled
             ? $"지금 번역 엔진: <b>{Esc(card.EngineName)}</b>"
               + (card.Model.Length == 0 ? "" : $" / <b>{Esc(card.Model)}</b>")
-              + $" → <b>{Esc(card.Lang)}</b>"
+              + $" → <b>{Esc(card.Lang)}</b>{chain}"
             : "번역 엔진이 <b>꺼져 있습니다</b> — 엔진을 고르고 그 엔진의 키를 넣으세요.";
+
+        // 폴백은 **키가 필요한 엔진만** 고를 수 있다 — 무키 공개 엔진으로 자동으로 넘어가면
+        // 가사 수천 줄이 조용히 공개 서버로 나간다. 체크박스는 꺼져 있으면 전송되지 않으므로
+        // 숨은 마커로 "지우기"를 표현한다(매직 문자열이 필요 없다).
+        var fallback = card.FallbackChoices.Count == 0
+            ? "<span class=\"meta\">폴백으로 쓸 수 있는 엔진이 없습니다(키가 필요한 엔진만 후보입니다).</span>"
+            : "<div class=\"srcpick\">" + string.Concat(card.FallbackChoices.Select(id =>
+                $"<label><input type=\"checkbox\" name=\"fallback\" value=\"{Esc(id)}\""
+                + (card.FallbackOn.Contains(id) ? " checked" : "") + $"> {Esc(id)}</label>"))
+              + "</div>";
+
+        var usage = card.Usage.Count == 0 ? "" :
+            "<p class=\"meta\">이번 달 서버가 보낸 문자: "
+            + string.Join(" · ", card.Usage.Select(u =>
+                u.Free is { } free
+                    ? $"{Esc(u.Engine)} {u.Used:N0} / {free:N0}"
+                      + (u.Used >= free ? " <b class=\"bad\">(한도 도달)</b>" : "")
+                    : $"{Esc(u.Engine)} {u.Used:N0}"))
+            + " — 기기가 직접 번역한 분은 여기 안 잡힙니다(근사치).</p>";
 
         var origin = card.Overridden
             ? $"""
@@ -729,8 +753,12 @@ public static class AdminPages
               {Key("libreKey", "LibreTranslate 키", card.LibreKeyHint)}
               <input type="text" name="myMemoryEmail" value="{Esc(card.MyMemoryEmail ?? "")}"
                      placeholder="MyMemory 이메일 (선택)">
+              <input type="hidden" name="fallbackSubmitted" value="1">
               <button type="submit">저장</button>
             </form>
+            <p class="meta">주 엔진이 막히면 이어받을 엔진(적힌 순서대로):</p>
+            {fallback}
+            {usage}
             <p class="meta">저장하면 <b>다음 실행부터 바로</b> 적용됩니다(재시작 불필요). {origin}<br>
             대상 언어는 DeepL식 대문자로 적습니다(<code>KO</code>·<code>EN-US</code>·<code>ZH-HANT</code>) —
             기기와 같은 표기여야 같은 줄을 두 번 번역하지 않습니다 · 캐시에 쌓인 줄 {card.CacheRows:N0}개<br>

@@ -35,6 +35,8 @@ public class ServerTranslationTests : IDisposable
     {
         public LyricsTranslationService Service { get; } = new(translator, cache);
         public ITranslator? Translator { get; } = translator;
+        public IReadOnlyList<(string EngineId, ITranslator Translator)> Members { get; } =
+            [("stub", translator)];
         public bool IsEnabled => true;
     }
 
@@ -220,12 +222,14 @@ public class ServerTranslationTests : IDisposable
         using var store = new LyricsStore(_dbPath);
         var cache = new StoreTranslationCache(store);
 
-        var broken = Generator(store, cache, new BrokenTranslator());
-        var why = await broken.ProbeAsync("KO");
-        Assert.Contains("401", why);
+        var broken = await Generator(store, cache, new BrokenTranslator()).ProbeChainAsync("KO");
+        Assert.False(broken[0].Ok);
+        Assert.Contains("401", broken[0].Detail);
 
-        // 멀쩡하면 아무 말도 하지 않는다.
-        Assert.Null(await Generator(store, cache, new FakeTranslator()).ProbeAsync("KO"));
+        // 멀쩡하면 통과로 보고한다.
+        var ok = await Generator(store, cache, new FakeTranslator()).ProbeChainAsync("KO");
+        Assert.True(ok[0].Ok);
+        Assert.Null(ok[0].Detail);
     }
 
     [Fact]
@@ -244,6 +248,60 @@ public class ServerTranslationTests : IDisposable
         var outcome = await generator.TranslateAsync(LyricsCacheStore.MakeKey("Kids", "MGMT"), "KO");
 
         Assert.Equal("skipped", outcome.Status);
+    }
+
+    // ---- 회로 차단 · 사용량 미터 ----
+
+    [Fact]
+    public void 한도_초과와_인증_실패는_한_번에_엔진을_닫는다()
+    {
+        // 456과 401은 다음 곡에서 달라질 이유가 없다 — 곡마다 다시 맞으면 헛요청만 늘어난다.
+        var breaker = new TranslationChainBreaker();
+
+        Assert.True(breaker.Record(new TranslatorFailure("deepl", 456, TranslatorFailureKind.Quota)));
+        Assert.True(breaker.IsOpen("deepl"));
+        Assert.Contains("한도", breaker.Opened["deepl"]);
+
+        Assert.True(breaker.Record(new TranslatorFailure("google", 401, TranslatorFailureKind.Auth)));
+        Assert.True(breaker.IsOpen("google"));
+    }
+
+    [Fact]
+    public void 일시적_실패는_몇_번_봐_준다()
+    {
+        var breaker = new TranslationChainBreaker();
+        var blip = new TranslatorFailure("google", 503, TranslatorFailureKind.Server);
+
+        Assert.False(breaker.Record(blip));
+        Assert.False(breaker.Record(blip));
+        Assert.True(breaker.Record(blip));      // 3회째에 닫는다
+        Assert.True(breaker.IsOpen("google"));
+    }
+
+    [Fact]
+    public void 찔러보기_실패는_첫_곡_전에_엔진을_닫아_둔다()
+    {
+        var breaker = new TranslationChainBreaker();
+        breaker.OpenNow("deepl", "한도 초과");
+
+        Assert.True(breaker.IsOpen("deepl"));
+        Assert.False(breaker.IsOpen("google"));
+    }
+
+    [Fact]
+    public void 사용량_미터는_달별로_쌓인다()
+    {
+        // Google은 무료 한도를 넘겨도 4xx를 내지 않는다(월 50만 자는 쿼타가 아니라 $10 크레딧이다)
+        // — 우리가 세지 않으면 넘긴 사실을 알 방법이 없다.
+        using var store = new LyricsStore(_dbPath);
+
+        Assert.Equal(0, store.UsageThisMonth("google", "2026-09"));
+        Assert.Equal(1200, store.AddUsage("google", 1200, "2026-09"));
+        Assert.Equal(1500, store.AddUsage("google", 300, "2026-09"));
+        Assert.Equal(1500, store.UsageThisMonth("google", "2026-09"));
+
+        Assert.Equal(0, store.UsageThisMonth("google", "2026-10"));   // 달이 바뀌면 처음부터
+        Assert.Equal(0, store.UsageThisMonth("deepl", "2026-09"));    // 엔진끼리도 섞이지 않는다
     }
 
     // ---- 단가 ----

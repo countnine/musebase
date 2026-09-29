@@ -115,6 +115,8 @@ public sealed record BulkJobState(
     long Budget,
     string UnitName,
     string? CurrentLabel,
+    /// <summary>지금까지 어느 엔진이 얼마나 채웠는지 같은 한 줄 요약(작업 종류마다 다르다).</summary>
+    string? Note,
     string? Detail,
     DateTimeOffset StartedAt,
     DateTimeOffset? EndedAt)
@@ -167,7 +169,7 @@ public sealed class BulkJobRunner(ILogger<BulkJobRunner> logger)
         BulkJobKind kind, string label, IReadOnlyList<BulkTarget> targets,
         Func<BulkTarget, CancellationToken, Task<BulkStepResult>> work,
         int delayMs, long budget, string unitName,
-        out string? refusal, Func<BulkTarget, long>? estimate = null)
+        out string? refusal, Func<BulkTarget, long>? estimate = null, Func<string?>? note = null)
     {
         Job job;
         lock (_lock)
@@ -183,7 +185,7 @@ public sealed class BulkJobRunner(ILogger<BulkJobRunner> logger)
                 return false;
             }
 
-            job = new Job(kind, label, targets.Count, budget, unitName);
+            job = new Job(kind, label, targets.Count, budget, unitName) { Note = note };
             _job = job;
             refusal = null;
         }
@@ -306,9 +308,10 @@ public sealed class BulkJobRunner(ILogger<BulkJobRunner> logger)
         // 화면은 다음 잡이 시작되면 덮인다 — 무엇이 얼마나 처리됐는지는 로그에 남겨야 나중에 볼 수 있다.
         logger.LogInformation(
             "일괄 작업 {Kind} {Status}: {Done}/{Total}곡 · 성공 {Ok} · 건너뜀 {Skipped} · 자료없음 {NoSource} "
-            + "· 실패 {Failed} · {Units}{Unit} · {Elapsed:c} · {Detail}",
+            + "· 실패 {Failed} · {Units}{Unit} · {Elapsed:c} · {Note} · {Detail}",
             state.Kind, state.Status, state.Done, state.Total, state.Ok, state.Skipped, state.NoSource,
-            state.Failed, state.Units, state.UnitName, state.Elapsed, state.Detail ?? "(사유 없음)");
+            state.Failed, state.Units, state.UnitName, state.Elapsed, state.Note ?? "-",
+            state.Detail ?? "(사유 없음)");
     }
 
     /// <summary>가변 상태는 여기만 산다 — 밖으로는 <see cref="ToState"/>의 불변 사본만 나간다.</summary>
@@ -327,10 +330,11 @@ public sealed class BulkJobRunner(ILogger<BulkJobRunner> logger)
         public long Units;
         public string? Current;
         public string? Detail;
+        public Func<string?>? Note;
         public DateTimeOffset? EndedAt;
 
         public BulkJobState ToState() => new(
             Kind, Status, Label, Total, Done, Ok, Skipped, NoSource, Failed,
-            Units, Budget, UnitName, Current, Detail, StartedAt, EndedAt);
+            Units, Budget, UnitName, Current, Note?.Invoke(), Detail, StartedAt, EndedAt);
     }
 }
