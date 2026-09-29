@@ -232,6 +232,29 @@ public class ServerTranslationTests : IDisposable
         Assert.Null(ok[0].Detail);
     }
 
+    /// <summary>줄 계약을 못 지키는(전부 null) 번역기 — LLM이 묶음을 버릴 때 이렇게 나온다.</summary>
+    private sealed class SilentTranslator : ITranslator
+    {
+        public Task<IReadOnlyList<string?>> TranslateAsync(
+            IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<string?>>(texts.Select(_ => (string?)null).ToList());
+    }
+
+    [Fact]
+    public async Task 줄_계약만_못_지킨_엔진을_죽은_것으로_보지_않는다()
+    {
+        // 실서버에서 잡은 것: 찔러보기가 1줄을 보내자 gemini가 [["안녕"]]처럼 중첩 배열을 돌려줘
+        // 멀쩡한 폴백 엔진이 "빈 응답"으로 낙인찍히고 작업이 시작조차 못 했다.
+        // 키가 틀리면 이제 예외가 올라오므로(비2xx를 삼키지 않는다), 빈 결과는 죽음이 아니다.
+        using var store = new LyricsStore(_dbPath);
+        var cache = new StoreTranslationCache(store);
+
+        var probe = await Generator(store, cache, new SilentTranslator()).ProbeChainAsync("KO");
+
+        Assert.True(probe[0].Ok);
+        Assert.Contains("줄 수", probe[0].Detail);
+    }
+
     [Fact]
     public async Task 정말_할_일이_없으면_건너뜀_그대로다()
     {
