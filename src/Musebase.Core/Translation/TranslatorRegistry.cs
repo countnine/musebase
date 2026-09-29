@@ -19,7 +19,13 @@ public sealed record TranslatorOptions(
     /// 최대 180초)을 몰래 자른다 — 의미 생성 쪽이 같은 이유로 전용 클라이언트를 따로 둔다
     /// (<c>MeaningHttp</c>).
     /// </summary>
-    HttpClient? Http = null);
+    HttpClient? Http = null,
+    /// <summary>
+    /// OpenRouter 모델이 받아 주는 출력 토큰 상한. 비우면 번역기 기본값(8000).
+    /// 모델마다 다르고(예: Tencent HY-MT2 계열은 4096) 넘기면 응답이 잘려 그 묶음이 통째로
+    /// 버려지므로, 아는 값이 있으면 넣는다 — 묶음 크기가 여기서 자동으로 파생된다.
+    /// </summary>
+    int? OpenRouterMaxOutputTokens = null);
 
 /// <summary>
 /// 번역 엔진 설명자. 키 필요 여부·무료 여부(UI/기본값 판단)와 생성 팩토리.
@@ -81,7 +87,9 @@ public static class TranslatorRegistry
         new("openrouter", "OpenRouter (LLM·모델 자유 선택)", RequiresApiKey: true, IsFree: false,
             o => string.IsNullOrWhiteSpace(o.OpenRouterApiKey)
                 ? null
-                : new OpenRouterTranslator(o.OpenRouterApiKey!, o.OpenRouterModel, o.Http),
+                : new OpenRouterTranslator(
+                    o.OpenRouterApiKey!, o.OpenRouterModel, o.Http,
+                    maxOutputTokens: o.OpenRouterMaxOutputTokens),
             ShortName: "OpenRouter"),
     };
 

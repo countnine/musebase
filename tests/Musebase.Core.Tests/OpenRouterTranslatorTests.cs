@@ -1,3 +1,6 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using Musebase.Core.Translation;
 using Xunit;
 
@@ -105,5 +108,102 @@ public class OpenRouterTranslatorTests
         Assert.Equal(OpenRouterTranslator.DefaultModel, new OpenRouterTranslator("k").Model);
         Assert.Equal(OpenRouterTranslator.DefaultModel, new OpenRouterTranslator("k", "  ").Model);
         Assert.Equal("anthropic/claude-opus-5", new OpenRouterTranslator("k", " anthropic/claude-opus-5 ").Model);
+    }
+
+    // ---- 묶음 크기 · 출력 상한 · 실패 전파 ----
+
+    /// <summary>요청 본문을 들여다보고 정해진 응답을 주는 스텁.</summary>
+    private sealed class CapturingHandler(HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
+    {
+        public List<JsonDocument> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            var sent = JsonDocument.Parse(body);
+            Requests.Add(sent);
+
+            if (status != HttpStatusCode.OK) return new HttpResponseMessage(status);
+
+            // 보낸 줄 수만큼 돌려줘야 ParseLines를 통과한다.
+            var count = sent.RootElement.GetProperty("messages")[0].GetProperty("content")
+                .GetString()!.Split("\"").Length;  // 정확할 필요는 없다 — 아래에서 다시 센다
+            _ = count;
+            var lines = Lines(sent);
+            var content = JsonSerializer.Serialize(lines.Select(l => "ko:" + l));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }),
+                    Encoding.UTF8, "application/json"),
+            };
+        }
+
+        /// <summary>프롬프트 끝에 붙은 JSON 배열(보낸 줄들)을 되읽는다.</summary>
+        public static string[] Lines(JsonDocument request)
+        {
+            var prompt = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString()!;
+            var array = prompt[prompt.IndexOf('[', prompt.IndexOf("Lines:", StringComparison.Ordinal))..];
+            return JsonSerializer.Deserialize<string[]>(array)!;
+        }
+    }
+
+    [Fact]
+    public async Task 묶음은_기본_20줄로_끊는다()
+    {
+        // 40줄 묶음에서는 어느 모델도 줄 계약을 못 지켰다(2026-09 실측) — 기본을 절반으로 낮췄다.
+        var handler = new CapturingHandler();
+        var translator = new OpenRouterTranslator("k", http: new HttpClient(handler));
+
+        await translator.TranslateAsync(Enumerable.Range(0, 50).Select(i => $"line {i}").ToList(), "KO");
+
+        Assert.Equal(3, handler.Requests.Count);   // 20 + 20 + 10
+        Assert.Equal(20, CapturingHandler.Lines(handler.Requests[0]).Length);
+        Assert.Equal(10, CapturingHandler.Lines(handler.Requests[2]).Length);
+    }
+
+    [Fact]
+    public async Task 출력_상한을_주면_요청과_묶음이_그_안에_들어온다()
+    {
+        // 상한 4096인 모델에 8000을 요청하면 응답이 잘려 묶음이 통째로 버려진다.
+        var handler = new CapturingHandler();
+        var translator = new OpenRouterTranslator(
+            "k", http: new HttpClient(handler), maxOutputTokens: 4096);
+
+        await translator.TranslateAsync(
+            Enumerable.Range(0, 20).Select(_ => new string('x', 300)).ToList(), "KO");
+
+        foreach (var sent in handler.Requests)
+        {
+            var max = sent.RootElement.GetProperty("max_tokens").GetInt32();
+            Assert.True(max <= 4096, $"max_tokens {max}가 상한을 넘었다");
+            // 묶음도 상한에서 파생된다 — (4096-256)/2 = 1920자
+            Assert.True(CapturingHandler.Lines(sent).Sum(l => l.Length) <= 1920 + 300);
+        }
+    }
+
+    [Fact]
+    public async Task 비2xx는_삼키지_않고_상태_코드를_실어_올린다()
+    {
+        // 삼키면 폴백 체인이 456(한도)·401(키)을 구분하지 못해 브레이커도 프로브도 장님이 된다.
+        var translator = new OpenRouterTranslator(
+            "k", http: new HttpClient(new CapturingHandler(HttpStatusCode.PaymentRequired)));
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(
+            () => translator.TranslateAsync(["a"], "KO"));
+
+        Assert.Equal(HttpStatusCode.PaymentRequired, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task 바깥에서_취소하면_취소로_올라간다()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var translator = new OpenRouterTranslator("k", http: new HttpClient(new CapturingHandler()));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => translator.TranslateAsync(["a"], "KO", cts.Token));
     }
 }
