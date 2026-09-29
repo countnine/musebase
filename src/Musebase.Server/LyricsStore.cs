@@ -1449,6 +1449,43 @@ public sealed class LyricsStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// 이번 달 이 엔진으로 보낸 문자 수를 더한다(<c>app_settings</c>의 <c>translate.usage.{engine}.{YYYY-MM}</c>).
+    ///
+    /// <b>Google 때문에 있다.</b> Google Cloud Translation의 "월 50만 자 무료"는 쿼타가 아니라 매월
+    /// $10 크레딧이라 <b>넘겨도 4xx가 오지 않고 조용히 과금된다</b> — 우리가 세지 않으면 넘긴 사실을
+    /// 알 방법이 없다. DeepL은 456으로 스스로 알려 주므로 미터가 없어도 된다.
+    ///
+    /// 서버가 보낸 분만 센다 — 기기가 직접 번역한 분은 여기 안 잡히므로 청구서와는 어긋난다(근사치).
+    /// </summary>
+    public long AddUsage(string engine, long chars, string month)
+    {
+        var name = $"translate.usage.{engine.ToLowerInvariant()}.{month}";
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "INSERT INTO app_settings (name, value) VALUES ($n, $v) "
+                + "ON CONFLICT(name) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + $v AS TEXT) "
+                + "RETURNING CAST(value AS INTEGER);";
+            cmd.Parameters.AddWithValue("$n", name);
+            cmd.Parameters.AddWithValue("$v", chars);
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+        }
+    }
+
+    /// <summary>이번 달 이 엔진으로 보낸 문자 수.</summary>
+    public long UsageThisMonth(string engine, string month)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT CAST(value AS INTEGER) FROM app_settings WHERE name = $n;";
+            cmd.Parameters.AddWithValue("$n", $"translate.usage.{engine.ToLowerInvariant()}.{month}");
+            return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+        }
+    }
+
     /// <summary>캐시에 쌓인 줄 수(대시보드 표시용).</summary>
     public int TranslationCacheRows()
     {

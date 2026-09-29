@@ -33,6 +33,12 @@ public interface ITranslationServiceSource
     /// </summary>
     ITranslator? Translator { get; }
 
+    /// <summary>
+    /// 체인 구성원 각각. 찔러보기는 <b>멤버를 하나씩</b> 확인해야 한다 — 체인을 통째로 찌르면
+    /// 보조가 살아 있을 때 주 엔진의 죽음이 가려진다(그 함수가 존재하는 이유가 바로 그 사고다).
+    /// </summary>
+    IReadOnlyList<(string EngineId, ITranslator Translator)> Members { get; }
+
     /// <summary>엔진과 키가 갖춰져 실제로 번역할 수 있는가.</summary>
     bool IsEnabled { get; }
 }
@@ -57,11 +63,13 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
     public const string LibreKeySetting = "translate.libre.key";
     public const string OpenRouterKeySetting = "translate.openrouter.key";
     public const string OpenRouterModelSetting = "translate.openrouter.model";
+    public const string FallbackSetting = "translate.fallback";
 
     private static readonly string[] AllSettings =
     [
         EngineSetting, LangSetting, DeeplKeySetting, GoogleKeySetting, MyMemoryEmailSetting,
         LibreEndpointSetting, LibreKeySetting, OpenRouterKeySetting, OpenRouterModelSetting,
+        FallbackSetting,
     ];
 
     private readonly object _lock = new();
@@ -107,6 +115,9 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
         }
     }
 
+    /// <summary>체인 구성원 각각(찔러보기용).</summary>
+    public IReadOnlyList<(string EngineId, ITranslator Translator)> Members => Current.BuildMembers();
+
     /// <summary>엔진과 키가 갖춰져 실제로 번역할 수 있는가.</summary>
     public bool IsEnabled => Current.IsEnabled;
 
@@ -119,7 +130,8 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
     /// </summary>
     public void Save(
         string? engine, string? lang, string? deeplKey, string? googleKey, string? myMemoryEmail,
-        string? libreEndpoint, string? libreKey, string? openRouterKey, string? openRouterModel)
+        string? libreEndpoint, string? libreKey, string? openRouterKey, string? openRouterModel,
+        string? fallback = null)
     {
         lock (_lock)
         {
@@ -132,7 +144,18 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
             Put(LibreKeySetting, libreKey);
             Put(OpenRouterKeySetting, openRouterKey);
             Put(OpenRouterModelSetting, openRouterModel);
+            // 폴백은 비밀이 아니라 화면에 그대로 보이는 값이다 — "빈 칸 = 유지" 규칙(키를 다시 치게
+            // 하지 않으려는 것)이 여기엔 해당하지 않는다. 빈 값은 "폴백 없음"이라는 뜻이어야 한다.
+            PutExact(FallbackSetting, fallback);
             Invalidate();
+        }
+
+        void PutExact(string name, string? value)
+        {
+            if (value is null) return;                       // 화면이 안 보낸 칸 — 손대지 않는다
+            var trimmed = value.Trim();
+            if (trimmed.Length == 0) store.DeleteSetting(name);
+            else store.SetSetting(name, trimmed);
         }
 
         void Put(string name, string? value)
@@ -176,6 +199,7 @@ public sealed class TranslationSettings(LyricsStore store, TranslationOptions en
             LibreApiKey = Get(LibreKeySetting) ?? environment.LibreApiKey,
             OpenRouterApiKey = Get(OpenRouterKeySetting) ?? environment.OpenRouterApiKey,
             OpenRouterModel = Get(OpenRouterModelSetting) ?? environment.OpenRouterModel,
+            Fallback = Get(FallbackSetting) ?? environment.Fallback,
         };
     }
 }

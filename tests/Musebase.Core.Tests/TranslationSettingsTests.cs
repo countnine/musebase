@@ -121,9 +121,75 @@ public class TranslationSettingsTests : IDisposable
         Assert.Equal("KO", fromEnv.Lang);
     }
 
+    // ---- 폴백 체인 ----
+
+    [Fact]
+    public void 폴백이_비면_체인은_주_엔진_하나다()
+    {
+        var o = Env with { Fallback = null };
+        Assert.Equal(["deepl"], o.ChainIds);
+        Assert.Empty(o.RejectedFallback);
+    }
+
+    [Fact]
+    public void 무키_공개_엔진은_폴백_후보가_되지_않는다()
+    {
+        // 자동으로 넘어가면 가사 수천 줄이 조용히 공개 서버로 나간다 — 화면 경고가 아니라 규칙으로 막는다.
+        Assert.False(TranslationOptions.CanBeFallback("mymemory"));
+        Assert.False(TranslationOptions.CanBeFallback("libretranslate"));
+        Assert.True(TranslationOptions.CanBeFallback("google"));
+        Assert.True(TranslationOptions.CanBeFallback("openrouter"));
+
+        var o = Env with { Fallback = "mymemory,libretranslate", GoogleApiKey = "g" };
+        Assert.Equal(["deepl"], o.ChainIds);
+        Assert.Equal(2, o.RejectedFallback.Count);
+        Assert.All(o.RejectedFallback, r => Assert.Contains("공개 엔진", r.Reason));
+    }
+
+    [Fact]
+    public void 키_없는_폴백은_빠지고_이유가_남는다()
+    {
+        var o = Env with { Fallback = "google,openrouter,얼토당토", GoogleApiKey = "g" };
+
+        Assert.Equal(["deepl", "google"], o.ChainIds);
+        Assert.Contains(o.RejectedFallback, r => r.Id == "openrouter" && r.Reason.Contains("API 키"));
+        Assert.Contains(o.RejectedFallback, r => r.Id == "얼토당토" && r.Reason.Contains("모르는"));
+    }
+
+    [Fact]
+    public void 주_엔진을_폴백에_또_적으면_빠진다()
+    {
+        var o = Env with { Fallback = "deepl" };
+        Assert.Equal(["deepl"], o.ChainIds);
+        Assert.Contains(o.RejectedFallback, r => r.Reason.Contains("주 엔진과 같"));
+    }
+
+    [Fact]
+    public void 체인이_둘_이상이면_경고로_알린다()
+    {
+        var o = Env with { Fallback = "google", GoogleApiKey = "g" };
+        Assert.Contains("폴백이 켜져 있습니다", o.Warning);
+        Assert.Contains("deepl → google", o.Warning);
+    }
+
+    [Fact]
+    public void 빈_값_저장이_폴백을_지운다()
+    {
+        var (store, settings) = New();
+        using var _ = store;
+
+        settings.Save(null, null, null, null, null, null, null, null, null, fallback: "google");
+        Assert.Contains("google", settings.Current.Fallback);
+
+        // 폴백은 비밀이 아니라 화면에 보이는 값이다 — "빈 칸 = 유지" 규칙이 여기엔 해당하지 않는다.
+        settings.Save(null, null, null, null, null, null, null, null, null, fallback: "");
+        Assert.Null(settings.Current.Fallback);
+    }
+
     [Fact]
     public void 일괄_작업에_위험한_엔진은_경고를_단다()
     {
+        // 체인 전체를 훑어 합친다 — 주 엔진만 보던 때와 달리 "포함한다"로 본다.
         Assert.Contains("일일 한도", (Env with { Engine = "mymemory" }).Warning);
         Assert.Contains("자체 호스팅", (Env with { Engine = "libretranslate" }).Warning);
         Assert.Null((Env with { Engine = "deepl" }).Warning);

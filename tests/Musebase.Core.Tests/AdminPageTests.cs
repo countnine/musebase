@@ -959,6 +959,7 @@ public class AdminPageTests
         Total: 3, Done: 1, Ok: 1, Skipped: 0, NoSource: 0, Failed: 0,
         Units: 1, Budget: 3, UnitName: "곡",
         CurrentLabel: status == BulkJobStatus.Running ? "아티스트 - 곡" : null,
+        Note: null,
         Detail: null,
         StartedAt: DateTimeOffset.Parse("2026-09-28T00:00:00Z"),
         EndedAt: status == BulkJobStatus.Running ? null : DateTimeOffset.Parse("2026-09-28T00:01:00Z"));
