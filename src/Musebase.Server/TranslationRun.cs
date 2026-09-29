@@ -64,6 +64,27 @@ public sealed class TranslationChainBreaker
 }
 
 /// <summary>
+/// 문자 과금 엔진의 월 무료 한도와 그 달력 키. 작업 시작·자동 번역이 같은 판정을 쓴다.
+/// </summary>
+public static class TranslationQuota
+{
+    /// <summary>사용량 미터의 달력 키(UTC 기준 — 서버가 UTC로 돈다).</summary>
+    public static string Month() => DateTimeOffset.UtcNow.ToString("yyyy-MM");
+
+    /// <summary>
+    /// 이 엔진의 월 무료 한도(문자). 모르는 엔진은 null — 한도를 지어내지 않는다.
+    /// 둘 다 2026-09 확인: Google은 매월 $10 크레딧(= 50만 자), DeepL Free는 월 50만 자.
+    /// DeepL은 넘기면 456으로 스스로 알려 주므로 미터는 사실상 Google 때문에 있다.
+    /// </summary>
+    public static long? FreeMonthlyChars(string engineId) => engineId.ToLowerInvariant() switch
+    {
+        "google" => 500_000,
+        "deepl" => 500_000,
+        _ => null,
+    };
+}
+
+/// <summary>
 /// 일괄 작업 하나가 사는 동안의 번역 상태 — 구성 스냅샷 · 회로 차단 · 엔진별 집계.
 ///
 /// <b>구성을 시작할 때 한 번만 읽는다.</b> 도는 중에 관리 화면에서 엔진을 바꾸면 한 작업 안에서
@@ -91,17 +112,55 @@ public sealed class TranslationRun
                         f.EngineId, f.Kind, f.HttpStatus);
             },
             Skip: Breaker.IsOpen,
-            OnFilled: (engine, lines, chars) =>
+            OnFilled: RecordFilled));
+        _onEngineChars = onEngineChars;
+    }
+
+    private readonly Action<string, long>? _onEngineChars;
+
+    /// <summary>
+    /// 체인이 "이 엔진이 몇 줄·몇 자를 채웠다"고 알려 오는 자리.
+    /// 문자 과금 엔진의 소프트 미터가 여기 걸려 있다 — Google은 무료 한도를 넘겨도 4xx를 내지
+    /// 않으므로 우리가 세지 않으면 넘긴 사실을 알 방법이 없다.
+    /// </summary>
+    public void RecordFilled(string engine, int lines, int chars)
+    {
+        lock (_lock)
+        {
+            var (l, c) = _filled.GetValueOrDefault(engine);
+            _filled[engine] = (l + lines, c + chars);
+        }
+        _onEngineChars?.Invoke(engine, chars);
+    }
+
+    /// <summary>
+    /// 사용량 미터를 붙여 시작한다. 이번 달 무료 한도를 이미 채운 엔진은 첫 곡 전에 닫고,
+    /// <b>도는 중에 한도에 닿아도 그 자리에서 닫는다</b> — 시작할 때만 보면 한 작업 안에서
+    /// 50만 자를 넘겨도 계속 Google로 가서 조용히 과금된다(Google은 넘겨도 4xx를 내지 않는다).
+    /// </summary>
+    public static TranslationRun Begin(TranslationOptions options, LyricsStore store, ILogger logger)
+    {
+        TranslationRun? run = null;
+        run = new TranslationRun(
+            options, new StoreTranslationCache(store), logger,
+            onEngineChars: (engine, chars) =>
             {
-                lock (_lock)
+                var total = store.AddUsage(engine, chars, TranslationQuota.Month());
+                if (TranslationQuota.FreeMonthlyChars(engine) is { } free && total >= free)
                 {
-                    var (l, c) = _filled.GetValueOrDefault(engine);
-                    _filled[engine] = (l + lines, c + chars);
+                    run!.Breaker.OpenNow(engine, $"이번 달 무료 한도 {free:N0}자에 닿았습니다");
+                    logger.LogWarning(
+                        "번역 엔진 {Engine}이 이번 달 무료 한도({Free:N0}자)에 닿아 제외합니다 — 누적 {Total:N0}자",
+                        engine, free, total);
                 }
-                // 문자 과금 엔진의 소프트 미터 — Google은 무료 한도를 넘겨도 4xx를 내지 않으므로
-                // 우리가 세지 않으면 넘긴 사실을 알 방법이 없다.
-                onEngineChars?.Invoke(engine, chars);
-            }));
+            });
+
+        foreach (var id in options.ChainIds)
+            if (TranslationQuota.FreeMonthlyChars(id) is { } free
+                && store.UsageThisMonth(id, TranslationQuota.Month()) >= free)
+                run.Breaker.OpenNow(id, $"이번 달 무료 한도 {free:N0}자를 채웠습니다");
+
+        return run;
     }
 
     public TranslationOptions Options { get; }

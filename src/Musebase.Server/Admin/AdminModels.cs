@@ -212,11 +212,13 @@ public sealed record TranslationEngineCard(
     /// <summary>지금 폴백으로 켜 둔 엔진.</summary>
     IReadOnlyList<string> FallbackOn,
     /// <summary>엔진별 이번 달 사용량과 무료 한도(아는 것만).</summary>
-    IReadOnlyList<(string Engine, long Used, long? Free)> Usage)
+    IReadOnlyList<(string Engine, long Used, long? Free)> Usage,
+    /// <summary>새 곡 자동 번역 상태.</summary>
+    AutoTranslateState? Auto = null)
 {
     public static TranslationEngineCard From(
         TranslationOptions o, bool overridden, int cacheRows,
-        IReadOnlyList<(string, long, long?)>? usage = null) => new(
+        IReadOnlyList<(string, long, long?)>? usage = null, AutoTranslateState? auto = null) => new(
         o.Engine, o.EngineName, o.EffectiveModel, o.Lang, o.IsEnabled, overridden,
         MeaningEngineCard.Hint(o.DeeplApiKey), MeaningEngineCard.Hint(o.GoogleApiKey), o.MyMemoryEmail,
         o.LibreEndpoint, MeaningEngineCard.Hint(o.LibreApiKey),
@@ -228,8 +230,13 @@ public sealed record TranslationEngineCard(
             .Where(d => !string.Equals(d.Id, o.Engine, StringComparison.OrdinalIgnoreCase))
             .Select(d => d.Id).ToList(),
         FallbackOn: o.ChainIds.Skip(1).ToList(),
-        Usage: usage ?? []);
+        Usage: usage ?? [],
+        Auto: auto);
 }
+
+/// <summary>새 곡 자동 번역 — 켜 둠 / 실제로 도는 중 / 대기 곡 / 이번 달 사용·상한 / 마지막 요약.</summary>
+public sealed record AutoTranslateState(
+    bool On, bool Running, int Pending, long UsedThisMonth, long MonthlyCap, string? LastReport);
 
 
 /// <summary>대시보드의 "곡의 의미" 타일 — 만든 것 / 자료 없음 / 자료 부족 / 실패 + 아직 안 해 본 곡 수.</summary>

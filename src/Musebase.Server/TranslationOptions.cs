@@ -34,7 +34,14 @@ public sealed record TranslationOptions(
     /// </summary>
     string? Fallback = null,
     /// <summary>OpenRouter 모델의 출력 토큰 상한(모델마다 다르다). 비우면 번역기 기본값.</summary>
-    int? OpenRouterMaxOutput = null)
+    int? OpenRouterMaxOutput = null,
+    /// <summary>
+    /// 기기가 올린 새 가사를 서버가 곧바로 번역할 것인가. 기본 켬 — 엔진 자체가 기본 꺼짐이라
+    /// 엔진을 고르기 전에는 아무 일도 일어나지 않는다.
+    /// </summary>
+    bool AutoTranslate = true,
+    /// <summary>자동 번역이 한 달에 보낼 수 있는 문자 상한(사람이 누르지 않는 경로의 비용 가드).</summary>
+    long AutoMonthlyCap = 400_000)
 {
     /// <summary>
     /// `MUSEBASE_TRANSLATE_ENGINE`(레지스트리 id 또는 none — <b>기본 none</b>),
@@ -45,7 +52,9 @@ public sealed record TranslationOptions(
     /// `MUSEBASE_TRANSLATE_BATCH_LIMIT`(기본 30), `MUSEBASE_TRANSLATE_DELAY_MS`(기본 0),
     /// `MUSEBASE_TRANSLATE_CHAR_BUDGET`(기본 50000 — 확인 화면 상한 입력칸의 바닥값),
     /// `MUSEBASE_TRANSLATE_FALLBACK`(쉼표 구분, 비우면 폴백 없음),
-    /// `MUSEBASE_TRANSLATE_OPENROUTER_MAX_OUTPUT`(모델 출력 상한).
+    /// `MUSEBASE_TRANSLATE_OPENROUTER_MAX_OUTPUT`(모델 출력 상한),
+    /// `MUSEBASE_TRANSLATE_AUTO`(0이면 새 곡 자동 번역 끔 — 기본 켬),
+    /// `MUSEBASE_TRANSLATE_AUTO_MONTHLY_CAP`(자동 번역 월 문자 상한, 기본 40만).
     ///
     /// OpenRouter 키를 의미 생성 쪽과 <b>따로 둔다</b> — 같이 쓰고 싶으면 같은 값을 두 번 넣는다.
     /// 한쪽 키를 조용히 물려 쓰면 "의미만 끄려고 키를 지웠는데 번역도 멈추는" 식으로 놀란다.
@@ -75,6 +84,9 @@ public sealed record TranslationOptions(
             Fallback: Env("MUSEBASE_TRANSLATE_FALLBACK"),
             OpenRouterMaxOutput: int.TryParse(
                 Env("MUSEBASE_TRANSLATE_OPENROUTER_MAX_OUTPUT"), out var cap) ? cap : null,
+            AutoTranslate: Env("MUSEBASE_TRANSLATE_AUTO") != "0",
+            AutoMonthlyCap: long.TryParse(Env("MUSEBASE_TRANSLATE_AUTO_MONTHLY_CAP"), out var autoCap)
+                ? Math.Clamp(autoCap, 0, 100_000_000) : 400_000,
             BatchLimit: batch,
             DelayMs: delay,
             CharBudget: budget);

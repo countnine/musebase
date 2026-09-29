@@ -92,8 +92,14 @@ var translationGenerator = new TranslationGenerator(
     store, translationSettings, new StoreTranslationCache(store),
     app.Services.GetRequiredService<ILogger<TranslationGenerator>>());
 
+// 기기가 올린 새 가사를 서버가 곧바로 번역한다(엔진이 꺼져 있으면 아무 일도 안 한다).
+var autoTranslator = new AutoTranslator(
+    store, translationSettings, translationGenerator,
+    app.Services.GetRequiredService<ILogger<AutoTranslator>>());
+_ = Task.Run(() => autoTranslator.RunAsync(app.Lifetime.ApplicationStopping));
+
 app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs,
-    translationSettings, translationGenerator);
+    translationSettings, translationGenerator, autoTranslator);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -193,9 +199,12 @@ app.MapPut(Routes.Api + "/lyrics", async (HttpRequest request) =>
 
     // 어느 기기가 올렸는지 남긴다(관리자 화면의 "올린 기기").
     var saved = store.Upsert(incoming, updatedBy: AdminEndpoints.DeviceOf(request, admin), out var rejection);
-    return saved is null
-        ? Results.Json(rejection!, statusCode: StatusCodes.Status202Accepted)
-        : Results.Ok(saved);
+    if (saved is null) return Results.Json(rejection!, statusCode: StatusCodes.Status202Accepted);
+
+    // 대상 언어 번역이 없으면 서버가 곧 채운다 — 다음 기기부터는 번역이 붙은 채로 받는다.
+    // 응답은 기다리지 않는다(업로드는 2.5~5초 타임아웃이라 번역을 끼워 넣을 자리가 없다).
+    autoTranslator.Offer(saved.Key, saved.Langs);
+    return Results.Ok(saved);
 });
 
 app.MapGet(Routes.Api + "/stats", (HttpRequest request) =>

@@ -754,8 +754,11 @@ public static class AdminPages
               <input type="text" name="myMemoryEmail" value="{Esc(card.MyMemoryEmail ?? "")}"
                      placeholder="MyMemory 이메일 (선택)">
               <input type="hidden" name="fallbackSubmitted" value="1">
+              <label class="meta"><input type="checkbox" name="auto" value="1"{(card.Auto is { On: true } ? " checked" : "")}>
+                새 곡 자동 번역</label>
               <button type="submit">저장</button>
             </form>
+            {AutoLine(card.Auto)}
             <p class="meta">주 엔진이 막히면 이어받을 엔진(적힌 순서대로):</p>
             {fallback}
             {usage}
@@ -768,6 +771,28 @@ public static class AdminPages
             옛 엔진의 번역이 그대로 쓰입니다(비용에는 이득, 품질 비교에는 방해).</p>
             {(card.Warning is null ? "" : $"<p class=\"warn\">{Esc(card.Warning)}</p>")}
             """;
+    }
+
+    /// <summary>
+    /// 새 곡 자동 번역 한 줄. 켜 뒀는데 실제로는 안 도는 경우(엔진 없음)를 구별해 적는다 —
+    /// "켬"만 보이면 사람은 돌고 있는 줄 안다.
+    /// </summary>
+    private static string AutoLine(AutoTranslateState? auto)
+    {
+        if (auto is null) return "";
+        if (!auto.On)
+            return "<p class=\"meta\">새 곡 자동 번역: <b>꺼짐</b> — 기기가 올린 곡은 일괄 작업을 돌릴 때 채워집니다.</p>";
+
+        var state = auto.Running
+            ? $"<b class=\"ok\">켜짐</b> · 대기 {auto.Pending}곡"
+            : "<b class=\"warn\">켜 뒀지만 멈춤</b> — 번역 엔진이 구성되지 않았습니다";
+        var cap = auto.UsedThisMonth >= auto.MonthlyCap
+            ? $" · <b class=\"bad\">이번 달 상한 {auto.MonthlyCap:N0}자 도달</b>"
+            : $" · 이번 달 {auto.UsedThisMonth:N0} / {auto.MonthlyCap:N0}자";
+        var last = auto.LastReport is null ? "" : $"<br>마지막: {Esc(auto.LastReport)}";
+
+        return $"<p class=\"meta\">새 곡 자동 번역: {state}{cap}{last}<br>"
+             + "기기가 올린 곡에 한국어 번역이 없으면 서버가 곧 채웁니다 — 다음 기기부터는 번역이 붙은 채로 받습니다.</p>";
     }
 
     /// <summary>
