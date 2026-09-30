@@ -86,11 +86,12 @@ public static class AdminEndpoints
         this WebApplication app, LyricsStore store, AdminOptions options,
         MeaningSettings meaningSettings, MeaningGenerator generator, SongExtrasService extras,
         BulkJobRunner jobs, TranslationSettings translationSettings, TranslationGenerator translation,
-        AutoTranslator autoTranslator)
+        AutoTranslator autoTranslator, AutoMeaning autoMeaning)
     {
         // 번역 엔진 키 확인 결과(메모리). 재시작하면 "확인 안 함"으로 돌아간다 — 키 상태는 바깥 사정으로
         // 언제든 바뀌므로 오래 묵은 ✓를 남기는 편이 오히려 해롭다.
         var engineChecks = new EngineCheckBook();
+        var meaningChecks = new MeaningCheckBook();
 
         // 단가표는 부팅 때 한 번 읽는다(값이 바뀌면 재시작 — 코드 배포보다는 싸다).
         var prices = TranslationPricing.FromEnvironment();
@@ -646,20 +647,35 @@ public static class AdminEndpoints
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
+            // 형식이 틀린 키는 저장하지 않는다(번역 카드와 같은 규칙).
+            var (input, rejected) = MeaningForm.Read(form).WithoutMalformedKeys();
             meaningSettings.Save(
-                engine: form["engine"].ToString(),
-                geminiKey: form["geminiKey"].ToString(),
-                geminiModel: form["geminiModel"].ToString(),
-                openRouterKey: form["openRouterKey"].ToString(),
-                openRouterModel: form["openRouterModel"].ToString());
+                engine: input.Engine, geminiKey: input.GeminiKey, geminiModel: input.GeminiModel,
+                openRouterKey: input.OpenRouterKey, openRouterModel: input.OpenRouterModel,
+                fallback: input.Fallback, auto: input.Auto, geminiCap: input.GeminiCap, autoCap: input.AutoCap);
 
             var now = MeaningOptionsNow();
-            var notice = now.Engine == "none"
+            var checks = await meaningChecks.CheckAsync(now, input.EnginesToCheck(now), saved: true);
+            var head = now.ChainIds.Count == 0
                 ? "의미 생성을 껐습니다."
-                : now.HasEngineKey
-                    ? $"{now.Engine} / {now.EffectiveModel} 로 바꿨습니다."
-                    : $"{now.Engine}를 골랐지만 API 키가 없어 아직 꺼져 있습니다.";
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+                : $"저장했습니다 — {string.Join(" → ", now.ChainIds)}.";
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(TranslationForm.Notice(head, rejected, checks))}");
+        });
+
+        // 저장하지 않고 확인만 — 화면에 넣은 값(비운 칸은 지금 설정)으로 형식 검사와 실제 호출을 해 본다.
+        app.MapPost(Routes.Base + "/meanings/engine/test", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var input = MeaningForm.Read(form);
+            var (_, rejected) = input.WithoutMalformedKeys();
+            var trial = input.Overlay(MeaningOptionsNow());
+            var checks = await meaningChecks.CheckAsync(trial, input.EnginesToCheck(trial), saved: false);
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                TranslationForm.Notice("저장하지 않고 확인했습니다.", rejected, checks))}");
         });
 
         app.MapPost(Routes.Base + "/meanings/engine/reset", async (HttpRequest req) =>
@@ -1011,7 +1027,13 @@ public static class AdminEndpoints
                 LastFm: lastfm.CanConnect
                     ? new LastFmLink(store.GetSetting(LastFmAccount.UserSetting))
                     : null,
-                MeaningEngine: MeaningEngineCard.From(MeaningOptionsNow(), meaningSettings.Overridden),
+                MeaningEngine: MeaningEngineCard.From(
+                    MeaningOptionsNow(), meaningSettings.Overridden, meaningSettings.Gate,
+                    new AutoMeaningState(
+                        MeaningOptionsNow().AutoGenerate, autoMeaning.Enabled, autoMeaning.Pending,
+                        store.UsageThisMonth(AutoMeaning.MeterName, TranslationQuota.Month(), MeaningEngineGate.Scope),
+                        MeaningOptionsNow().AutoMonthlyCap, autoMeaning.LastReport),
+                    meaningChecks.Last),
                 // 쓸 수 없는 구성이면 null — 카드를 아예 그리지 않는다(Last.fm과 같은 규칙).
                 Spotify: spotify.CanConnect
                     ? new SpotifyLink(store.GetSetting(SpotifyAccount.UserSetting), SpotifyCallback(req))

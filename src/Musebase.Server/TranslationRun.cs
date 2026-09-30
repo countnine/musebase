@@ -69,7 +69,9 @@ public sealed class TranslationChainBreaker
 public static class TranslationQuota
 {
     /// <summary>사용량 미터의 달력 키(UTC 기준 — 서버가 UTC로 돈다).</summary>
-    public static string Month() => DateTimeOffset.UtcNow.ToString("yyyy-MM");
+    public static string Month() => Month(DateTimeOffset.UtcNow);
+
+    public static string Month(DateTimeOffset at) => at.ToUniversalTime().ToString("yyyy-MM");
 
     /// <summary>
     /// 이 엔진의 월 무료 한도(문자). 모르는 엔진은 null — 한도를 지어내지 않는다.

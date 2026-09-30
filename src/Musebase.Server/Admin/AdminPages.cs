@@ -7,7 +7,7 @@ namespace Musebase.Server;
 /// 관리자 화면 렌더러 — **DB를 모른다.** 이미 조회된 record만 받으므로 HTML 생성 전체가
 /// SQLite 없이 테스트된다. 모든 문자열 삽입은 <see cref="AdminHtml.Esc"/>를 통과한다.
 /// </summary>
-public static class AdminPages
+public static partial class AdminPages
 {
     /// <summary>
     /// 로그인 폼(쿠키가 없을 때).
@@ -614,65 +614,6 @@ public static class AdminPages
     /// 연결은 <b>폼이 아니라 링크</b>다. CSP <c>form-action 'self'</c>가 외부 도메인으로의
     /// 폼 제출을 막기 때문이다(눌러도 조용히 아무 일도 안 일어난다).
     /// </summary>
-    /// <summary>
-    /// 의미 생성 엔진 카드 — <b>지금 무엇으로 쓰고 있는지</b>를 먼저 보여 주고, 그 자리에서 바꾼다.
-    ///
-    /// 예전에는 어느 모델이 쓰이는지 화면에 아예 없었고, 바꾸려면 서버에 들어가
-    /// <c>server.env</c>를 고치고 재시작해야 했다 — 모델을 비교해 보려는 작업엔 너무 무겁다.
-    ///
-    /// API 키는 <b>끝 네 글자만</b> 보여 주고, 빈 칸으로 저장하면 기존 값을 그대로 둔다
-    /// (모델만 바꾸려는데 매번 긴 키를 다시 치게 할 수는 없다).
-    /// </summary>
-    private static string MeaningEngineCardHtml(MeaningEngineCard? card, string csrf)
-    {
-        if (card is null) return "";
-
-        string Engine(string id, string label) =>
-            $"<option value=\"{Esc(id)}\"{(card.Engine == id ? " selected" : "")}>{Esc(label)}</option>";
-
-        var state = card.Engine == "none"
-            ? "<span class=\"meta\">꺼짐 — 엔진을 고르고 API 키를 넣으면 켜집니다.</span>"
-            : card.HasKey
-                ? $"<span class=\"meta\">지금 쓰는 모델: <b>{Esc(card.Engine)}</b> / <code>{Esc(card.Model)}</code></span>"
-                : $"<span class=\"warn\">{Esc(card.Engine)}를 골랐지만 API 키가 없어 꺼져 있습니다.</span>";
-
-        var origin = card.Overridden
-            ? $"""
-              <form method="post" action="{Routes.Base}/meanings/engine/reset" class="inline" style="margin:0"
-                    data-busy data-confirm="화면에서 저장한 엔진·키·모델을 지우고 server.env 설정으로 되돌릴까요?">
-                <input type="hidden" name="csrf" value="{Esc(csrf)}">
-                <button type="submit">환경변수로 되돌리기</button>
-              </form>
-              """
-            : "<span class=\"meta\">지금은 <code>server.env</code> 값을 그대로 쓰고 있습니다.</span>";
-
-        string Key(string name, string? hint) =>
-            $"""<input type="password" name="{name}" placeholder="{(hint is null ? "API 키" : $"넣어 둔 키 {Esc(hint)} — 비워 두면 유지")}" autocomplete="off">""";
-
-        return $"""
-            <h2>의미 생성 엔진</h2>
-            <p>{state}</p>
-            <form method="post" action="{Routes.Base}/meanings/engine" class="inline" data-busy>
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <select name="engine">
-                {Engine("openrouter", "OpenRouter (모델 자유 선택)")}
-                {Engine("gemini", "Google Gemini")}
-                {Engine("none", "끔")}
-              </select>
-              {Key("openRouterKey", card.OpenRouterKeyHint)}
-              <input type="text" name="openRouterModel" value="{Esc(card.OpenRouterModel)}"
-                     placeholder="OpenRouter 모델 (예: anthropic/claude-opus-5)">
-              {Key("geminiKey", card.GeminiKeyHint)}
-              <input type="text" name="geminiModel" value="{Esc(card.GeminiModel)}"
-                     placeholder="Gemini 모델 (예: gemini-2.5-flash-lite)">
-              <button type="submit">저장</button>
-            </form>
-            <p class="meta">저장하면 <b>다음 생성부터 바로</b> 적용됩니다(재시작 불필요). {origin}<br>
-            ⚠ 여기 넣은 API 키는 <b>DB에 평문으로</b> 저장되어 백업 파일에도 들어갑니다 —
-            그게 싫으면 화면에 넣지 말고 <code>server.env</code>만 쓰세요.</p>
-            """;
-    }
-
     /// <summary>엔진마다 고를 때 알아야 할 한 줄. 모르는 엔진은 레지스트리 이름만 보인다.</summary>
     private static readonly Dictionary<string, string> EngineNotes = new(StringComparer.OrdinalIgnoreCase)
     {
