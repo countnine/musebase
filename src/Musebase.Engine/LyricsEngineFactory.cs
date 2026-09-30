@@ -44,7 +44,11 @@ public static class LyricsEngineFactory
         if (TranslatorRegistry.Build(config.TranslationEngineId, config.TranslatorOptions) is { } primary)
             chain.Add((config.TranslationEngineId, primary));
 
-        var fallbackId = config.TranslationFallbackEngineId;
+        // 번역을 끈 기기(none)는 폴백도 없다 — 폴백만으로 체인을 만들면 "끔인데 공개 서버로
+        // 번역되는" 상태가 된다. 가사 서버가 있는 새 설치의 기본값이 none이라 더 중요하다.
+        var fallbackId = string.Equals(config.TranslationEngineId, TranslatorRegistry.None, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : config.TranslationFallbackEngineId;
         if (!string.IsNullOrWhiteSpace(fallbackId) &&
             !string.Equals(fallbackId, config.TranslationEngineId, StringComparison.OrdinalIgnoreCase) &&
             TranslatorRegistry.Build(fallbackId!, config.TranslatorOptions) is { } fb)

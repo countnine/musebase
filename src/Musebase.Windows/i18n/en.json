@@ -25,7 +25,7 @@
   "settings.deepl.key.reveal": "Show/hide key",
   "settings.deepl.lang.header": "Translation target language (DeepL target_lang, default: system language)",
   "settings.translation.engine.header": "Translation engine",
-  "settings.translation.none": "Off (provider translation only)",
+  "settings.translation.none": "Off (show server/provider translations only)",
   "settings.translation.libre.endpoint": "LibreTranslate endpoint (blank = default; self-host for reliability)",
   "settings.translation.openrouter.model": "OpenRouter model (blank = google/gemini-2.5-flash)",
   "settings.translation.openrouter.hint": "One key, many models. e.g. anthropic/claude-opus-5, openai/gpt-5-mini. Unlike machine translators an LLM can return the wrong number of lines; those batches are shown untranslated rather than misaligned.",

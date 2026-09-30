@@ -263,6 +263,10 @@ public sealed class SettingsWindow : Window
                 Margin = new Thickness(0, 2, 0, 6),
             };
             if (engineBox.SelectedValue is null) engineBox.SelectedIndex = 0;
+            // 엔진을 한 번도 고르지 않은 설치는 기본값을 따른다 — 서버 주소를 넣으며 저장할 때
+            // 화면에 보이던 기본(MyMemory)을 명시값으로 굳히면 "서버에 맡김" 기본이 영영 안 걸린다.
+            var engineWasDefault = string.IsNullOrWhiteSpace(settings.TranslationEngine);
+            var initialEngineId = engineBox.SelectedValue as string;
 
             var endpointBox = new TextBox
             {
@@ -767,7 +771,7 @@ public sealed class SettingsWindow : Window
                 if (engineKeys.ContainsKey(currentEngineId)) engineKeys[currentEngineId] = CurrentKey();
                 foreach (var (engineId, key) in engineKeys) settings.SetTranslationApiKey(engineId, key);
                 settings.TargetLanguage = string.IsNullOrWhiteSpace(langBox.Text) ? AppSettings.DefaultTargetLanguage() : langBox.Text.Trim().ToUpperInvariant();
-                settings.TranslationEngine = currentEngineId;
+                settings.TranslationEngine = engineWasDefault && currentEngineId == initialEngineId ? null : currentEngineId;
                 settings.LibreTranslateEndpoint = string.IsNullOrWhiteSpace(endpointBox.Text) ? null : endpointBox.Text.Trim();
                 settings.OpenRouterModel = string.IsNullOrWhiteSpace(modelBox.Text) ? null : modelBox.Text.Trim();
                 settings.TranslationFallbackToFree = fallbackCheck.IsChecked == true;

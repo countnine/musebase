@@ -421,7 +421,8 @@ public sealed class AndroidSettings
 
     /// <summary>
     /// 실효 번역 엔진 판정(Windows AppSettings.EffectiveTranslationEngine과 동일 규칙):
-    /// 명시 엔진이 있으면 그대로, 없으면 DeepL 키가 있으면 "deepl", 아니면 "mymemory".
+    /// 명시 엔진이 있으면 그대로, 없으면 DeepL 키가 있으면 "deepl", 가사 서버가 있으면 "none"
+    /// (서버가 새 곡을 번역해 채운다), 아니면 "mymemory".
     /// (Google 키만 있는 경우는 명시 선택으로만 도달하므로 판정에 넣지 않는다 — Windows와 동일.)
     /// (실제로는 사용자가 화면에서 명시 선택하므로 저장값이 곧 실효값이지만, 빈값 안전망으로 유지.)
     /// </summary>
@@ -432,11 +433,13 @@ public sealed class AndroidSettings
             var engine = _prefs.GetString(KeyTranslationEngine, null);
             if (!string.IsNullOrWhiteSpace(engine))
                 return engine!.Trim().ToLowerInvariant();
-            return string.IsNullOrWhiteSpace(DeeplApiKey)
-                ? TranslatorRegistry.DefaultFreeEngine
-                : "deepl";
+            if (!string.IsNullOrWhiteSpace(DeeplApiKey)) return "deepl";
+            return LyricsServerEndpoint is not null ? TranslatorRegistry.None : TranslatorRegistry.DefaultFreeEngine;
         }
     }
+
+    /// <summary>엔진을 한 번도 고르지 않았는가(저장값 없음 = 기본 규칙을 따름).</summary>
+    public bool TranslationEngineIsDefault => string.IsNullOrWhiteSpace(_prefs.GetString(KeyTranslationEngine, null));
 
     private void PutBool(string key, bool value)
     {

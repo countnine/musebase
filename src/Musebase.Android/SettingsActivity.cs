@@ -30,7 +30,7 @@ public sealed class SettingsActivity : Activity
         ("mymemory", "MyMemory (무료·무키)"),
         ("deepl", "DeepL (API 키 필요)"),
         ("google", "Google Cloud Translation (API 키 필요)"),
-        (TranslatorRegistry.None, "끄기 (제공자 번역만)"),
+        (TranslatorRegistry.None, "끄기 (서버·제공자 번역만 표시)"),
     };
 
     /// <summary>키를 쓰는 엔진의 입력란 문구. 여기 없는 엔진은 키 입력을 감춘다.</summary>
@@ -77,6 +77,10 @@ public sealed class SettingsActivity : Activity
     private readonly Dictionary<string, string> _engineKeys = new(StringComparer.OrdinalIgnoreCase);
 
     private string _currentEngineId = TranslatorRegistry.DefaultFreeEngine;
+    // 엔진을 한 번도 고르지 않은 설치는 저장해도 기본 규칙을 따르게 둔다(Windows와 같은 이유 —
+    // 서버 주소를 넣으며 저장할 때 보이던 기본을 명시값으로 굳히지 않는다).
+    private bool _engineWasDefault;
+    private string? _initialEngineId;
 
     private Spinner? _engineSpinner;
     private LinearLayout? _keyRow;
@@ -230,6 +234,8 @@ public sealed class SettingsActivity : Activity
         _engineSpinner.Adapter = adapter;
         _engineSpinner.SetSelection(IndexOfEngine(settings?.EffectiveTranslationEngine));
         _currentEngineId = SelectedEngineId();
+        _engineWasDefault = settings?.TranslationEngineIsDefault ?? false;
+        _initialEngineId = _currentEngineId;
         _engineSpinner.ItemSelected += (_, _) => OnEngineChanged();
         _translationSection.AddView(_engineSpinner);
 
@@ -487,7 +493,7 @@ public sealed class SettingsActivity : Activity
 
         var engineId = SelectedEngineId();
         StashCurrentKey(); // 화면에 떠 있던 입력값까지 버퍼에 담고
-        settings.TranslationEngine = engineId;
+        settings.TranslationEngine = _engineWasDefault && engineId == _initialEngineId ? null! : engineId;
         foreach (var (id, key) in _engineKeys) settings.SetTranslationApiKey(id, key); // 엔진별로 저장
         settings.TargetLanguage = _targetLangEdit?.Text?.Trim();
         settings.TranslationFallbackToFree = _fallbackCheck?.Checked == true;
