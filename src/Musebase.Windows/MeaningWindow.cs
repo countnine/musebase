@@ -91,7 +91,9 @@ public sealed class MeaningWindow : Window
             return;
         }
 
-        var meaning = await remote.GetMeaningAsync(track.Title, track.Artist, ct).ConfigureAwait(true);
+        // 새 곡은 서버가 곧 만든다 — 만드는 중이면 알리고 잠시 기다렸다 받는다.
+        var meaning = await MeaningFetch.AwaitAsync(
+            remote, track.Title, track.Artist, onPending: () => _body.Text = Loc.T("meaning.pending"), ct: ct);
         if (ct.IsCancellationRequested) return;
 
         if (meaning is null)

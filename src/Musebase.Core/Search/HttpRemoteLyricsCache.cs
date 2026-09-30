@@ -140,9 +140,13 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     /// 조용히 null만 돌려준다(회로가 이미 열려 있으면 아예 시도하지 않는다).
     /// </summary>
     public async Task<SongMeaningView?> GetMeaningAsync(
+        string title, string artist, CancellationToken ct = default) =>
+        (await LookupMeaningAsync(title, artist, ct).ConfigureAwait(false)).Meaning;
+
+    public async Task<MeaningLookup> LookupMeaningAsync(
         string title, string artist, CancellationToken ct = default)
     {
-        if (IsCircuitOpen()) return null;
+        if (IsCircuitOpen()) return MeaningLookup.None;
 
         try
         {
@@ -152,15 +156,30 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
             cts.CancelAfter(_timeout);
 
             using var response = await _http.GetAsync(url, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null; // 404 = 아직 의미가 없다(정상)
+            if (!response.IsSuccessStatusCode)
+            {
+                // 404 = 아직 의미가 없다(정상). 서버가 만드는 중이면 본문에 pending이 온다.
+                if (response.StatusCode != HttpStatusCode.NotFound) return MeaningLookup.None;
+                try
+                {
+                    var miss = await response.Content.ReadFromJsonAsync<MissBody>(Json, cts.Token).ConfigureAwait(false);
+                    return miss is { Pending: true }
+                        ? new MeaningLookup(null, true, miss.RetryAfterMs)
+                        : MeaningLookup.None;
+                }
+                catch (Exception)
+                {
+                    return MeaningLookup.None;   // 구버전 서버 — 본문 없는 404
+                }
+            }
 
             var entry = await response.Content
                 .ReadFromJsonAsync<RemoteMeaningEntry>(Json, cts.Token).ConfigureAwait(false);
-            return ToView(entry);
+            return new MeaningLookup(ToView(entry), false, 0);
         }
         catch (Exception)
         {
-            return null; // 부가 기능 — 가사 조회에 영향을 주지 않는다
+            return MeaningLookup.None; // 부가 기능 — 가사 조회에 영향을 주지 않는다
         }
     }
 

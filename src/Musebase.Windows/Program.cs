@@ -723,8 +723,9 @@ internal static class Program
                 RefreshCover: () => WithTrack(t => coordinator.RemoteCache?.RefreshCoverAsync(t.Title, t.Artist)),
                 // 재생 앱이 SMTC에 실어 보낸 표지 — 키도 네트워크도 필요 없고 음원과 정확히 맞는다.
                 GetThumbnail: () => nowPlaying.GetThumbnailAsync(),
+                // 새 곡은 서버가 곧 만든다 — 만드는 중이면 잠시 기다렸다 받는다(곡이 바뀌면 창이 답을 버린다).
                 GetMeaning: () => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
-                    ? rc.GetMeaningAsync(t.Title, t.Artist)
+                    ? Musebase.Core.Search.MeaningFetch.AwaitAsync(rc, t.Title, t.Artist)
                     : Task.FromResult<Musebase.Core.Search.SongMeaningView?>(null),
                 MakeMeaning: force => coordinator.CurrentTrack is { } t && coordinator.RemoteCache is { } rc
                     ? rc.RequestMeaningAsync(t.Title, t.Artist, force)

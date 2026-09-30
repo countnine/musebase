@@ -150,6 +150,49 @@ public class RemoteLyricsCacheTests
         Assert.Contains("CC BY-SA", meaning.CreditLine);
     }
 
+    /// <summary>새 곡은 서버가 의미를 자동으로 만든다 — 만드는 중이면 알리고 잠시 뒤 받는다(가사의 서버 번역 받기와 같은 흐름).</summary>
+    [Fact]
+    public async Task 서버가_만드는_중이면_기다렸다_받는다()
+    {
+        var calls = 0;
+        var cache = Create(new StubHandler(_ =>
+            Task.FromResult(++calls == 1
+                ? Json(HttpStatusCode.NotFound, """{"error":"not found","pending":true,"retryAfterMs":1000}""")
+                : Json(HttpStatusCode.OK, """{"summary":"성장의 불안","lang":"ko","attribution":[]}"""))));
+        var announced = 0;
+
+        var meaning = await MeaningFetch.AwaitAsync(cache, "Kids", "MGMT", onPending: () => announced++);
+
+        Assert.Equal("성장의 불안", meaning?.Summary);
+        Assert.Equal(1, announced);   // "만드는 중"은 한 번만 알린다
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task 만드는_중이_아니면_한_번만_묻는다()
+    {
+        var handler = new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)));
+        var announced = false;
+
+        var meaning = await MeaningFetch.AwaitAsync(Create(handler), "Kids", "MGMT", onPending: () => announced = true);
+
+        Assert.Null(meaning);
+        Assert.False(announced);
+        Assert.Equal(1, handler.Calls);   // 자료없음·구버전 서버 — 기다려도 소용없다
+    }
+
+    [Fact]
+    public async Task 끝내_안_오면_상한에서_그만둔다()
+    {
+        var handler = new StubHandler(_ => Task.FromResult(Json(HttpStatusCode.NotFound,
+            """{"error":"not found","pending":true,"retryAfterMs":1000}""")));
+
+        var meaning = await MeaningFetch.AwaitAsync(Create(handler), "Kids", "MGMT", maxWaitMs: 1500);
+
+        Assert.Null(meaning);
+        Assert.Equal(2, handler.Calls);
+    }
+
     [Fact]
     public async Task 의미가_없으면_404이고_그것은_정상이다()
     {
