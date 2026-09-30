@@ -88,6 +88,10 @@ public static class AdminEndpoints
         BulkJobRunner jobs, TranslationSettings translationSettings, TranslationGenerator translation,
         AutoTranslator autoTranslator)
     {
+        // 번역 엔진 키 확인 결과(메모리). 재시작하면 "확인 안 함"으로 돌아간다 — 키 상태는 바깥 사정으로
+        // 언제든 바뀌므로 오래 묵은 ✓를 남기는 편이 오히려 해롭다.
+        var engineChecks = new EngineCheckBook();
+
         // 단가표는 부팅 때 한 번 읽는다(값이 바뀌면 재시작 — 코드 배포보다는 싸다).
         var prices = TranslationPricing.FromEnvironment();
 
@@ -669,7 +673,8 @@ public static class AdminEndpoints
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("server.env 설정으로 되돌렸습니다.")}");
         });
 
-        // 번역 엔진·키·대상 언어. 의미 엔진과 같은 규칙(빈 칸은 유지, 저장 즉시 반영).
+        // 번역 엔진 저장 → 형식 검사 → 실제 호출로 확인. 형식이 틀린 키는 저장하지 않는다
+        // (Google 키 칸에 엉뚱한 자격증명이 들어가 6곡이 조용히 건너뛰어진 사고가 있었다).
         app.MapPost(Routes.Base + "/translate/engine", async (HttpRequest req) =>
         {
             if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
@@ -677,33 +682,40 @@ public static class AdminEndpoints
             if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
                 return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
 
-            // 체크박스는 꺼져 있으면 전송되지 않는다 — 숨은 마커가 있는데 값이 없으면 "폴백 없음"이다.
-            var submitted = form["fallbackSubmitted"].ToString() == "1";
-            var fallback = submitted ? string.Join(",", form["fallback"].ToArray()) : null;
-            // 체크박스는 꺼져 있으면 전송되지 않는다 — 같은 마커로 "끔"을 구별한다.
-            bool? auto = submitted ? form["auto"].ToString() == "1" : null;
+            var (input, rejected) = TranslationForm.Read(form).WithoutMalformedKeys();
 
             translationSettings.Save(
-                engine: form["engine"].ToString(),
-                lang: form["lang"].ToString(),
-                deeplKey: form["deeplKey"].ToString(),
-                googleKey: form["googleKey"].ToString(),
-                myMemoryEmail: form["myMemoryEmail"].ToString(),
-                libreEndpoint: form["libreEndpoint"].ToString(),
-                libreKey: form["libreKey"].ToString(),
-                openRouterKey: form["openRouterKey"].ToString(),
-                openRouterModel: form["openRouterModel"].ToString(),
-                fallback: fallback, auto: auto);
+                engine: input.Engine, lang: input.Lang,
+                deeplKey: input.DeeplKey, googleKey: input.GoogleKey,
+                myMemoryEmail: input.MyMemoryEmail,
+                libreEndpoint: input.LibreEndpoint, libreKey: input.LibreKey,
+                openRouterKey: input.OpenRouterKey, openRouterModel: input.OpenRouterModel,
+                fallback: input.Fallback, auto: input.Auto);
 
             var now = TranslationNow();
-            var notice = now.Engine == TranslatorRegistry.None
+            var checks = await engineChecks.CheckAsync(now, input.EnginesToCheck(now), saved: true);
+
+            var head = now.Engine == TranslatorRegistry.None
                 ? "가사 번역을 껐습니다."
-                : now.IsEnabled
-                    ? $"{now.EngineName}{(now.EffectiveModel.Length == 0 ? "" : $" / {now.EffectiveModel}")}"
-                      + $" → {now.Lang} 로 바꿨습니다."
-                      + (now.ChainIds.Count > 1 ? $" 폴백: {string.Join(" → ", now.ChainIds.Skip(1))}." : "")
-                    : $"{now.EngineName}를 골랐지만 API 키가 없어 아직 꺼져 있습니다.";
-            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+                : $"저장했습니다 — {string.Join(" → ", now.ChainIds)} · 대상 {now.Lang}.";
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                TranslationForm.Notice(head, rejected, checks))}");
+        });
+
+        // 저장하지 않고 확인만 — 화면에 넣은 값(비운 칸은 지금 설정)으로 형식 검사와 실제 호출을 해 본다.
+        app.MapPost(Routes.Base + "/translate/engine/test", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var input = TranslationForm.Read(form);
+            var trial = input.Overlay(TranslationNow());
+            var checks = await engineChecks.CheckAsync(trial, input.EnginesToCheck(trial), saved: false);
+
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(
+                TranslationForm.Notice("저장하지 않고 확인했습니다.", [], checks))}");
         });
 
         app.MapPost(Routes.Base + "/translate/engine/reset", async (HttpRequest req) =>
@@ -1012,7 +1024,8 @@ public static class AdminEndpoints
                     auto: new AutoTranslateState(
                         TranslationNow().AutoTranslate, autoTranslator.Enabled, autoTranslator.Pending,
                         store.UsageThisMonth(AutoTranslator.MeterName, TranslationQuota.Month()),
-                        TranslationNow().AutoMonthlyCap, autoTranslator.LastReport)));
+                        TranslationNow().AutoMonthlyCap, autoTranslator.LastReport),
+                    checks: engineChecks.Last));
         }
 
         MeaningSummary MeaningSummaryOf()

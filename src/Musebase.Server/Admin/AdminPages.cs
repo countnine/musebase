@@ -673,35 +673,103 @@ public static class AdminPages
             """;
     }
 
+    /// <summary>엔진마다 고를 때 알아야 할 한 줄. 모르는 엔진은 레지스트리 이름만 보인다.</summary>
+    private static readonly Dictionary<string, string> EngineNotes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["deepl"] = "문자 과금 · Free 키(:fx)는 월 50만 자 무료 — 한도에 닿으면 스스로 알려 줍니다",
+        ["google"] = "월 50만 자 무료(매월 $10 크레딧) · 넘겨도 알려 주지 않아 서버가 대신 셉니다",
+        ["openrouter"] = "LLM · 토큰 과금(월 31만 자에 약 $0.09) · 권장 모델 google/gemini-2.5-flash-lite",
+        ["libretranslate"] = "자체 호스팅 주소가 필요합니다(공개 인스턴스는 2026년부터 유료 키)",
+        ["mymemory"] = "무키 공개 서버 · 줄마다 요청 — 한 곡 확인용(폴백으로는 못 씁니다)",
+    };
+
     /// <summary>
-    /// 번역 엔진 카드. 엔진 목록은 <b>레지스트리에서 만든다</b> — 코어에 엔진이 늘면 이 화면도
-    /// 저절로 따라 늘어야 한다(의미 카드는 두 개를 손으로 적어 두었다).
+    /// 번역 엔진 카드 — <b>쓰는 순서대로</b> 나눈다: ① 주 엔진 → ② 키 → ③ 폴백 → ④ 그 밖의 설정.
     ///
-    /// 키 입력칸은 그 엔진이 키를 쓸 때만 그린다. 엔진마다 값을 따로 보관하므로 엔진을 바꿔도
-    /// 넣어 둔 키는 남는다(설정 화면의 규칙과 같다).
+    /// <b>키 칸은 고른 엔진과 체크한 폴백의 것만 보인다.</b> 칸 다섯 개가 한꺼번에 늘어서 있으면
+    /// 어느 칸이 지금 쓰이는지 알 수 없고, 실제로 Google 칸에 엉뚱한 값이 들어간 채 한참을 갔다.
+    /// 보이고 숨기는 것은 스크립트가 아니라 CSS <c>:has()</c>로 한다 — 관리 화면은 스크립트 하나의
+    /// 해시만 허용한다(CSP). <c>:has()</c>를 모르는 브라우저에서는 전부 보인다(<c>@supports</c>).
+    ///
+    /// 엔진·키 목록은 레지스트리에서 만든다 — 코어에 엔진이 늘면 화면도 따라 는다. 키 칸 옆에는
+    /// 마지막 확인 결과(형식 검사 + 실제 호출)를 붙인다.
+    ///
+    /// 폴백 체크박스는 <b>반드시 폼 안에</b> 있어야 한다. 예전에는 폼 바깥에 그려져 체크박스는
+    /// 전송되지 않고 "제출했다" 표시만 가서, 저장할 때마다 폴백이 지워졌다.
     /// </summary>
     private static string TranslationEngineCardHtml(TranslationEngineCard? card, string csrf)
     {
         if (card is null) return "";
 
-        var chain = card.Chain.Count > 1
-            ? " · 체인 <b>" + Esc(string.Join(" → ", card.Chain)) + "</b>"
-            : "";
-        var state = card.Enabled
-            ? $"지금 번역 엔진: <b>{Esc(card.EngineName)}</b>"
-              + (card.Model.Length == 0 ? "" : $" / <b>{Esc(card.Model)}</b>")
-              + $" → <b>{Esc(card.Lang)}</b>{chain}"
-            : "번역 엔진이 <b>꺼져 있습니다</b> — 엔진을 고르고 그 엔진의 키를 넣으세요.";
+        var checks = card.Checks ?? new Dictionary<string, EngineCheck>();
 
-        // 폴백은 **키가 필요한 엔진만** 고를 수 있다 — 무키 공개 엔진으로 자동으로 넘어가면
-        // 가사 수천 줄이 조용히 공개 서버로 나간다. 체크박스는 꺼져 있으면 전송되지 않으므로
-        // 숨은 마커로 "지우기"를 표현한다(매직 문자열이 필요 없다).
-        var fallback = card.FallbackChoices.Count == 0
-            ? "<span class=\"meta\">폴백으로 쓸 수 있는 엔진이 없습니다(키가 필요한 엔진만 후보입니다).</span>"
-            : "<div class=\"srcpick\">" + string.Concat(card.FallbackChoices.Select(id =>
-                $"<label><input type=\"checkbox\" name=\"fallback\" value=\"{Esc(id)}\""
-                + (card.FallbackOn.Contains(id) ? " checked" : "") + $"> {Esc(id)}</label>"))
-              + "</div>";
+        // ---- 머리: 지금 무엇으로 돌고 있는가 ----
+        var summary = card.Enabled
+            ? $"<b class=\"ok\">동작 중</b> · {Esc(string.Join(" → ", card.Chain))} · 대상 <b>{Esc(card.Lang)}</b>"
+              + (card.Model.Length == 0 ? "" : $" · 모델 {Esc(card.Model)}")
+            : "<b class=\"warn\">꺼짐</b> — ①에서 엔진을 고르고 ②에 그 엔진의 키를 넣으세요.";
+
+        // ---- ① 주 엔진 ----
+        var engineIds = TranslatorRegistry.All.Select(d => d.Id).Append(TranslatorRegistry.None).ToList();
+        var engines = string.Concat(engineIds.Select(id =>
+        {
+            var name = TranslatorRegistry.Find(id)?.DisplayName ?? "끔";
+            var note = id == TranslatorRegistry.None
+                ? "서버는 번역하지 않고 기기가 올린 번역만 보관합니다"
+                : EngineNotes.GetValueOrDefault(id, "");
+            var on = string.Equals(id, card.Engine, StringComparison.OrdinalIgnoreCase) ? " checked" : "";
+            return $"<label><input type=\"radio\" name=\"engine\" value=\"{Esc(id)}\"{on}>"
+                 + $"<span><b>{Esc(name)}</b><br><span class=\"meta\">{Esc(note)}</span></span></label>";
+        }));
+
+        // ---- ② 키 ----
+        string KeyInput(string name, string label, string format, string? hint) =>
+            $"<label class=\"meta\">{Esc(label)}<br><input type=\"password\" name=\"{name}\" autocomplete=\"off\" "
+            + $"placeholder=\"{Esc(hint is null ? format : $"넣어 둔 키 {hint} — 비워 두면 유지")}\"></label>";
+
+        string TextInput(string name, string label, string? value, string placeholder) =>
+            $"<label class=\"meta\">{Esc(label)}<br><input type=\"text\" name=\"{name}\" "
+            + $"value=\"{Esc(value ?? "")}\" placeholder=\"{Esc(placeholder)}\"></label>";
+
+        string Chip(string engine)
+        {
+            if (!checks.TryGetValue(engine, out var c)) return "<span class=\"chip\">확인 안 함</span>";
+            var when = c.At.ToString("MM-dd HH:mm") + " UTC" + (c.Saved ? "" : " · 저장 전 테스트");
+            return c.Ok
+                ? $"<span class=\"chip okc\">✓ 정상 · {c.Millis}ms</span><br><span class=\"meta\">{Esc(when)}"
+                  + (c.Detail is { } d ? $" · {Esc(d)}" : "") + "</span>"
+                : $"<span class=\"chip badc\">✗ 실패</span><br><span class=\"meta\">{Esc(c.Detail ?? "")}"
+                  + $" · {Esc(when)}</span>";
+        }
+
+        (string Engine, string Inputs)[] keyRows =
+        [
+            ("deepl", KeyInput("deeplKey", "DeepL API 키", "36자 UUID · Free 키는 끝에 :fx", card.DeeplKeyHint)),
+            ("google", KeyInput("googleKey", "Google API 키", "AIza로 시작하는 39자", card.GoogleKeyHint)),
+            ("openrouter", KeyInput("openRouterKey", "OpenRouter 키", "sk-or-로 시작", card.OpenRouterKeyHint)
+                + TextInput("openRouterModel", "모델", card.OpenRouterModel, "google/gemini-2.5-flash-lite")),
+            ("libretranslate", TextInput("libreEndpoint", "주소", card.LibreEndpoint, "https://내-인스턴스")
+                + KeyInput("libreKey", "키(선택)", "없으면 비워 두세요", card.LibreKeyHint)),
+            ("mymemory", TextInput("myMemoryEmail", "이메일(선택)", card.MyMemoryEmail, "넣으면 무료 한도가 조금 는다")),
+        ];
+        var keys = string.Concat(keyRows.Select(r =>
+            $"<div class=\"keyrow k-{r.Engine}\"><div class=\"kname\">"
+            + $"{Esc(TranslatorRegistry.Find(r.Engine)?.Name ?? r.Engine)}</div>"
+            + $"<div class=\"kin\">{r.Inputs}</div><div class=\"kchk\">{Chip(r.Engine)}</div></div>"));
+
+        // ---- ③ 폴백 — 키가 필요한 엔진만. 주 엔진과 같은 것은 CSS가 숨긴다 ----
+        var fallback = "<div class=\"srcpick\">" + string.Concat(TranslatorRegistry.All
+                .Where(d => TranslationOptions.CanBeFallback(d.Id))
+                .Select(d =>
+                    $"<label class=\"fb-{Esc(d.Id)}\"><input type=\"checkbox\" name=\"fallback\" value=\"{Esc(d.Id)}\""
+                    + (card.FallbackOn.Contains(d.Id) ? " checked" : "") + $"> {Esc(d.Name)}</label>"))
+            + "</div>";
+
+        // 레지스트리의 엔진마다 "고르면(주 엔진이든 폴백이든) 그 키 칸을 보인다" 규칙을 만든다.
+        var reveal = string.Join("\n", TranslatorRegistry.All.Select(d =>
+            $".tcard:has(input[name=engine][value={d.Id}]:checked) .k-{d.Id},"
+            + $".tcard:has(input[name=fallback][value={d.Id}]:checked) .k-{d.Id}{{display:grid}}"
+            + $".tcard:has(input[name=engine][value={d.Id}]:checked) .fb-{d.Id}{{display:none}}"));
 
         var usage = card.Usage.Count == 0 ? "" :
             "<p class=\"meta\">이번 달 서버가 보낸 문자: "
@@ -722,54 +790,79 @@ public static class AdminPages
               """
             : "<span class=\"meta\">지금은 <code>server.env</code> 값을 그대로 쓰고 있습니다.</span>";
 
-        // 엔진 목록은 레지스트리 순서 그대로 + 맨 끝에 "끔".
-        var engines = string.Concat(TranslatorRegistry.All.Select(d =>
-            $"<option value=\"{Esc(d.Id)}\"{(d.Id == card.Engine ? " selected" : "")}>{Esc(d.DisplayName)}</option>"))
-            + $"<option value=\"{TranslatorRegistry.None}\""
-            + $"{(card.Engine == TranslatorRegistry.None ? " selected" : "")}>끔</option>";
+        var autoChecked = card.Auto is { On: true } ? " checked" : "";
+        var warning = card.Warning is null ? "" : $"<p class=\"warn\">{Esc(card.Warning)}</p>";
 
-        string Key(string name, string label, string? hint)
-        {
-            var placeholder = hint is null ? label : $"{label} {hint} — 비워 두면 유지";
-            return $"<input type=\"password\" name=\"{name}\" autocomplete=\"off\" "
-                 + $"placeholder=\"{Esc(placeholder)}\">";
-        }
-
-        return $"""
+        return $$"""
+            <style>
+            .tcard .step{margin:1.1rem 0 .45rem;font-weight:600}
+            .tcard .step .meta{font-weight:400}
+            .tcard .engines{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.4rem}
+            .tcard .engines label{display:flex;gap:.5rem;align-items:flex-start;padding:.45rem .6rem;
+                 border:1px solid var(--line);border-radius:.45rem;cursor:pointer}
+            .tcard .engines label:has(input:checked){border-color:var(--accent);background:#1b2a3a}
+            .tcard .keyrow{display:grid;grid-template-columns:9rem 1fr 17rem;gap:.6rem;align-items:start;
+                 padding:.5rem 0;border-bottom:1px solid var(--line)}
+            .tcard .kin{display:flex;flex-wrap:wrap;gap:.5rem}
+            .tcard .kin input[type=password],.tcard .kin input[type=text]{min-width:16rem}
+            .tcard .kname{font-weight:600;padding-top:1.1rem}
+            .tcard .kchk{padding-top:1.1rem}
+            .tcard .chip.okc{border-color:var(--ok);color:var(--ok)}
+            .tcard .chip.badc{border-color:var(--bad);color:var(--bad)}
+            .tcard .buttons{display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap}
+            @media (max-width:48rem){.tcard .keyrow{grid-template-columns:1fr}.tcard .kname,.tcard .kchk{padding-top:0} }
+            @supports selector(:has(a)) {
+            .tcard .keyrow{display:none}
+            {{reveal}}
+            }
+            </style>
             <h2>가사 번역 엔진</h2>
-            <p>{state}</p>
-            <form method="post" action="{Routes.Base}/translate/engine" class="inline" data-busy>
-              <input type="hidden" name="csrf" value="{Esc(csrf)}">
-              <select name="engine">{engines}</select>
-              <input type="text" name="lang" value="{Esc(card.Lang)}" style="min-width:6rem"
-                     placeholder="대상 언어 (KO)">
-              {Key("deeplKey", "DeepL 키", card.DeeplKeyHint)}
-              {Key("googleKey", "Google 키", card.GoogleKeyHint)}
-              {Key("openRouterKey", "OpenRouter 키", card.OpenRouterKeyHint)}
-              <input type="text" name="openRouterModel" value="{Esc(card.OpenRouterModel ?? "")}"
-                     placeholder="OpenRouter 모델 (예: google/gemini-2.5-flash)">
-              <input type="text" name="libreEndpoint" value="{Esc(card.LibreEndpoint ?? "")}"
-                     placeholder="LibreTranslate 주소 (자체 호스팅)">
-              {Key("libreKey", "LibreTranslate 키", card.LibreKeyHint)}
-              <input type="text" name="myMemoryEmail" value="{Esc(card.MyMemoryEmail ?? "")}"
-                     placeholder="MyMemory 이메일 (선택)">
+            <div class="tcard">
+            <p>{{summary}}</p>
+            <form method="post" action="{{Routes.Base}}/translate/engine">
+              <input type="hidden" name="csrf" value="{{Esc(csrf)}}">
               <input type="hidden" name="fallbackSubmitted" value="1">
-              <label class="meta"><input type="checkbox" name="auto" value="1"{(card.Auto is { On: true } ? " checked" : "")}>
-                새 곡 자동 번역</label>
-              <button type="submit">저장</button>
+
+              <div class="step">① 주 엔진 고르기</div>
+              <div class="engines">{{engines}}</div>
+
+              <div class="step">② 키 넣기 <span class="meta">— 고른 엔진과 ③에서 체크한 폴백의 칸만 보입니다.
+                넣어 둔 키는 끝 네 글자만 보이고, 비워 두면 그대로 유지됩니다.</span></div>
+              {{keys}}
+
+              <div class="step">③ 폴백 <span class="meta">— 주 엔진이 막히면(한도·키 오류) 적힌 순서대로 이어받습니다.
+                키가 필요한 엔진만 고를 수 있습니다(공개 서버로 조용히 새지 않게).</span></div>
+              {{fallback}}
+
+              <div class="step">④ 그 밖의 설정</div>
+              <div class="kin">
+                <label class="meta">대상 언어<br><input type="text" name="lang" value="{{Esc(card.Lang)}}"
+                       style="min-width:6rem" placeholder="KO"></label>
+                <label class="meta" style="align-self:end"><input type="checkbox" name="auto" value="1"{{autoChecked}}>
+                  새 곡 자동 번역 — 기기가 올린 곡에 번역이 없으면 서버가 곧 채웁니다</label>
+              </div>
+
+              <div class="buttons">
+                <button type="submit">저장하고 확인</button>
+                <button type="submit" formaction="{{Routes.Base}}/translate/engine/test">저장하지 않고 테스트</button>
+              </div>
+              <p class="meta">두 버튼 모두 키 <b>형식</b>을 먼저 보고, 맞으면 짧은 두 줄을 <b>실제로 번역</b>해
+                키가 살아 있는지 확인합니다(글자 몇 개라 비용은 사실상 없습니다).
+                형식이 틀린 키는 저장하지 않습니다.</p>
             </form>
-            {AutoLine(card.Auto)}
-            <p class="meta">주 엔진이 막히면 이어받을 엔진(적힌 순서대로):</p>
-            {fallback}
-            {usage}
-            <p class="meta">저장하면 <b>다음 실행부터 바로</b> 적용됩니다(재시작 불필요). {origin}<br>
+            {{AutoLine(card.Auto)}}
+            {{usage}}
+            <details><summary>주의사항 · 되돌리기</summary>
+            <p class="meta">저장하면 <b>다음 실행부터 바로</b> 적용됩니다(재시작 불필요). {{origin}}<br>
             대상 언어는 DeepL식 대문자로 적습니다(<code>KO</code>·<code>EN-US</code>·<code>ZH-HANT</code>) —
-            기기와 같은 표기여야 같은 줄을 두 번 번역하지 않습니다 · 캐시에 쌓인 줄 {card.CacheRows:N0}개<br>
+            기기와 같은 표기여야 같은 줄을 두 번 번역하지 않습니다 · 캐시에 쌓인 줄 {{card.CacheRows:N0}}개<br>
             ⚠ 여기 넣은 API 키는 <b>DB에 평문으로</b> 저장되어 백업 파일에도 들어갑니다 —
             그게 싫으면 <code>server.env</code>만 쓰세요.<br>
             ⚠ 번역 캐시는 <b>엔진을 구분하지 않습니다</b> — 엔진을 바꿔도 이미 캐시된 줄은
-            옛 엔진의 번역이 그대로 쓰입니다(비용에는 이득, 품질 비교에는 방해).</p>
-            {(card.Warning is null ? "" : $"<p class=\"warn\">{Esc(card.Warning)}</p>")}
+            옛 엔진의 번역이 그대로 쓰입니다.</p>
+            </details>
+            {{warning}}
+            </div>
             """;
     }
 
