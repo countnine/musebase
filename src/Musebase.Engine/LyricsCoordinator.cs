@@ -39,7 +39,7 @@ public sealed class LyricsCoordinator : IDisposable
     private int _yieldRetryMs = 3000; // 서버가 제안한 재조회 간격(clamp된 값)
 
     /// <summary>
-    /// 스스로 번역하지 않는 기기가 새 곡을 올린 뒤 서버 번역을 기다리는 시간(ms). 서버는 올라온 곡을
+    /// 대상 언어 번역 없이 새 곡을 올린 뒤(번역기 없음·실패·한도) 서버 번역을 기다리는 시간(ms). 서버는 올라온 곡을
     /// 곧바로 번역하므로(자동 번역) 보통 몇 초 안에 붙는다. 원문은 이미 화면에 있어 표시는 늦지 않는다.
     /// </summary>
     public int ServerTranslationWaitMs { get; set; } = 10_000;
@@ -254,9 +254,9 @@ public sealed class LyricsCoordinator : IDisposable
             // 보충 번역이 실제로 채워지면 캐시·서버에 되돌려 준다(persistAfter) — 저장 당시
             // 번역이 없던 곡이 영원히 번역 없이 남는 것을 막는다.
             await TranslateAsync(cached, cacheCts.Token, persistAfter: true);
-            // 스스로 번역하지 않는 기기: 번역 없이 저장된 곡은 그 뒤 서버가 채웠을 수 있다 — 로컬
-            // 캐시에는 재검증이 없어, 여기서 묻지 않으면 서버 번역이 이 기기엔 영영 오지 않는다.
-            if (AwaitsServerTranslation && !HasTargetTranslation(cached))
+            // 보충 번역 뒤에도 대상 언어가 없으면(번역기 없음·실패·한도) 서버가 그 뒤 채웠을 수 있다 —
+            // 로컬 캐시에는 재검증이 없어, 여기서 묻지 않으면 서버 번역이 이 기기엔 영영 오지 않는다.
+            if (CanReceiveServerTranslation && !HasTargetTranslation(cached))
                 await TryTakeServerTranslationAsync(track, cached, pollMs: 0, budgetMs: 0, cacheCts.Token);
             return;
         }
@@ -384,8 +384,8 @@ public sealed class LyricsCoordinator : IDisposable
                     Log?.Invoke($"[cache] 저장 실패: {e.Message}");
                 }
 
-                // 3) 스스로 번역하지 않는 기기는 방금 올린 곡을 서버가 번역해 줄 때까지 잠깐 기다린다.
-                if (upload is not null && AwaitsServerTranslation &&
+                // 3) 대상 언어 없이 올렸으면(번역기 없음·실패·한도) 서버가 번역해 줄 때까지 잠깐 기다린다.
+                if (upload is not null && CanReceiveServerTranslation &&
                     CurrentLyrics is { } uploaded && !HasTargetTranslation(uploaded))
                 {
                     try { await upload; } catch { /* 업로드 실패는 구현이 삼킨다 — 기다려도 소용없을 뿐 */ }
@@ -577,11 +577,12 @@ public sealed class LyricsCoordinator : IDisposable
         !TargetIsChinese && Translation is { IsEnabled: true, CacheOnly: false };
 
     /// <summary>
-    /// 스스로 번역하지 않는 기기인가(엔진 끔·키 없음·API 끔) — 가사 서버가 채워 주는 번역만 쓴다.
-    /// 새 설치에서 가사 서버를 넣으면 이게 기본이다.
+    /// 서버 번역을 받아 쓸 수 있는가. 번역기 유무가 아니라 <b>자기 번역을 해 본 뒤에도 대상 언어가
+    /// 비었는가</b>로 판단한다(호출자가 <see cref="HasTargetTranslation"/>로 확인) — 번역기가 켜져
+    /// 있어도 한도·실패로 비는 일이 흔하고(MyMemory 무키 하루 한도), 그런 기기가 서버에 이미 있는
+    /// 번역을 영영 못 받던 문제가 실제로 있었다. 번역에 성공한 기기는 추가 요청이 없다.
     /// </summary>
-    private bool AwaitsServerTranslation =>
-        RemoteCache is not null && !TargetIsChinese && Translation is not { IsEnabled: true, CacheOnly: false };
+    private bool CanReceiveServerTranslation => RemoteCache is not null && !TargetIsChinese;
 
     private bool HasTargetTranslation(Lyrics lyrics) =>
         lyrics.Lines.Any(l => l.Attachments.Translation(TargetLangLower) is not null);
