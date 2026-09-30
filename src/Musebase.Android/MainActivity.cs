@@ -553,7 +553,8 @@ public sealed class MainActivity : Activity
     // 만들기는 여전히 사람이 누를 때만이다 — 한 번이 외부 자료 수집 + LLM 호출이라 비싸다.
     // 서버가 앱 생성을 막아 두었으면(MUSEBASE_MEANING_ALLOW_CLIENT=0) 눌러도 안 된다고 알려 준다.
 
-    private enum MeaningPhase { Hidden, Loading, Absent, Making, Present, Failed }
+    // ServerMaking: 새로 올라온 곡이라 서버가 스스로 만드는 중(사람이 누른 Making과 구별 — 조회가 계속 기다린다).
+    private enum MeaningPhase { Hidden, Loading, Absent, Making, ServerMaking, Present, Failed }
 
     private static readonly Color AccentColor = Color.Argb(0xFF, 0x7C, 0xC4, 0xFF);
 
@@ -684,7 +685,7 @@ public sealed class MainActivity : Activity
         }
 
         var key = MeaningKey(track);
-        if (key == _meaningFor && _meaningPhase == MeaningPhase.Making) return; // 곧 결과가 온다
+        if (key == _meaningFor && _meaningPhase is MeaningPhase.Making or MeaningPhase.ServerMaking) return; // 곧 결과가 온다
         if (key != _meaningFor)
         {
             _meaning = null;
@@ -693,7 +694,17 @@ public sealed class MainActivity : Activity
         }
 
         Musebase.Core.Search.SongMeaningView? meaning = null;
-        try { meaning = await remote.GetMeaningAsync(track.Title, track.Artist); }
+        try
+        {
+            // 새 곡은 서버가 곧 만든다 — 만드는 중이면 카드에 알리고 잠시 기다렸다 받는다.
+            meaning = await Musebase.Core.Search.MeaningFetch.AwaitAsync(
+                remote, track.Title, track.Artist,
+                onPending: () =>
+                {
+                    if (!IsFinishing && !IsDestroyed && key == _meaningFor && _meaningPhase != MeaningPhase.Making)
+                        SetMeaning(MeaningPhase.ServerMaking, key);
+                });
+        }
         catch (Exception) { /* 조용한 강등 — 부가 기능이다 */ }
 
         // 그사이 곡이 바뀌었거나 사람이 만들기를 눌렀으면 이 답은 버린다.
@@ -737,6 +748,11 @@ public sealed class MainActivity : Activity
 
             case MeaningPhase.Making:
                 _meaningBody.Text = "의미를 만드는 중… 수십 초 걸릴 수 있습니다.";
+                _meaningAction.Visibility = ViewStates.Gone;
+                break;
+
+            case MeaningPhase.ServerMaking:
+                _meaningBody.Text = "서버가 이 곡의 의미를 만드는 중입니다…";
                 _meaningAction.Visibility = ViewStates.Gone;
                 break;
 

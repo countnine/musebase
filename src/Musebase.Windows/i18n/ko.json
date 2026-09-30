@@ -213,6 +213,7 @@
   "meaning.noTrack": "재생 중인 곡이 없습니다.",
   "meaning.noServer": "가사 서버가 설정되지 않았습니다 — 설정에서 서버 주소를 넣으세요.",
   "meaning.none": "이 곡의 의미는 아직 없습니다.",
+  "meaning.pending": "서버가 이 곡의 의미를 만드는 중입니다…",
   "meaning.credit": "출처:",
 
   "search.title": "가사 검색",

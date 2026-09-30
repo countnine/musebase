@@ -48,6 +48,14 @@ public interface IRemoteLyricsCache
     Task<SongMeaningView?> GetMeaningAsync(string title, string artist, CancellationToken ct = default);
 
     /// <summary>
+    /// 의미 조회 + "서버가 지금 만드는 중" 힌트(404 본문의 <c>pending</c>). 새로 올라온 곡은 서버가
+    /// 자동으로 만들므로, 힌트가 오면 잠시 뒤 다시 묻는다(<see cref="MeaningFetch"/>).
+    /// 기본 구현은 힌트를 모른다 — 구현이 없는 테스트 대역·구버전과 그대로 호환된다.
+    /// </summary>
+    async Task<MeaningLookup> LookupMeaningAsync(string title, string artist, CancellationToken ct = default) =>
+        new(await GetMeaningAsync(title, artist, ct).ConfigureAwait(false), false, 0);
+
+    /// <summary>
     /// 곡의 의미를 <b>지금 만들어 달라고</b> 서버에 요청한다. 사람이 버튼을 눌렀을 때만 부른다 —
     /// 한 번이 외부 API 여러 개 + LLM 호출이라 비싸다(자동 호출 금지).
     ///
