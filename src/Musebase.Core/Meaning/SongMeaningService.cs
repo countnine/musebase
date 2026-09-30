@@ -89,14 +89,16 @@ public sealed class SongMeaningService
                 ? SongMeaning.Insufficient
                 : SongMeaning.Ok;
             return new SongMeaning(
-                verdict, MeaningVerdict.Strip(written.Text), collected, _writer.EngineId, _writer.Model);
+                verdict, MeaningVerdict.Strip(written.Text), collected,
+                written.Engine ?? _writer.EngineId, written.Model ?? _writer.Model);
         }
 
         // 쿼타·네트워크처럼 시간이 풀어 줄 실패와 설정 문제는 `failed`로 굳히지 않는다.
         var status = written.NeedsSetup ? SongMeaning.Config
             : written.Retryable ? SongMeaning.Retry
             : SongMeaning.Failed;
-        return new SongMeaning(status, null, collected, _writer.EngineId, _writer.Model, DetailOf(written));
+        return new SongMeaning(status, null, collected,
+            written.Engine ?? _writer.EngineId, written.Model ?? _writer.Model, DetailOf(written));
     }
 
     /// <summary>"HTTP 402 · 잔액이 부족합니다"처럼 상태코드와 이유를 한 줄로.</summary>

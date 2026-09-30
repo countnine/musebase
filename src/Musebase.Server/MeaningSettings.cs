@@ -15,16 +15,26 @@ namespace Musebase.Server;
 /// ⚠ 저장한 API 키는 <b>DB에 평문으로 들어간다</b>(Last.fm 세션 키와 같은 자리). 백업 파일에
 /// 함께 담긴다는 뜻이므로, 키를 파일 밖에 두고 싶으면 화면에 넣지 말고 <c>server.env</c>만 쓴다.
 /// </summary>
-public sealed class MeaningSettings(LyricsStore store, MeaningOptions environment)
+public sealed class MeaningSettings(LyricsStore store, MeaningOptions environment, MeaningEngineGate? gate = null)
 {
     public const string EngineSetting = "meaning.engine";
     public const string GeminiKeySetting = "meaning.gemini.key";
     public const string GeminiModelSetting = "meaning.gemini.model";
     public const string OpenRouterKeySetting = "meaning.openrouter.key";
     public const string OpenRouterModelSetting = "meaning.openrouter.model";
+    public const string FallbackSetting = "meaning.fallback";
+    public const string GeminiCapSetting = "meaning.gemini.cap";
+    public const string AutoSetting = "meaning.auto";
+    public const string AutoCapSetting = "meaning.auto.cap";
 
     private static readonly string[] AllSettings =
-        [EngineSetting, GeminiKeySetting, GeminiModelSetting, OpenRouterKeySetting, OpenRouterModelSetting];
+    [
+        EngineSetting, GeminiKeySetting, GeminiModelSetting, OpenRouterKeySetting, OpenRouterModelSetting,
+        FallbackSetting, GeminiCapSetting, AutoSetting, AutoCapSetting,
+    ];
+
+    /// <summary>엔진 쉬게 하기·월 상한 — 서버 전체가 하나를 공유한다.</summary>
+    public MeaningEngineGate Gate { get; } = gate ?? new MeaningEngineGate(store);
 
     private readonly object _lock = new();
     private MeaningOptions? _current;
@@ -50,7 +60,7 @@ public sealed class MeaningSettings(LyricsStore store, MeaningOptions environmen
             lock (_lock)
             {
                 _current ??= Compose();
-                return _service ??= _current.BuildService();
+                return _service ??= _current.BuildService(hooks: Gate.Hooks(_current));
             }
         }
     }
@@ -62,8 +72,11 @@ public sealed class MeaningSettings(LyricsStore store, MeaningOptions environmen
     /// 화면에서 고친 값을 저장한다. <b>빈 칸은 "그대로 두기"</b>다 — 키는 화면에 마스킹해서
     /// 보여 주므로, 모델만 바꾸려고 저장할 때마다 긴 키를 다시 치게 하면 안 된다.
     /// </summary>
+    /// <param name="fallback">폴백 엔진(쉼표 구분). null은 손대지 않음, 빈 문자열은 "폴백 없음".</param>
+    /// <param name="auto">새 곡 자동 생성. null은 손대지 않음.</param>
     public void Save(string? engine, string? geminiKey, string? geminiModel,
-                     string? openRouterKey, string? openRouterModel)
+                     string? openRouterKey, string? openRouterModel,
+                     string? fallback = null, bool? auto = null, long? geminiCap = null, int? autoCap = null)
     {
         lock (_lock)
         {
@@ -72,7 +85,14 @@ public sealed class MeaningSettings(LyricsStore store, MeaningOptions environmen
             Put(GeminiModelSetting, geminiModel);
             Put(OpenRouterKeySetting, openRouterKey);
             Put(OpenRouterModelSetting, openRouterModel);
+            // 빈 폴백은 지우지 않고 "none"으로 적는다 — 지우면 환경변수의 폴백이 되살아난다.
+            if (fallback is not null)
+                store.SetSetting(FallbackSetting, fallback.Trim().Length == 0 ? MeaningWriterRegistry.None : fallback.Trim());
+            if (auto is { } on) store.SetSetting(AutoSetting, on ? "1" : "0");
+            if (geminiCap is { } gc) store.SetSetting(GeminiCapSetting, Math.Max(0, gc).ToString());
+            if (autoCap is { } ac) store.SetSetting(AutoCapSetting, Math.Max(0, ac).ToString());
             Invalidate();
+            Gate.Reset();   // 사람이 설정을 고쳤다 — 쉬던 엔진을 다시 불러 본다
         }
 
         void Put(string name, string? value)
@@ -91,6 +111,7 @@ public sealed class MeaningSettings(LyricsStore store, MeaningOptions environmen
         {
             foreach (var name in AllSettings) store.DeleteSetting(name);
             Invalidate();
+            Gate.Reset();
         }
     }
 
@@ -111,6 +132,10 @@ public sealed class MeaningSettings(LyricsStore store, MeaningOptions environmen
             GeminiModel = Get(GeminiModelSetting) ?? environment.GeminiModel,
             OpenRouterApiKey = Get(OpenRouterKeySetting) ?? environment.OpenRouterApiKey,
             OpenRouterModel = Get(OpenRouterModelSetting) ?? environment.OpenRouterModel,
+            Fallback = Get(FallbackSetting) ?? environment.Fallback,
+            GeminiMonthlyCap = long.TryParse(Get(GeminiCapSetting), out var gc) ? gc : environment.GeminiMonthlyCap,
+            AutoGenerate = Get(AutoSetting) is { } auto ? auto == "1" : environment.AutoGenerate,
+            AutoMonthlyCap = int.TryParse(Get(AutoCapSetting), out var ac) ? ac : environment.AutoMonthlyCap,
         };
     }
 }

@@ -32,6 +32,15 @@ public sealed record MeaningWriteResult(
     int? StatusCode = null,
     string? Reason = null)
 {
+    /// <summary>
+    /// 실제로 쓴 엔진·모델. 체인(<see cref="CompositeMeaningWriter"/>)에서는 앞 엔진이 실패하고
+    /// 뒤 엔진이 쓸 수 있어서, 라이터의 대표 id로는 누가 썼는지 알 수 없다. 비면 라이터의 값을 쓴다.
+    /// </summary>
+    public string? Engine { get; init; }
+
+    /// <inheritdoc cref="Engine"/>
+    public string? Model { get; init; }
+
     /// <summary>사유 문장은 이 길이에서 자른다 — 로그 한 줄·화면 한 줄에 들어가야 한다.</summary>
     public const int MaxReasonLength = 200;
 
