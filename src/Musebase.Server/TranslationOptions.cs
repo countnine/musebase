@@ -144,6 +144,46 @@ public sealed record TranslationOptions(
     public static bool CanBeFallback(string id) =>
         TranslatorRegistry.Find(id) is { RequiresApiKey: true };
 
+    /// <summary>
+    /// 키 형식이 그 엔진의 것이 아니면 사람에게 보여 줄 이유, 맞으면 null.
+    ///
+    /// <b>실제로 겪은 사고 때문에 있다.</b> Google 키 칸에 다른 자격증명(`AQ.A…` 53자)이 들어가
+    /// 6곡이 조용히 건너뛰어졌다. 형식은 호출 없이 공짜로 가를 수 있으니 저장 전에 거른다.
+    /// 모르는 엔진·형식이 자유로운 엔진(LibreTranslate 자체 호스팅)은 판정하지 않는다.
+    /// </summary>
+    public static string? KeyFormatProblem(string engine, string key)
+    {
+        var k = key.Trim();
+        return engine.ToLowerInvariant() switch
+        {
+            "google" when !System.Text.RegularExpressions.Regex.IsMatch(k, "^AIza[0-9A-Za-z_-]{35}$") =>
+                $"Google API 키는 AIza로 시작하는 39자입니다(넣은 값: {Describe(k)}). "
+                + "콘솔 → API 및 서비스 → 사용자 인증 정보 → API 키에서 복사하세요.",
+            "deepl" when !System.Text.RegularExpressions.Regex.IsMatch(k, "^[0-9a-fA-F-]{36}(:fx)?$") =>
+                $"DeepL 키는 36자 UUID이고 Free 키는 끝에 :fx가 붙습니다(넣은 값: {Describe(k)}).",
+            "openrouter" when !k.StartsWith("sk-or-", StringComparison.Ordinal) || k.Length < 40 =>
+                $"OpenRouter 키는 sk-or-로 시작합니다(넣은 값: {Describe(k)}).",
+            _ => null,
+        };
+
+        // 비밀이 화면·로그에 새지 않도록 앞 4자와 길이만 말한다.
+        static string Describe(string v) =>
+            v.Length == 0 ? "빈 값" : $"{v.Length}자, '{v[..Math.Min(4, v.Length)]}'로 시작";
+    }
+
+    /// <summary>이 엔진이 쓰는 키(형식 검사용). 키를 안 쓰는 엔진은 null.</summary>
+    public string? KeyFor(string engine) => engine.ToLowerInvariant() switch
+    {
+        "deepl" => DeeplApiKey,
+        "google" => GoogleApiKey,
+        "openrouter" => OpenRouterApiKey,
+        "libretranslate" => LibreApiKey,
+        _ => null,
+    };
+
+    /// <summary>엔진 하나짜리 번역기(체인과 무관하게 키가 맞는지 확인할 때). 못 만들면 null.</summary>
+    public ITranslator? BuildOne(string engine) => TranslatorRegistry.Build(engine, ToTranslatorOptions());
+
     /// <summary>폴백에서 빠진 후보와 그 이유 — 조용히 빠지면 사람은 켜진 줄 안다.</summary>
     public IReadOnlyList<(string Id, string Reason)> RejectedFallback => BuildChain().Rejected;
 

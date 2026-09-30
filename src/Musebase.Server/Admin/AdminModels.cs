@@ -214,11 +214,14 @@ public sealed record TranslationEngineCard(
     /// <summary>엔진별 이번 달 사용량과 무료 한도(아는 것만).</summary>
     IReadOnlyList<(string Engine, long Used, long? Free)> Usage,
     /// <summary>새 곡 자동 번역 상태.</summary>
-    AutoTranslateState? Auto = null)
+    AutoTranslateState? Auto = null,
+    /// <summary>엔진별 마지막 키 확인 결과(형식 + 실제 호출). 확인한 적 없으면 없음.</summary>
+    IReadOnlyDictionary<string, EngineCheck>? Checks = null)
 {
     public static TranslationEngineCard From(
         TranslationOptions o, bool overridden, int cacheRows,
-        IReadOnlyList<(string, long, long?)>? usage = null, AutoTranslateState? auto = null) => new(
+        IReadOnlyList<(string, long, long?)>? usage = null, AutoTranslateState? auto = null,
+        IReadOnlyDictionary<string, EngineCheck>? checks = null) => new(
         o.Engine, o.EngineName, o.EffectiveModel, o.Lang, o.IsEnabled, overridden,
         MeaningEngineCard.Hint(o.DeeplApiKey), MeaningEngineCard.Hint(o.GoogleApiKey), o.MyMemoryEmail,
         o.LibreEndpoint, MeaningEngineCard.Hint(o.LibreApiKey),
@@ -231,7 +234,8 @@ public sealed record TranslationEngineCard(
             .Select(d => d.Id).ToList(),
         FallbackOn: o.ChainIds.Skip(1).ToList(),
         Usage: usage ?? [],
-        Auto: auto);
+        Auto: auto,
+        Checks: checks);
 }
 
 /// <summary>새 곡 자동 번역 — 켜 둠 / 실제로 도는 중 / 대기 곡 / 이번 달 사용·상한 / 마지막 요약.</summary>
