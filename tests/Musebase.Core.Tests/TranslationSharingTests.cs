@@ -237,6 +237,55 @@ public class TranslationSharingTests
         }
     }
 
+    /// <summary>
+    /// 번역기가 켜져 있어도 한도·실패로 번역이 비면 서버 번역을 받아야 한다 — S26(MyMemory)이
+    /// 서버에 번역이 있는데도 재생할 때마다 번역 없이 남던 실제 사례.
+    /// </summary>
+    [Fact]
+    public async Task 자체_번역이_실패한_기기도_올린_곡의_서버_번역을_받는다()
+    {
+        var translator = new FakeTranslator { Fails = true };
+        var remote = new FakeRemoteCache(null) { ArrivingLrc = Translated, ArriveAfter = 2 };
+        using var coordinator = NewCoordinator(
+            remote, out _, translator: translator, provider: new StubProvider(Plain));
+        coordinator.ServerTranslationPollMs = 20;
+        coordinator.Start();
+
+        await WaitAsync(() => coordinator.CurrentLyrics?.ToString().Contains("[tr:ko]") == true, "서버 번역 수신");
+
+        Assert.True(translator.Calls > 0); // 자기 번역은 해 봤고
+        Assert.DoesNotContain("[tr:ko]", Assert.Single(remote.Uploads).Lrc);
+    }
+
+    [Fact]
+    public async Task 자체_번역이_실패한_기기의_번역_없는_캐시_히트도_서버에_한_번_묻는다()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"musebase-cache-test-{Guid.NewGuid():N}.db");
+        try
+        {
+            using var cache = new LyricsCacheStore(dbPath);
+            var untranslated = Lyrics.Parse(Plain)!;
+            untranslated.Metadata.ServiceName = "LRCLIB";
+            cache.Set("Song", "Artist", untranslated);
+
+            var remote = new FakeRemoteCache(Translated);
+            using (var coordinator = NewCoordinator(
+                       remote, out _, cache, translator: new FakeTranslator { Fails = true }))
+            {
+                coordinator.Start();
+                await WaitAsync(() => coordinator.CurrentLyrics?.ToString().Contains("[tr:ko]") == true, "서버 번역 수신");
+            }
+
+            Assert.Contains("[tr:ko]", cache.Get("Song", "Artist")!.ToString());
+            Assert.Equal(1, remote.Lookups);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { /* 정리 실패는 무시 */ }
+        }
+    }
+
     [Fact]
     public void 번역을_끈_기기는_무료_폴백도_쓰지_않는다()
     {
@@ -363,11 +412,15 @@ public class TranslationSharingTests
         /// <summary>실제로 번역 API를 호출한 횟수 — 양보가 먹었는지 보는 잣대다.</summary>
         public int Calls => Volatile.Read(ref _calls);
 
+        /// <summary>켜면 한 줄도 못 채운다(한도 초과·실패처럼).</summary>
+        public bool Fails { get; init; }
+
         public Task<IReadOnlyList<string?>> TranslateAsync(
             IReadOnlyList<string> texts, string targetLang, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _calls);
-            return Task.FromResult<IReadOnlyList<string?>>(texts.Select(t => (string?)$"{targetLang}:{t}").ToList());
+            return Task.FromResult<IReadOnlyList<string?>>(
+                texts.Select(t => Fails ? null : (string?)$"{targetLang}:{t}").ToList());
         }
     }
 
