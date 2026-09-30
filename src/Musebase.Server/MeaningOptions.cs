@@ -23,7 +23,15 @@ public sealed record MeaningOptions(
     IReadOnlyList<string> Sources,
     int BackfillLimit,
     int BackfillDelayMs,
-    bool AllowClientGeneration = true)
+    bool AllowClientGeneration = true,
+    // 주 엔진이 문단을 못 쓰면 이어 맡을 엔진(쉼표 구분). 비면 폴백 없음.
+    string? Fallback = null,
+    // Gemini 월 호출 상한(성공한 호출 수). 0이면 세기만 하고 막지 않는다.
+    long GeminiMonthlyCap = 0,
+    // 기기가 올린 새 곡의 의미를 서버가 곧바로 만든다(가사 번역과 같은 흐름).
+    bool AutoGenerate = true,
+    // 자동 생성 월 상한(곡 수) — 사람이 누르지 않는 경로라 따로 묶는다.
+    int AutoMonthlyCap = 300)
 {
     /// <summary>
     /// 소스 id. <b>기본값에 musixmatch는 없다</b> — 그 자료는 사람이 쓴 해설이 아니라
@@ -43,7 +51,11 @@ public sealed record MeaningOptions(
     /// `MUSEBASE_MEANING_WIKIPEDIA`(0이면 끔 — 예전 변수, 아래 설명),
     /// `MUSEBASE_MEANING_BACKFILL_LIMIT`(기본 50),
     /// `MUSEBASE_MEANING_BACKFILL_DELAY_MS`(기본 0 — 아래 설명),
-    /// `MUSEBASE_MEANING_ALLOW_CLIENT`(0이면 앱의 [의미 만들기] 버튼을 막는다 — 기본 켬).
+    /// `MUSEBASE_MEANING_ALLOW_CLIENT`(0이면 앱의 [의미 만들기] 버튼을 막는다 — 기본 켬),
+    /// `MUSEBASE_MEANING_FALLBACK`(쉼표 구분 폴백 엔진, 예: `openrouter`),
+    /// `MUSEBASE_GEMINI_MONTHLY_CAP`(Gemini 월 호출 상한, 기본 0 = 막지 않음),
+    /// `MUSEBASE_MEANING_AUTO`(0이면 새 곡 자동 생성을 끈다 — 기본 켬),
+    /// `MUSEBASE_MEANING_AUTO_MONTHLY_CAP`(자동 생성 월 상한 곡 수, 기본 300).
     ///
     /// `MUSEBASE_MEANING_WIKIPEDIA=0`은 소스 목록이 생기기 전부터 쓰던 변수라 계속 받아 준다 —
     /// 목록을 직접 지정하지 않은 경우에만 기본값에서 위키피디아를 뺀다(직접 지정이 항상 이긴다).
@@ -80,7 +92,11 @@ public sealed record MeaningOptions(
             Sources: sources,
             BackfillLimit: limit,
             BackfillDelayMs: delay,
-            AllowClientGeneration: Env("MUSEBASE_MEANING_ALLOW_CLIENT") != "0");
+            AllowClientGeneration: Env("MUSEBASE_MEANING_ALLOW_CLIENT") != "0",
+            Fallback: Env("MUSEBASE_MEANING_FALLBACK"),
+            GeminiMonthlyCap: long.TryParse(Env("MUSEBASE_GEMINI_MONTHLY_CAP"), out var gc) ? Math.Max(0, gc) : 0,
+            AutoGenerate: Env("MUSEBASE_MEANING_AUTO") != "0",
+            AutoMonthlyCap: int.TryParse(Env("MUSEBASE_MEANING_AUTO_MONTHLY_CAP"), out var ac) ? Math.Max(0, ac) : 300);
     }
 
     /// <summary>설정 문자열 → 소스 id 목록. 알 수 없는 이름은 무시한다(오타로 서버가 죽지 않게).</summary>
@@ -135,6 +151,56 @@ public sealed record MeaningOptions(
         _ => false,
     };
 
+    /// <summary>
+    /// 실제로 시도할 엔진 id, 주 엔진 먼저. 주 엔진이 꺼져 있으면(none) 폴백도 없다 —
+    /// "끔인데 만들어지는" 상태를 두지 않는다. 모르는 id는 버린다.
+    /// </summary>
+    public IReadOnlyList<string> ChainIds
+    {
+        get
+        {
+            var ids = new List<string>();
+            if (MeaningWriterRegistry.Find(Engine) is not { } primary) return ids;
+            ids.Add(primary.Id);
+            foreach (var id in (Fallback ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                if (MeaningWriterRegistry.Find(id) is { } d && !ids.Contains(d.Id, StringComparer.OrdinalIgnoreCase))
+                    ids.Add(d.Id);
+            return ids;
+        }
+    }
+
+    /// <summary>이 엔진의 월 호출 상한(0 = 막지 않음). 지금은 Gemini만 — "크레딧 안에서만"을 지키는 값이다.</summary>
+    public long MonthlyCapOf(string engine) =>
+        string.Equals(engine, "gemini", StringComparison.OrdinalIgnoreCase) ? GeminiMonthlyCap : 0;
+
+    /// <summary>엔진별로 실제 불릴 모델(비우면 라이터 기본값).</summary>
+    public string ModelOf(string engine) => (this with { Engine = engine }).EffectiveModel;
+
+    /// <summary>이 엔진의 키가 있는가.</summary>
+    public bool HasKeyFor(string engine) => (this with { Engine = engine }).HasEngineKey;
+
+    public MeaningWriterOptions WriterOptions => new()
+    {
+        GeminiApiKey = GeminiApiKey,
+        GeminiModel = GeminiModel,
+        OpenRouterApiKey = OpenRouterApiKey,
+        OpenRouterModel = OpenRouterModel,
+    };
+
+    /// <summary>
+    /// 체인 라이터. 키가 있는 엔진만 넣고, 하나도 없으면 null(기능 꺼짐). 훅이 없고 엔진이
+    /// 하나면 그 엔진을 그대로 돌려준다(예전과 같은 동작).
+    /// </summary>
+    public IMeaningWriter? BuildWriter(MeaningChainHooks? hooks = null)
+    {
+        var members = ChainIds
+            .Select(id => MeaningWriterRegistry.Build(id, WriterOptions))
+            .OfType<IMeaningWriter>()
+            .ToList();
+        if (members.Count == 0) return null;
+        return hooks is null && members.Count == 1 ? members[0] : new CompositeMeaningWriter(members, hooks);
+    }
+
     /// <summary>화면에 보여 줄 소스 이름.</summary>
     public static string SourceLabel(string id) => id switch
     {
@@ -172,7 +238,7 @@ public sealed record MeaningOptions(
     /// 이번 한 번만 쓸 소스 목록(곡 상세에서 체크박스로 고른 경우). 비우면 설정값을 쓴다.
     /// 설정에 없는 소스도 **키만 있으면** 여기서 켤 수 있다 — 한 곡으로 시험해 보라고 둔 문이다.
     /// </param>
-    public SongMeaningService BuildService(IReadOnlyList<string>? only = null)
+    public SongMeaningService BuildService(IReadOnlyList<string>? only = null, MeaningChainHooks? hooks = null)
     {
         var sources = new List<ISongMeaningSource>();
         foreach (var id in only is { Count: > 0 } ? only : Sources)
@@ -190,15 +256,7 @@ public sealed record MeaningOptions(
             }
         }
 
-        var writer = MeaningWriterRegistry.Build(Engine, new MeaningWriterOptions
-        {
-            GeminiApiKey = GeminiApiKey,
-            GeminiModel = GeminiModel,
-            OpenRouterApiKey = OpenRouterApiKey,
-            OpenRouterModel = OpenRouterModel,
-        });
-
-        return new SongMeaningService(sources, writer);
+        return new SongMeaningService(sources, BuildWriter(hooks));
     }
 }
 

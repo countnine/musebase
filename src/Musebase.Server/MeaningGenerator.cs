@@ -28,6 +28,9 @@ public sealed class MeaningGenerator(LyricsStore store, MeaningSettings settings
     /// <summary>엔진과 자료원이 갖춰져 실제로 만들 수 있는가.</summary>
     public bool IsEnabled => Service.IsEnabled;
 
+    /// <summary>이 곡을 지금 만들고 있는가(앱 조회에 "만드는 중"을 알려 주기 위해).</summary>
+    public bool IsGenerating(string key) => _inFlight.ContainsKey(key);
+
     /// <summary>지금 켜져 있는 자료원 이름(화면 표시용).</summary>
     public IReadOnlyList<string> SourceNames => Service.SourceNames;
 
@@ -55,7 +58,9 @@ public sealed class MeaningGenerator(LyricsStore store, MeaningSettings settings
     private async Task<MeaningOutcome> RunAsync(
         string key, string title, string artist, IReadOnlyList<string>? only)
     {
-        var service = only is { Count: > 0 } ? Options.BuildService(only) : Service;
+        var service = only is { Count: > 0 }
+            ? Options.BuildService(only, settings.Gate.Hooks(Options))
+            : Service;
 
         var result = await service.BuildAsync(title, artist, Options.Lang).ConfigureAwait(false);
         var outcome = new MeaningOutcome(result.Status, result.Detail);

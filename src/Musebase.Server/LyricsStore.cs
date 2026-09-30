@@ -1458,9 +1458,10 @@ public sealed class LyricsStore : IDisposable
     ///
     /// 서버가 보낸 분만 센다 — 기기가 직접 번역한 분은 여기 안 잡히므로 청구서와는 어긋난다(근사치).
     /// </summary>
-    public long AddUsage(string engine, long chars, string month)
+    /// <param name="scope">미터 이름의 앞머리 — 번역은 <c>translate</c>(문자 수), 의미는 <c>meaning</c>(호출 수).</param>
+    public long AddUsage(string engine, long chars, string month, string scope = "translate")
     {
-        var name = $"translate.usage.{engine.ToLowerInvariant()}.{month}";
+        var name = $"{scope}.usage.{engine.ToLowerInvariant()}.{month}";
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
@@ -1475,13 +1476,13 @@ public sealed class LyricsStore : IDisposable
     }
 
     /// <summary>이번 달 이 엔진으로 보낸 문자 수.</summary>
-    public long UsageThisMonth(string engine, string month)
+    public long UsageThisMonth(string engine, string month, string scope = "translate")
     {
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = "SELECT CAST(value AS INTEGER) FROM app_settings WHERE name = $n;";
-            cmd.Parameters.AddWithValue("$n", $"translate.usage.{engine.ToLowerInvariant()}.{month}");
+            cmd.Parameters.AddWithValue("$n", $"{scope}.usage.{engine.ToLowerInvariant()}.{month}");
             return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
         }
     }

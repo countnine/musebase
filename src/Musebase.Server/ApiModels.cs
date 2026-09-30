@@ -119,6 +119,15 @@ public sealed record MeaningNotMade(
     [property: JsonPropertyName("status")] string Status);
 
 /// <summary>
+/// <c>GET /v1/meaning</c> 404 본문 — 서버가 이 곡의 의미를 <b>지금 만들고 있다</b>(새로 올라온 곡의 자동 생성).
+/// 앱은 <c>retryAfterMs</c> 뒤에 다시 묻는다. 모양은 가사 조회 미스의 양보 힌트와 같다.
+/// </summary>
+public sealed record MeaningPending(
+    [property: JsonPropertyName("error")] string Error,
+    [property: JsonPropertyName("pending")] bool Pending,
+    [property: JsonPropertyName("retryAfterMs")] int RetryAfterMs);
+
+/// <summary>
 /// <c>GET /v1/song</c> — 곡 하나에 딸린 것들. 앱 제어판이 한 번에 받아 간다.
 /// </summary>
 /// <param name="LoveKnown">

@@ -75,6 +75,11 @@ var admin = AdminOptions.FromEnvironment(token!);
 var meaningSettings = new MeaningSettings(store, MeaningOptions.FromEnvironment());
 var meaningGenerator = new MeaningGenerator(
     store, meaningSettings, app.Services.GetRequiredService<ILogger<MeaningGenerator>>());
+
+// 기기가 올린 새 곡의 의미를 서버가 곧바로 만든다(엔진이 꺼져 있으면 아무 일도 안 한다).
+var autoMeaning = new AutoMeaning(
+    store, meaningSettings, meaningGenerator, app.Services.GetRequiredService<ILogger<AutoMeaning>>());
+_ = Task.Run(() => autoMeaning.RunAsync(app.Lifetime.ApplicationStopping));
 var extras = new SongExtrasService(
     store, new CoverArt(),
     meaningSettings.Current.LastFmAccount(),
@@ -99,7 +104,7 @@ var autoTranslator = new AutoTranslator(
 _ = Task.Run(() => autoTranslator.RunAsync(app.Lifetime.ApplicationStopping));
 
 app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs,
-    translationSettings, translationGenerator, autoTranslator);
+    translationSettings, translationGenerator, autoTranslator, autoMeaning);
 
 // 보존 기간이 지난 조회 기록 정리 — 시작 시 1회 + 하루 1회.
 _ = Task.Run(async () =>
@@ -204,13 +209,16 @@ app.MapPut(Routes.Api + "/lyrics", async (HttpRequest request) =>
     // 대상 언어 번역이 없으면 서버가 곧 채운다 — 다음 기기부터는 번역이 붙은 채로 받는다.
     // 응답은 기다리지 않는다(업로드는 2.5~5초 타임아웃이라 번역을 끼워 넣을 자리가 없다).
     autoTranslator.Offer(saved.Key, saved.Langs);
+    // 의미도 같은 흐름 — 아직 없는 곡이면 서버가 곧 만든다(앱은 조회 응답의 pending을 보고 잠시 기다린다).
+    autoMeaning.Offer(saved.Key);
     return Results.Ok(saved);
 });
 
 app.MapGet(Routes.Api + "/stats", (HttpRequest request) =>
     !Authorized(request) ? Unauthorized() : Results.Ok(store.Stats()));
 
-// 곡의 의미 조회. 생성은 사람이 누를 때만 일어난다(아래 POST · 관리자 화면) — 쿼타·비용을 사람이 통제.
+// 곡의 의미 조회. 새로 올라온 곡은 서버가 자동으로 만들고(AutoMeaning), 만드는 중이면 404에
+// pending을 실어 앱이 잠시 뒤 다시 묻게 한다(가사의 번역 양보와 같은 모양).
 app.MapGet(Routes.Api + "/meaning", (HttpRequest request, string? title, string? artist) =>
 {
     if (!Authorized(request)) return Unauthorized();
@@ -218,7 +226,14 @@ app.MapGet(Routes.Api + "/meaning", (HttpRequest request, string? title, string?
 
     // `insufficient`도 404다 — 문단은 있지만 "파악하기 어렵다"는 고백이라 곡 해설로 띄우면 안 된다.
     var found = store.GetMeaning(title!, artist ?? "");
-    if (found is null || found.Status != MeaningEntry.StatusOk) return Results.NotFound();
+    if (found is null || found.Status != MeaningEntry.StatusOk)
+    {
+        // 아직 행이 없고 서버가 만드는 중이면 "잠시 후 다시" — 이미 자료없음·실패로 끝난 곡은 기다려도 소용없다.
+        var song = found is null ? store.Get(title!, artist ?? "") : null;
+        return song?.Key is { Length: > 0 } key && autoMeaning.IsPending(key)
+            ? Results.Json(new MeaningPending("not found", true, 3000), statusCode: StatusCodes.Status404NotFound)
+            : Results.NotFound();
+    }
 
     // 원문 전체(sources)는 무겁고 앱에 필요 없다 — 출처 표기만 계산해 싣는다.
     return Results.Ok(found with

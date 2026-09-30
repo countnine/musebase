@@ -179,12 +179,37 @@ public sealed record SpotifyLink(string? User, string Callback);
 public sealed record MeaningEngineCard(
     string Engine, string Model, bool HasKey, bool Overridden,
     string? GeminiKeyHint, string? GeminiModel,
-    string? OpenRouterKeyHint, string? OpenRouterModel)
+    string? OpenRouterKeyHint, string? OpenRouterModel,
+    /// <summary>실제로 시도할 엔진 id, 주 엔진 먼저.</summary>
+    IReadOnlyList<string>? Chain = null,
+    /// <summary>엔진별 이번 달 성공 호출 수.</summary>
+    IReadOnlyDictionary<string, long>? Used = null,
+    /// <summary>Gemini 월 호출 상한(0 = 막지 않음).</summary>
+    long GeminiCap = 0,
+    /// <summary>지금 쉬고 있는 엔진과 그 이유.</summary>
+    IReadOnlyDictionary<string, string>? Paused = null,
+    AutoMeaningState? Auto = null,
+    IReadOnlyDictionary<string, EngineCheck>? Checks = null)
 {
-    public static MeaningEngineCard From(MeaningOptions options, bool overridden) => new(
+    public static MeaningEngineCard From(
+        MeaningOptions options, bool overridden, MeaningEngineGate? gate = null,
+        AutoMeaningState? auto = null, IReadOnlyDictionary<string, EngineCheck>? checks = null) => new(
         options.Engine, options.EffectiveModel, options.HasEngineKey, overridden,
         Hint(options.GeminiApiKey), options.GeminiModel,
-        Hint(options.OpenRouterApiKey), options.OpenRouterModel);
+        Hint(options.OpenRouterApiKey), options.OpenRouterModel,
+        Chain: options.ChainIds,
+        Used: gate is null ? null : Musebase.Core.Meaning.MeaningWriterRegistry.All
+            .ToDictionary(d => d.Id, d => gate.UsedThisMonth(d.Id)),
+        GeminiCap: options.GeminiMonthlyCap,
+        Paused: gate is null ? null : options.ChainIds
+            .Select(id => (Id: id, Why: gate.Closed(id, options)))
+            .Where(x => x.Why is not null)
+            .ToDictionary(x => x.Id, x => x.Why!),
+        Auto: auto,
+        Checks: checks);
+
+    /// <summary>폴백으로 켜 둔 엔진.</summary>
+    public IReadOnlyList<string> FallbackOn => (Chain ?? []).Skip(1).ToList();
 
     /// <summary>키가 들어 있다는 것만 알려 준다 — 어느 키인지 알아볼 만큼만 남긴다.</summary>
     public static string? Hint(string? key)
@@ -237,6 +262,10 @@ public sealed record TranslationEngineCard(
         Auto: auto,
         Checks: checks);
 }
+
+/// <summary>새 곡 자동 의미 생성 — 켜 둠 / 실제로 도는 중 / 대기 곡 / 이번 달 곡 수·상한 / 마지막 요약.</summary>
+public sealed record AutoMeaningState(
+    bool On, bool Running, int Pending, long UsedThisMonth, int MonthlyCap, string? LastReport);
 
 /// <summary>새 곡 자동 번역 — 켜 둠 / 실제로 도는 중 / 대기 곡 / 이번 달 사용·상한 / 마지막 요약.</summary>
 public sealed record AutoTranslateState(

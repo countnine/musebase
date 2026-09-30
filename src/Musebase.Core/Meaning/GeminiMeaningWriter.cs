@@ -22,8 +22,11 @@ namespace Musebase.Core.Meaning;
 /// </summary>
 public sealed class GeminiMeaningWriter : IMeaningWriter
 {
-    /// <summary>무료 티어 한도가 가장 넉넉한 모델. 요약 작업엔 충분하다.</summary>
-    public const string DefaultModel = "gemini-2.5-flash-lite";
+    /// <summary>
+    /// 가장 싼 경량 모델. 요약 작업엔 충분하다. <c>gemini-2.5-flash-lite</c>는 2026-09 기준
+    /// "신규 사용자에게 더 이상 제공되지 않는다"(404)며 이 모델을 권한다.
+    /// </summary>
+    public const string DefaultModel = "gemini-3.5-flash-lite";
 
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
 

@@ -213,6 +213,7 @@
   "meaning.noTrack": "Nothing is playing.",
   "meaning.noServer": "No lyrics server configured — add the server address in Settings.",
   "meaning.none": "No description for this song yet.",
+  "meaning.pending": "The server is writing this song's description…",
   "meaning.credit": "Sources:",
 
   "search.title": "Search lyrics",
