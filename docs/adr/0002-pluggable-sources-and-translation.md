@@ -32,8 +32,12 @@
 ### 번역 엔진
 - `TranslatorDescriptor(Id, DisplayName, RequiresApiKey, IsFree, Factory)` + `TranslatorRegistry`.
 - 설정 `TranslationEngine`으로 선택, `TranslatorOptions`로 키/엔드포인트 주입.
-- 기본 해석(`EffectiveTranslationEngine`): DeepL 키가 있으면 `deepl`(기존 사용자 보존),
-  없으면 `libretranslate`(무키 무료로 설치 후 바로 동작).
+- 기본 해석(`EffectiveTranslationEngine`, 엔진을 한 번도 고르지 않았을 때만):
+  DeepL 키가 있으면 `deepl`(기존 사용자 보존) → 가사 서버 주소가 있으면 `none`
+  (2026-09: 서버가 새 곡을 번역해 채우므로 기기는 가사를 밖으로 보내지 않는다) →
+  둘 다 없으면 `mymemory`(무키 무료로 설치 후 바로 동작; LibreTranslate 공개 인스턴스는 유료화로 제외).
+  주 엔진이 `none`이면 무료 폴백도 쓰지 않는다. 설정 화면은 엔진을 건드리지 않은 저장에서
+  기본값을 명시값으로 굳히지 않는다.
 - 등록 엔진:
   | Id | 키 | 무료 | 품질 | 비고 |
   |---|---|---|---|---|

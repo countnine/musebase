@@ -151,6 +151,104 @@ public class TranslationSharingTests
         Assert.Contains("[tr:ko]", coordinator.CurrentLyrics!.ToString());
     }
 
+    // ---- 스스로 번역하지 않는 기기(가사 서버가 있는 새 설치의 기본) ----
+
+    [Fact]
+    public async Task 번역기_없는_기기는_올린_곡의_서버_번역을_기다려_받는다()
+    {
+        var remote = new FakeRemoteCache(null)
+        {
+            ArrivingLrc = Translated, // 첫 재조회부터 서버가 자동 번역해 둔 번역본이 있다
+            ArriveAfter = 2,
+        };
+        using var coordinator = NewCoordinator(
+            remote, out _, provider: new StubProvider(Plain), noTranslator: true);
+        coordinator.ServerTranslationPollMs = 20;
+        coordinator.Start();
+
+        await WaitAsync(() => coordinator.CurrentLyrics?.ToString().Contains("[tr:ko]") == true, "서버 번역 수신");
+
+        Assert.Equal(TranslationDisplayStatus.Cache, coordinator.CurrentTranslationStatus);
+        Assert.DoesNotContain("[tr:ko]", Assert.Single(remote.Uploads).Lrc); // 원문을 올렸고, 받은 것을 되올리지 않는다
+    }
+
+    [Fact]
+    public async Task 서버_번역이_끝내_없으면_원문으로_남고_그만_묻는다()
+    {
+        var remote = new FakeRemoteCache(null);
+        using var coordinator = NewCoordinator(
+            remote, out _, provider: new StubProvider(Plain), noTranslator: true);
+        coordinator.ServerTranslationPollMs = 20;
+        coordinator.ServerTranslationWaitMs = 200;
+        coordinator.Start();
+
+        await WaitAsync(() => remote.Lookups >= 3, "재조회");
+        await Task.Delay(400);
+        var lookups = remote.Lookups;
+        await Task.Delay(200);
+
+        Assert.Equal(lookups, remote.Lookups); // 대기 시간이 지나면 더 묻지 않는다
+        Assert.DoesNotContain("[tr:ko]", coordinator.CurrentLyrics!.ToString());
+    }
+
+    [Fact]
+    public async Task 번역기가_있는_기기는_서버_번역을_기다리지_않고_직접_번역한다()
+    {
+        var translator = new FakeTranslator();
+        var remote = new FakeRemoteCache(null);
+        using var coordinator = NewCoordinator(
+            remote, out _, translator: translator, provider: new StubProvider(Plain));
+        coordinator.ServerTranslationPollMs = 20;
+        coordinator.Start();
+
+        await remote.WaitForUploadAsync();
+        await Task.Delay(150);
+
+        Assert.Equal(1, remote.Lookups);
+        Assert.True(translator.Calls > 0);
+    }
+
+    [Fact]
+    public async Task 번역기_없는_기기의_번역_없는_캐시_히트는_서버에_한_번_묻는다()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"musebase-cache-test-{Guid.NewGuid():N}.db");
+        try
+        {
+            using var cache = new LyricsCacheStore(dbPath);
+            var untranslated = Lyrics.Parse(Plain)!;
+            untranslated.Metadata.ServiceName = "LRCLIB";
+            cache.Set("Song", "Artist", untranslated); // 서버가 번역하기 전에 받아 둔 곡
+
+            var remote = new FakeRemoteCache(Translated);
+            using (var coordinator = NewCoordinator(remote, out _, cache, noTranslator: true))
+            {
+                coordinator.Start();
+                await WaitAsync(() => coordinator.CurrentLyrics?.ToString().Contains("[tr:ko]") == true, "서버 번역 수신");
+            }
+
+            Assert.Contains("[tr:ko]", cache.Get("Song", "Artist")!.ToString()); // 다음부터는 묻지 않는다
+            Assert.Equal(1, remote.Lookups);
+            Assert.Empty(remote.Uploads);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { /* 정리 실패는 무시 */ }
+        }
+    }
+
+    [Fact]
+    public void 번역을_끈_기기는_무료_폴백도_쓰지_않는다()
+    {
+        var config = new EngineConfig(
+            [], TranslatorRegistry.None, new TranslatorOptions(), "KO", true, 0, ":memory:",
+            TranslationFallbackEngineId: TranslatorRegistry.DefaultFreeEngine);
+
+        var service = LyricsEngineFactory.BuildTranslation(config, new InMemoryTranslationCache());
+
+        Assert.False(service.IsEnabled); // "끔인데 공개 서버로 번역되는" 상태가 없다
+    }
+
     private static async Task WaitAsync(Func<bool> done, string what, int timeoutMs = 15_000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -166,7 +264,8 @@ public class TranslationSharingTests
 
     private static LyricsCoordinator NewCoordinator(
         FakeRemoteCache remote, out FakeSource source,
-        LyricsCacheStore? cache = null, FakeTranslator? translator = null, ILyricsProvider? provider = null)
+        LyricsCacheStore? cache = null, FakeTranslator? translator = null, ILyricsProvider? provider = null,
+        bool noTranslator = false)
     {
         source = new FakeSource { CurrentTrack = new TrackInfo("Song", "Artist", "", null, "TestPlayer.exe") };
         return new LyricsCoordinator(
@@ -175,7 +274,7 @@ public class TranslationSharingTests
             RemoteCache = remote,
             Cache = cache,
             Translation = new LyricsTranslationService(
-                translator ?? new FakeTranslator(), new InMemoryTranslationCache()),
+                noTranslator ? null : translator ?? new FakeTranslator(), new InMemoryTranslationCache()),
         };
     }
 

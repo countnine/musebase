@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Musebase.Core.Search;
+using Musebase.Core.Translation;
 using Musebase.Engine;
 
 namespace Musebase.Windows.Services;
@@ -155,14 +156,16 @@ public sealed class AppSettings
 
     /// <summary>
     /// 실효 번역 엔진. 명시값이 있으면 그대로, 없으면 DeepL 키가 있으면 deepl(기존 사용자 보존),
-    /// 없으면 무키 무료 기본(MyMemory — 설치 후 바로 동작). LibreTranslate 공개 인스턴스가
+    /// 가사 서버가 있으면 끔 — 서버가 새 곡을 번역해 채우므로 기기는 가사를 밖으로 보내지 않는다,
+    /// 둘 다 없으면 무키 무료 기본(MyMemory — 설치 후 바로 동작). LibreTranslate 공개 인스턴스가
     /// 유료 키 필수로 바뀌어 기본 무키 엔진에서 제외했다.
     /// </summary>
     [JsonIgnore]
     public string EffectiveTranslationEngine =>
-        !string.IsNullOrWhiteSpace(TranslationEngine)
-            ? TranslationEngine!.Trim().ToLowerInvariant()
-            : (string.IsNullOrWhiteSpace(DeeplApiKey) ? "mymemory" : "deepl");
+        !string.IsNullOrWhiteSpace(TranslationEngine) ? TranslationEngine!.Trim().ToLowerInvariant()
+        : !string.IsNullOrWhiteSpace(DeeplApiKey) ? "deepl"
+        : !string.IsNullOrWhiteSpace(LyricsServerEndpoint) ? TranslatorRegistry.None
+        : TranslatorRegistry.DefaultFreeEngine;
 
     /// <summary>
     /// 오버레이·제어판에 쓸 글꼴 이름. 비면 기본(Segoe UI).
