@@ -14,8 +14,8 @@
     <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
 
     <ApplicationId>com.countnine.musebase</ApplicationId>
-    <ApplicationVersion>9</ApplicationVersion>
-    <ApplicationDisplayVersion>0.9.0-beta.1</ApplicationDisplayVersion>
+    <ApplicationVersion>10</ApplicationVersion>
+    <ApplicationDisplayVersion>0.9.0-beta.2</ApplicationDisplayVersion>
 
     <!-- 스파이크는 사이드로드용 APK만 산출(AAB 불필요). -->
     <AndroidPackageFormats>apk</AndroidPackageFormats>
