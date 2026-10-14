@@ -80,6 +80,9 @@ public sealed class AppSettings
     /// <summary>"틀린 가사"로 표시해 검색·표시를 막을 트랙 키 목록(정규화된 제목|아티스트).</summary>
     public List<string> SuppressedTracks { get; set; } = new();
 
+    /// <summary>"연주곡"으로 표시해 가사를 찾지 않을 트랙 키 목록(서버 표시의 로컬 사본).</summary>
+    public List<string> InstrumentalTracks { get; set; } = new();
+
     /// <summary>수동 싱크 오프셋(초). +면 가사가 빨라진다.</summary>
     public double ManualOffsetSeconds { get; set; }
 

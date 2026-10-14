@@ -117,6 +117,7 @@ public static partial class AdminPages
             "아직 올라온 가사가 없습니다.");
 
         var ads = AdTable(m.AdTitles ?? [], m.Csrf, tz);
+        var instrumentals = InstrumentalTable(m.Instrumentals ?? [], m.Csrf, tz);
 
         var noTranslation = Table(SongHeaders, m.WithoutTranslation.Select(SongRowHtml(tz)),
             "모든 곡에 번역이 있습니다.");
@@ -176,6 +177,7 @@ public static partial class AdminPages
             <h2>기기별 (7일)</h2>{devices}
             <h2>일별 (7일)</h2>{daily}
             <h2>광고로 차단한 제목{More(Routes.Base + "/list?view=ads")}</h2>{ads}
+            <h2>연주곡으로 표시한 곡{More(Routes.Base + "/list?view=instrumentals")}</h2>{instrumentals}
             <h2>표기 차이로 갈린 곡 후보 (같은 느슨한 키){More(Routes.Base + "/list?view=duplicates")}</h2>{duplicates}
             <h2>느슨한 키로 맞은 조회 (7일){More(Routes.Base + "/list?view=cleaned")}</h2>{cleaned}
 
@@ -501,6 +503,7 @@ public static partial class AdminPages
             ["untranslated"] = "번역 없는 곡",
             ["duplicates"] = "표기 차이로 갈린 곡 후보",
             ["ads"] = "광고로 차단한 제목",
+            ["instrumentals"] = "연주곡으로 표시한 곡",
             ["cleaned"] = "느슨한 키로 맞은 조회 (7일)",
         };
 
@@ -530,6 +533,8 @@ public static partial class AdminPages
             "표기 차이로 갈린 곡이 없습니다."),
 
         "ads" => AdTable(m.AdTitles ?? [], m.Csrf, tz),
+
+        "instrumentals" => InstrumentalTable(m.Instrumentals ?? [], m.Csrf, tz),
 
         _ => Table(
             ["시각", "요청한 곡", "요청한 아티스트", "맞은 곡", "기기"],
@@ -918,7 +923,7 @@ public static partial class AdminPages
     }
 
     /// <summary>
-    /// 곡에 대해 할 수 있는 일을 <b>한 줄에 모은다</b> — 좋아요 · 삭제 · 광고 표시 · 커버 다시 찾기.
+    /// 곡에 대해 할 수 있는 일을 <b>한 줄에 모은다</b> — 좋아요 · 삭제 · 광고·연주곡 표시 · 커버 다시 찾기.
     ///
     /// 예전에는 가사 편집창 <b>아래</b>에 흩어져 있어, 곡을 보다가 뭘 하려면 긴 가사를 지나
     /// 스크롤해야 했다. 곡 머리말 옆이 이것들이 있을 자리다.
@@ -942,13 +947,16 @@ public static partial class AdminPages
             <div class="actions">
               {LoveForm(key, csrf, love, spotify)}
               {Form(Routes.Base + "/song/cover", "커버 다시 찾기", extra: " data-busy")}
+              {Form(Routes.Base + "/song/instrumental", "연주곡으로 표시", "danger",
+                    " data-confirm=\"이 곡을 연주곡으로 표시할까요? 가사를 지우고 앱이 다시 찾지 않습니다(대시보드에서 되돌릴 수 있습니다).\"")}
               {Form(Routes.Base + "/song/ad", "광고로 표시", "danger",
                     " data-confirm=\"이 제목을 광고로 표시할까요? 가사를 지우고 앞으로 등록·검색도 막습니다(대시보드에서 되돌릴 수 있습니다).\"")}
               {Form(Routes.Base + "/song/delete", "이 곡 삭제", "danger",
                     " data-confirm=\"이 곡의 가사를 지울까요? 되돌릴 수 없습니다(다음 재생 때 다시 검색해 채웁니다).\"")}
             </div>
             <p class="meta"><b>광고로 표시</b>는 이 제목을 차단합니다(가사를 지우고 이후 등록·검색도 막음 —
-            되돌리기는 대시보드에서). <b>삭제</b>는 이 곡만 지우며, 다음에 재생하면 다시 검색해 채웁니다.
+            되돌리기는 대시보드에서). <b>연주곡으로 표시</b>는 이 곡만(같은 제목의 원곡은 그대로) 가사를 지우고
+            어느 기기도 다시 찾지 않게 합니다. <b>삭제</b>는 이 곡만 지우며, 다음에 재생하면 다시 검색해 채웁니다.
             <b>커버</b>는 한 번 못 찾으면 다시 찾지 않으니{source} 곡명을 고친 뒤 여기서 다시 시켜 주세요.</p>
             """;
     }
@@ -1120,6 +1128,20 @@ public static partial class AdminPages
             </form></td></tr>
             """),
         "차단한 광고가 없습니다 — 광고가 가사로 올라오면 곡 상세에서 [광고로 표시]를 누르세요.");
+
+    /// <summary>연주곡으로 표시한 곡 표. 잘못 표시했을 때 풀 수 있게 해제 버튼을 둔다.</summary>
+    private static string InstrumentalTable(IReadOnlyList<InstrumentalRow> rows, string csrf, TimeZoneInfo tz) => Table(
+        ["곡", "아티스트", "표시한 곳", "표시 시각", ""],
+        rows.Select(r => $"""
+            <tr><td>{Esc(r.Title)}</td><td>{ArtistLink(r.Artist)}</td><td>{Esc(r.AddedBy ?? "-")}</td>
+            <td class="nowrap">{Esc(AdminTime.ToLocal(r.AddedAt, tz))}</td>
+            <td><form method="post" action="{Routes.Base}/instrumentals/remove" class="inline" style="margin:0">
+              <input type="hidden" name="key" value="{Esc(r.Key)}">
+              <input type="hidden" name="csrf" value="{Esc(csrf)}">
+              <button type="submit">해제</button>
+            </form></td></tr>
+            """),
+        "연주곡으로 표시한 곡이 없습니다 — 연주곡에 가사가 붙으면 곡 상세나 앱에서 [연주곡으로 표시]를 누르세요.");
 
     /// <summary>대시보드의 각 목록이 보여 주는 행 수 — 나머지는 "전체 보기"로 넘긴다.</summary>
     public const int DashboardRows = 10;

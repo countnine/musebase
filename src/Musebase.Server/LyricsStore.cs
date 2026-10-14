@@ -215,6 +215,23 @@ public sealed class LyricsStore : IDisposable
                 """);
             Execute("PRAGMA user_version = 10;");
         }
+
+        if (version < 11)
+        {
+            // 사람이 "연주곡"으로 표시한 곡. 광고(ad_titles)와 달리 **곡 단위**(정확 키)다 —
+            // 같은 제목의 보컬 원곡까지 막으면 안 된다. 표시된 곡은 조회에 instrumental로 답하고
+            // 업로드를 받지 않는다.
+            Execute("""
+                CREATE TABLE IF NOT EXISTS instrumentals (
+                    key       TEXT PRIMARY KEY,   -- lyrics.key와 같은 규칙(정확 키)
+                    title     TEXT NOT NULL,
+                    artist    TEXT NOT NULL,
+                    added_at  TEXT NOT NULL,
+                    added_by  TEXT
+                );
+                """);
+            Execute("PRAGMA user_version = 11;");
+        }
     }
 
     // ---- 곡 바깥 링크(커버·Last.fm) ----
@@ -433,6 +450,78 @@ public sealed class LyricsStore : IDisposable
         return rows;
     }
 
+    // ---- 연주곡 ----
+
+    /// <summary>이 곡이 연주곡으로 표시돼 있는가(정확 키).</summary>
+    public bool IsInstrumental(string title, string artist)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM instrumentals WHERE key = $k LIMIT 1;";
+            cmd.Parameters.AddWithValue("$k", ExactKey(title, artist));
+            return cmd.ExecuteScalar() is not null;
+        }
+    }
+
+    /// <summary>
+    /// 연주곡으로 표시한다. 그 곡(정확 키)의 가사 행도 지운다 — 연주곡 위에 붙은 가사는 틀린 것이다.
+    /// 느슨한 키로 묶인 원곡 행은 건드리지 않는다(그건 보컬 원곡의 정상 가사다).
+    /// </summary>
+    public void AddInstrumental(string title, string artist, string? addedBy)
+    {
+        var key = ExactKey(title, artist);
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO instrumentals (key, title, artist, added_at, added_by)
+                VALUES ($k, $t, $a, $at, $by)
+                ON CONFLICT(key) DO UPDATE SET title = $t, artist = $a, added_at = $at, added_by = $by;
+                """;
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.Parameters.AddWithValue("$t", title);
+            cmd.Parameters.AddWithValue("$a", artist);
+            cmd.Parameters.AddWithValue("$at", UtcNow());
+            cmd.Parameters.AddWithValue("$by", (object?)addedBy ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+
+            using var purge = _conn.CreateCommand();
+            purge.CommandText = "DELETE FROM lyrics WHERE key = $k;";
+            purge.Parameters.AddWithValue("$k", key);
+            purge.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>연주곡 표시를 되돌린다. 다음 조회부터 기기가 다시 가사를 찾는다.</summary>
+    public void RemoveInstrumental(string key)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM instrumentals WHERE key = $k;";
+            cmd.Parameters.AddWithValue("$k", key);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>연주곡으로 표시된 곡 목록(최근 표시순).</summary>
+    public IReadOnlyList<InstrumentalRow> Instrumentals(int limit = 200)
+    {
+        var rows = new List<InstrumentalRow>();
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT key, title, artist, added_at, added_by FROM instrumentals ORDER BY added_at DESC LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                rows.Add(new InstrumentalRow(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+        return rows;
+    }
+
     /// <summary>모든 행의 <c>loose_key</c>를 지금 규칙으로 다시 계산한다(행은 합치지 않는다).</summary>
     private void RecomputeLooseKeys()
     {
@@ -622,16 +711,22 @@ public sealed class LyricsStore : IDisposable
         var exact = ExactKey(title, artist);
         if (Read("key = $k", exact) is { } hit) return hit with { Match = LyricsEntry.MatchExact };
 
+        // 연주곡 제목은 느슨한 키로 맞추지 않는다 — "Song (Instrumental)"이 괄호를 떼고 보컬 원곡
+        // "Song"의 가사를 받아 가던 문제(실제로 Pet Shop Boys 연주곡 판에 원곡 가사가 떴다).
+        // 반대로 원곡 질의가 연주곡 행에 맞는 것도 막는다(Cleaned).
+        if (InstrumentalTitle.Looks(title)) return null;
+        static LyricsEntry? Cleaned(LyricsEntry? row) =>
+            row is null || InstrumentalTitle.Looks(row.Title) ? null : row with { Match = LyricsEntry.MatchCleaned };
+
         // 저장본 쪽이 잡음 표기이고 질의가 깨끗한 경우("Love Story (Taylor's Version)" 저장 ↔ "Love Story" 질의):
         // 저장본의 loose_key가 질의의 정확 키와 같다.
-        if (Read("loose_key = $k", exact) is { } byStoredLoose)
-            return byStoredLoose with { Match = LyricsEntry.MatchCleaned };
+        if (Cleaned(Read("loose_key = $k", exact)) is { } byStoredLoose) return byStoredLoose;
 
         foreach (var loose in LooseKeys(title, artist))
         {
             // 정제 키로 저장된 행(자기 loose_key) 또는 정제 결과가 정확 키인 행 둘 다 본다.
-            if (Read("loose_key = $k", loose) is { } byLoose) return byLoose with { Match = LyricsEntry.MatchCleaned };
-            if (Read("key = $k", loose) is { } byKey) return byKey with { Match = LyricsEntry.MatchCleaned };
+            if (Cleaned(Read("loose_key = $k", loose)) is { } byLoose) return byLoose;
+            if (Cleaned(Read("key = $k", loose)) is { } byKey) return byKey;
         }
         return null;
     }

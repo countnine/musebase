@@ -11,15 +11,22 @@ namespace Musebase.Core.Search;
 /// <param name="IsAd">
 /// 서버가 이 제목을 <b>광고로 표시</b>해 뒀다. 제공자 검색을 하지 말아야 한다 — 광고는 곡이
 /// 아니라서 검색이 늘 헛돌고, 어쩌다 뭔가 맞으면 엉뚱한 가사가 광고 위에 뜬다.
-/// </summary>
+/// </param>
+/// <param name="IsInstrumental">
+/// 서버가 이 곡을 <b>연주곡으로 표시</b>해 뒀다(앱이나 관리 화면에서 사람이). 가사를 찾지도 올리지도 않는다.
+/// </param>
 public readonly record struct RemoteLyricsResult(
-    Lyrics? Lyrics, bool Pending, int RetryAfterMs, IReadOnlyList<string> Langs, bool IsAd = false)
+    Lyrics? Lyrics, bool Pending, int RetryAfterMs, IReadOnlyList<string> Langs, bool IsAd = false,
+    bool IsInstrumental = false)
 {
     /// <summary>미스·실패·미접속 — 아무 힌트도 없다.</summary>
     public static readonly RemoteLyricsResult Miss = new(null, false, 0, []);
 
     /// <summary>서버가 광고로 표시한 제목 — 검색하지 않는다.</summary>
     public static readonly RemoteLyricsResult Ad = new(null, false, 0, [], IsAd: true);
+
+    /// <summary>서버가 연주곡으로 표시한 곡 — 검색하지 않는다.</summary>
+    public static readonly RemoteLyricsResult Instrumental = new(null, false, 0, [], IsInstrumental: true);
 
     /// <summary>대상 언어 번역이 들어 있는가(대소문자 무시).</summary>
     public bool HasLanguage(string lang) =>
@@ -86,6 +93,14 @@ public interface IRemoteLyricsCache
 
     /// <summary>Last.fm 좋아요를 켜거나 끈다. 실패하면 null — 화면을 바꾸지 말아야 한다.</summary>
     Task<SongExtras?> SetLovedAsync(string title, string artist, bool loved, CancellationToken ct = default);
+
+    /// <summary>
+    /// 곡을 <b>연주곡으로 표시</b>하거나 되돌린다. 표시하면 서버는 그 곡의 가사 행을 지우고 이후 조회에
+    /// <see cref="RemoteLyricsResult.Instrumental"/>로 답해, 어느 기기도 다시 가사를 찾지 않는다.
+    /// 성공하면 true. 기본 구현은 서버가 없는 것과 같다(false) — 테스트 대역·구버전과 호환된다.
+    /// </summary>
+    Task<bool> SetInstrumentalAsync(string title, string artist, bool instrumental, CancellationToken ct = default) =>
+        Task.FromResult(false);
 }
 
 /// <summary>
