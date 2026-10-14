@@ -1609,6 +1609,24 @@ public sealed class LyricsStore : IDisposable
     }
 
     /// <summary>
+    /// 언어 목록에 <paramref name="lang"/>이 붙은 곡의 키와 LRC — 태그는 있지만 몇 줄만 번역된 곡을
+    /// 골라내는 데 쓴다(<see cref="AutoTranslator.OfferPartlyTranslated"/>).
+    /// </summary>
+    public IReadOnlyList<(string Key, string Lrc)> WithLang(string lang)
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT key, lrc FROM lyrics WHERE (',' || langs || ',') LIKE ('%,' || $lang || ',%');";
+            cmd.Parameters.AddWithValue("$lang", lang.Trim().ToLowerInvariant());
+            using var reader = cmd.ExecuteReader();
+            var rows = new List<(string, string)>();
+            while (reader.Read()) rows.Add((reader.GetString(0), reader.GetString(1)));
+            return rows;
+        }
+    }
+
+    /// <summary>
     /// 느슨한 키가 같은데 정확 키가 다른 행들 — 같은 곡이 표기 차이로 갈려 저장됐을 후보.
     /// 키 정규화가 실제로 먹는지 눈으로 확인하는 진단 목록이다.
     /// </summary>
