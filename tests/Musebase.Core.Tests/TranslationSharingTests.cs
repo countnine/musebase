@@ -286,6 +286,38 @@ public class TranslationSharingTests
         }
     }
 
+    /// <summary>
+    /// 한 줄만 번역된 캐시는 "번역 있음"이 아니다 — 로컬 캐시로 크레딧 한 줄만 채워 올린 곡이
+    /// 서버 번역을 영영 못 받던 실제 사례(Starburster, 61줄 중 1줄).
+    /// </summary>
+    [Fact]
+    public async Task 한_줄만_번역된_캐시_히트도_서버에_한_번_묻는다()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"musebase-cache-test-{Guid.NewGuid():N}.db");
+        try
+        {
+            using var cache = new LyricsCacheStore(dbPath);
+            var partial = Lyrics.Parse(
+                "[00:01.00]hello\n[00:01.00][tr:ko]KO:hello\n[00:05.00]world\n[00:09.00]again\n[00:13.00]more")!;
+            partial.Metadata.ServiceName = "LRCLIB";
+            cache.Set("Song", "Artist", partial);
+
+            var remote = new FakeRemoteCache(Translated);
+            using (var coordinator = NewCoordinator(remote, out _, cache, noTranslator: true))
+            {
+                coordinator.Start();
+                await WaitAsync(() => coordinator.CurrentLyrics?.ToString().Contains("KO:world") == true, "서버 번역 수신");
+            }
+
+            Assert.Equal(1, remote.Lookups);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { /* 정리 실패는 무시 */ }
+        }
+    }
+
     [Fact]
     public void 번역을_끈_기기는_무료_폴백도_쓰지_않는다()
     {

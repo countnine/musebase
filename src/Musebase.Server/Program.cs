@@ -102,6 +102,12 @@ var autoTranslator = new AutoTranslator(
     store, translationSettings, translationGenerator,
     app.Services.GetRequiredService<ILogger<AutoTranslator>>());
 _ = Task.Run(() => autoTranslator.RunAsync(app.Lifetime.ApplicationStopping));
+// 예전 판정으로 빠져 있던 "몇 줄만 번역된" 곡을 한 번 줍는다.
+_ = Task.Run(() =>
+{
+    try { autoTranslator.OfferPartlyTranslated(); }
+    catch (Exception e) { app.Logger.LogWarning(e, "몇 줄만 번역된 곡 찾기 실패"); }
+});
 
 app.MapAdmin(store, admin, meaningSettings, meaningGenerator, extras, jobs,
     translationSettings, translationGenerator, autoTranslator, autoMeaning);
@@ -208,9 +214,16 @@ app.MapPut(Routes.Api + "/lyrics", async (HttpRequest request) =>
 
     // 대상 언어 번역이 없으면 서버가 곧 채운다 — 다음 기기부터는 번역이 붙은 채로 받는다.
     // 응답은 기다리지 않는다(업로드는 2.5~5초 타임아웃이라 번역을 끼워 넣을 자리가 없다).
-    autoTranslator.Offer(saved.Key, saved.Langs);
+    autoTranslator.Offer(saved.Key, saved.Langs, saved.Lrc);
     // 의미도 같은 흐름 — 아직 없는 곡이면 서버가 곧 만든다(앱은 조회 응답의 pending을 보고 잠시 기다린다).
     autoMeaning.Offer(saved.Key);
+    // 커버도 미리 찾아 둔다 — 예전에는 앱이 GET /v1/song을 물을 때에야 찾기 시작해, 처음 트는 곡은
+    // 앱의 되묻기 한 차례(수~십수 초)만큼 커버가 비었다. 이미 찾아본 곡이면 외부 호출이 없다.
+    _ = Task.Run(async () =>
+    {
+        try { await extras.ResolveAsync(saved); }
+        catch (Exception e) { app.Logger.LogWarning(e, "커버 미리 찾기 실패: {Key}", saved.Key); }
+    });
     return Results.Ok(saved);
 });
 

@@ -732,6 +732,10 @@ public sealed class MiniWindow : Window
             await Task.Delay(wait);
             if (epoch != _extrasEpoch || _hasServerCover) return;
 
+            // 재생 앱 표지도 곡 시작 직후엔 아직 없을 때가 있다(앱이 곡 정보를 먼저, 표지를 나중에
+            // 채운다) — 아무것도 걸리지 않았으면 한 번 더 받아 본다.
+            if (_cover.Source is null) FetchThumbnail(epoch);
+
             var result = await get();
             if (epoch != _extrasEpoch) return;
 
@@ -744,9 +748,14 @@ public sealed class MiniWindow : Window
         }
     }
 
-    /// <summary>커버를 되묻는 간격. 가사 검색·번역·업로드가 끝나는 시간을 넉넉히 덮는다.</summary>
+    /// <summary>
+    /// 커버를 되묻는 간격(앞 차례로부터). 업로드는 보통 곡 시작 3~8초 뒤라 앞쪽을 촘촘히 둔다 —
+    /// 예전 5초 → 15초 간격은 업로드를 0.3초 차로 놓치면 커버가 20초 동안 비었다.
+    /// 서버는 업로드 때 커버를 미리 찾아 두므로 업로드 직후 차례면 바로 걸린다.
+    /// </summary>
     private static readonly TimeSpan[] CoverChaseDelays =
-        [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(40)];
+        [TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(6),
+         TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30)];
 
     private async void FetchThumbnail(int epoch)
     {
