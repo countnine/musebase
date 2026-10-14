@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using Musebase.Core;
+using Musebase.Core.Translation;
 
 namespace Musebase.Server;
 
@@ -66,14 +68,20 @@ public sealed class AutoTranslator
     /// <summary>
     /// 방금 저장된 곡을 큐에 넣는다. 대상 언어 번역이 이미 있거나 꺼져 있으면 아무것도 안 한다.
     /// </summary>
+    /// <param name="lrc">
+    /// 저장된 가사 전문. 주면 언어 목록에 대상 언어가 있어도 <b>실제로 채워진 정도</b>를 확인한다 —
+    /// 기기가 로컬 캐시로 크레딧 한 줄만 채워 올린 곡도 <c>langs</c>에는 <c>ko</c>가 붙는다
+    /// (<see cref="TranslationCoverage"/>).
+    /// </param>
     /// <returns>큐에 넣었으면 true.</returns>
-    public bool Offer(string? key, IReadOnlyList<string>? langs)
+    public bool Offer(string? key, IReadOnlyList<string>? langs, string? lrc = null)
     {
         if (string.IsNullOrEmpty(key) || !Enabled) return false;
 
         // 기기가 이미 번역해 올렸으면 할 일이 없다(PC가 DeepL로 번역해 올리는 경우).
         var target = _settings.Current.Lang.ToLowerInvariant();
-        if (langs is not null && langs.Any(l => string.Equals(l, target, StringComparison.OrdinalIgnoreCase)))
+        if (langs is not null && langs.Any(l => string.Equals(l, target, StringComparison.OrdinalIgnoreCase))
+            && !(lrc is not null && Lyrics.Parse(lrc) is { } lyrics && !TranslationCoverage.IsTranslated(lyrics, target)))
             return false;
 
         if (!_queued.TryAdd(key, 0)) return false;
@@ -81,6 +89,26 @@ public sealed class AutoTranslator
 
         _queued.TryRemove(key, out _);   // 큐가 가득 찼다 — 일괄 작업이 나중에 주워 간다
         return false;
+    }
+
+    /// <summary>
+    /// 대상 언어 태그는 있지만 몇 줄만 번역된 곡을 큐에 넣는다. 예전 판정(태그가 한 줄이라도 있으면
+    /// 번역됨)으로 자동 번역·일괄 작업에서 빠져 있던 곡을 줍기 위해 서버가 뜰 때 한 번 돈다.
+    /// 번역된 줄은 다시 보내지 않으므로(빠진 줄만) 비용은 그 줄 몫이다.
+    /// </summary>
+    /// <returns>큐에 넣은 곡 수.</returns>
+    public int OfferPartlyTranslated()
+    {
+        if (!Enabled) return 0;
+        var target = _settings.Current.Lang.ToLowerInvariant();
+        var offered = 0;
+        foreach (var (key, lrc) in _store.WithLang(target))
+            if (Lyrics.Parse(lrc) is { } lyrics && !TranslationCoverage.IsTranslated(lyrics, target)
+                && Offer(key, null))
+                offered++;
+        if (offered > 0)
+            _logger.LogInformation("자동 번역: 몇 줄만 번역된 곡 {Count}곡을 큐에 넣었습니다", offered);
+        return offered;
     }
 
     /// <summary>서버가 사는 동안 도는 루프. 곡 하나에서 무슨 일이 나도 루프는 죽지 않는다.</summary>

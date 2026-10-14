@@ -584,8 +584,11 @@ public sealed class LyricsCoordinator : IDisposable
     /// </summary>
     private bool CanReceiveServerTranslation => RemoteCache is not null && !TargetIsChinese;
 
-    private bool HasTargetTranslation(Lyrics lyrics) =>
-        lyrics.Lines.Any(l => l.Attachments.Translation(TargetLangLower) is not null);
+    /// <summary>
+    /// 대상 언어 번역이 "충분히" 붙었는가 — 한 줄만 있어도 번역됨으로 치면, 로컬 캐시로 크레딧 한 줄만
+    /// 채운 곡이 서버 번역을 기다리지 않는다(<see cref="TranslationCoverage"/>).
+    /// </summary>
+    private bool HasTargetTranslation(Lyrics lyrics) => TranslationCoverage.IsTranslated(lyrics, TargetLangLower);
 
     /// <summary>
     /// 서버에 대상 언어 번역본이 생기면 받아 쓴다. 받았으면 true(직접 번역하지 않는다).
@@ -613,7 +616,9 @@ public sealed class LyricsCoordinator : IDisposable
 
             var result = await remoteCache.GetAsync(track.Title, track.Artist, ct);
             if (ct.IsCancellationRequested || !ReferenceEquals(CurrentLyrics, current)) return false;
-            if (result.Lyrics is not { } shared || !result.HasLanguage(TargetLangLower)) continue;
+            // 언어 목록(langs)이 아니라 실제 채워진 정도로 본다 — 방금 올린 "한 줄만 번역된" 판을
+            // 서버 번역으로 착각해 기다림을 끝내면 안 된다.
+            if (result.Lyrics is not { } shared || !HasTargetTranslation(shared)) continue;
 
             CurrentLyrics = shared;
             _lastLineIndex = int.MinValue; // 번역이 붙은 줄로 다시 발행

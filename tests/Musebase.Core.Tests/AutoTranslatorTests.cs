@@ -52,6 +52,42 @@ public class AutoTranslatorTests : IDisposable
         Assert.Equal(0, auto.Pending);
     }
 
+    private const string OneOfFourKo = """
+        [00:01.00]Produced by：James Ford
+        [00:01.00][tr:ko]제작: 제임스 포드
+        [00:02.00]I wanna see you alone
+        [00:02.00][tr]我想独自见你
+        [00:03.00]I wanna sharp the stone
+        [00:04.00]I wanna bounce the bone
+        """;
+
+    [Fact]
+    public void 한_줄만_번역돼_올라온_곡은_태그가_있어도_넣는다()
+    {
+        // 실제 사례(Starburster): 기기가 로컬 캐시로 크레딧 한 줄만 채워 올려 langs에 ko가 붙었고,
+        // 서버는 "이미 번역됨"으로 보고 넘어가 61줄 중 60줄이 번역 없이 남았다.
+        var (store, auto) = New(Options());
+        using var _ = store;
+
+        Assert.True(auto.Offer("starburster|fontaines d.c.", ["*", "ko"], OneOfFourKo));
+    }
+
+    [Fact]
+    public void 뜰_때_몇_줄만_번역된_곡을_줍는다()
+    {
+        var (store, auto) = New(Options());
+        using var db = store;
+        store.Upsert(new LyricsEntry { Title = "Starburster", Artist = "Fontaines D.C.", Lrc = OneOfFourKo }, "pc", out _);
+        store.Upsert(new LyricsEntry
+        {
+            Title = "Kids", Artist = "MGMT",
+            Lrc = "[00:01.00]hello\n[00:01.00][tr:ko]안녕\n[00:02.00]bye\n[00:02.00][tr:ko]잘 가\n",
+        }, "pc", out _);
+
+        Assert.Equal(1, auto.OfferPartlyTranslated());
+        Assert.Equal(1, auto.Pending);
+    }
+
     [Fact]
     public void 같은_곡은_한_번만_넣는다()
     {
