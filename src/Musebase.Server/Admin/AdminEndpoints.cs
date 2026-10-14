@@ -230,6 +230,7 @@ public static class AdminEndpoints
                 "untranslated" => model.WithoutTranslation.Count,
                 "duplicates" => model.DuplicateCandidates.Count,
                 "ads" => model.AdTitles?.Count ?? 0,
+                "instrumentals" => model.Instrumentals?.Count ?? 0,
                 _ => model.CleanedMatches.Count,
             };
             var note = count < FullRows ? null : $"최대 {FullRows}건까지 보여 줍니다";
@@ -351,6 +352,38 @@ public static class AdminEndpoints
             var titleKey = form["titleKey"].ToString();
             if (!string.IsNullOrWhiteSpace(titleKey)) store.RemoveAdTitle(titleKey);
             return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("광고 표시를 해제했습니다.")}");
+        });
+
+        // ---- 연주곡 ----
+        // 제목에 연주곡 표기가 없어 앱의 추정이 놓친 곡에 가사가 붙었을 때, 사람이 표시하면 그 곡은
+        // 이후 어느 기기도 가사를 찾지 않는다(앱에서도 같은 일을 할 수 있다 — POST /v1/instrumental).
+
+        app.MapPost(Routes.Base + "/song/instrumental", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var key = form["key"].ToString();
+            var entry = string.IsNullOrWhiteSpace(key) ? null : store.GetByKey(key);
+            if (entry is null) return SeeOther(Routes.Base + "/search");
+
+            store.AddInstrumental(entry.Title, entry.Artist, "관리 화면");
+            var notice = $"\"{entry.Title}\"을(를) 연주곡으로 표시했습니다 — 가사를 지웠고 앞으로 찾지 않습니다.";
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString(notice)}");
+        });
+
+        app.MapPost(Routes.Base + "/instrumentals/remove", async (HttpRequest req) =>
+        {
+            if (!LoggedIn(req)) return Html(AdminPages.Login(null, options.HasPassword));
+            var form = await req.ReadFormAsync();
+            if (!AdminAuth.VerifyCsrf(form["csrf"].ToString(), options.Token, Cookie(req) ?? ""))
+                return Results.Json(new ApiError("csrf"), statusCode: StatusCodes.Status400BadRequest);
+
+            var key = form["key"].ToString();
+            if (!string.IsNullOrWhiteSpace(key)) store.RemoveInstrumental(key);
+            return SeeOther($"{Routes.Base}?notice={Uri.EscapeDataString("연주곡 표시를 해제했습니다 — 다음 재생 때 다시 가사를 찾습니다.")}");
         });
 
         // ---- 커버 이미지 ----
@@ -1023,6 +1056,7 @@ public static class AdminEndpoints
                 MeaningSources: MeaningsNow().SourceNames,
                 Csrf: AdminAuth.Csrf(options.Token, Cookie(req) ?? ""),
                 AdTitles: store.AdTitles(rows),
+                Instrumentals: store.Instrumentals(rows),
                 // 연결할 수 없는 구성이면 null — 카드를 아예 그리지 않는다.
                 LastFm: lastfm.CanConnect
                     ? new LastFmLink(store.GetSetting(LastFmAccount.UserSetting))

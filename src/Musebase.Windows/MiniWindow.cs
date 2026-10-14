@@ -54,7 +54,10 @@ public sealed record MiniWindowActions(
     Func<Task<SongMeaningView?>>? GetMeaning = null,
     Func<bool, Task<MeaningRequestResult>>? MakeMeaning = null,
     // 가사 서버 주소(설정값) — 이 곡의 서버 화면을 브라우저로 열 때 쓴다. 없으면 그 버튼이 사라진다
-    Func<string?>? ServerEndpoint = null);
+    Func<string?>? ServerEndpoint = null,
+    // 연주곡 표시: 지금 상태(곡이 없으면 null)와 토글
+    Func<bool?>? InstrumentalState = null,
+    Action? ToggleInstrumental = null);
 
 /// <summary>
 /// 작업표시줄에 상주하는 컨트롤 허브. 오버레이가 숨겨져도(사용자 숨김·일시정지·가림방지)
@@ -116,6 +119,7 @@ public sealed class MiniWindow : Window
     private readonly Button _search;
     private readonly Button _openLyrics;
     private readonly Button _wrong;
+    private readonly Button _instrumental;
     private readonly Button _overlayToggle;
     private readonly Button _settingsButton;
     private readonly Button _exit;
@@ -345,11 +349,12 @@ public sealed class MiniWindow : Window
 
         _openLyrics = IconButton(() => _a.OpenLyricsEditor(), "", "mini.openLyrics");   // Edit
         _wrong = IconButton(() => _a.MarkWrong(), "", "mini.wrong");                    // Warning
+        _instrumental = IconButton(() => _a.ToggleInstrumental?.Invoke(), "", "mini.instrumental"); // Audio
         _overlayToggle = IconButton(
             () => _a.SetOverlayVisible(!_a.IsOverlayVisible()), "", "mini.showOverlay"); // Caption
         _settingsButton = IconButton(() => _a.OpenSettings(), "", "mini.settings");           // Settings
         _exit = IconButton(() => { _closingToExit = true; _a.Exit(); }, "", "mini.exit"); // PowerButton
-        var featureRow = Row(_openLyrics, _wrong, _overlayToggle, _settingsButton, _exit);
+        var featureRow = Row(_openLyrics, _wrong, _instrumental, _overlayToggle, _settingsButton, _exit);
 
         var bottom = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
         bottom.Children.Add(playbackRow);
@@ -1416,6 +1421,13 @@ public sealed class MiniWindow : Window
         var hasLyrics = _a.HasLyrics();
         _openLyrics.IsEnabled = hasLyrics;
         _wrong.IsEnabled = hasLyrics;
+
+        // 연주곡 토글: 곡이 있으면 언제든(가사가 없어도 표시해 둘 수 있다). 표시된 상태는 강조색으로.
+        var instrumental = _a.InstrumentalState?.Invoke();
+        _instrumental.Visibility = _a.ToggleInstrumental is null ? Visibility.Collapsed : Visibility.Visible;
+        _instrumental.IsEnabled = instrumental is not null;
+        _instrumental.ToolTip = Loc.T(instrumental == true ? "mini.instrumental.undo" : "mini.instrumental");
+        _instrumental.Foreground = instrumental == true ? new SolidColorBrush(Color.FromRgb(0x4C, 0xC2, 0xFF)) : _wrong.Foreground;
     }
 
     private void ApplyText()
@@ -1428,6 +1440,7 @@ public sealed class MiniWindow : Window
         _search.ToolTip = Loc.T("mini.search");
         _openLyrics.ToolTip = Loc.T("mini.openLyrics");
         _wrong.ToolTip = Loc.T("mini.wrong");
+        _instrumental.ToolTip = Loc.T(_a.InstrumentalState?.Invoke() == true ? "mini.instrumental.undo" : "mini.instrumental");
         _coverRetry.ToolTip = Loc.T("mini.cover");
         _openServer.ToolTip = Loc.T("mini.openServer");
         _minimize.ToolTip = Loc.T("mini.minimize");

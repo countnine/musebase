@@ -72,6 +72,10 @@ public sealed class MusebaseApp : Application
             log: msg => global::Android.Util.Log.Info("Musebase", msg));
         Coordinator.StatusChanged += s => LastStatus = s;
 
+        // "연주곡" 목록을 복원하고 바뀌면 저장한다(서버 표시의 로컬 사본).
+        foreach (var key in Settings.InstrumentalTracks) Coordinator.InstrumentalTrackKeys.Add(key);
+        Coordinator.InstrumentalTracksChanged += () => Settings.InstrumentalTracks = Coordinator.InstrumentalTrackKeys.ToList();
+
         global::Android.Util.Log.Info("Musebase",
             $"engine assembled: sources=[{string.Join(",", config.EnabledLyricsSources)}] " +
             $"engine={config.TranslationEngineId} target={config.TargetLanguage} db={_dbPath}");

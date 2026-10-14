@@ -112,6 +112,8 @@
   "tray.export": "Export lyrics (.lrc)…",
   "tray.meaning": "About this song…",
   "tray.wrong": "Mark as no lyrics (wrong lyrics)",
+  "tray.instrumental": "Mark as instrumental (don't look for lyrics)",
+  "tray.instrumental.undo": "Unmark instrumental (look for lyrics again)",
   "tray.settings": "Settings…",
   "tray.exit": "Exit",
   "tray.update.check": "Check for updates… (v{version})",
@@ -168,6 +170,8 @@
   "mini.search": "Search lyrics",
   "mini.openLyrics": "Open lyrics",
   "mini.wrong": "Wrong lyrics",
+  "mini.instrumental": "Mark as instrumental",
+  "mini.instrumental.undo": "Unmark instrumental",
   "mini.love.off": "♡ Love",
   "mini.love.unknown": "Could not check the Last.fm status — click to love this track",
   "mini.love.on": "♥ Loved",
@@ -247,6 +251,7 @@
   "status.short.found": "{service} (q={quality})",
   "status.short.notFound": "No lyrics found",
   "status.short.wrong": "Lyrics hidden (wrong lyrics)",
+  "status.short.instrumental": "Instrumental — no lyrics",
   "status.short.manual": "Chosen manually ({service})",
   "status.short.edited": "Your edit applied",
   "status.hidden.user": "{track} — lyrics hidden (marked by you)",
@@ -255,6 +260,7 @@
   "status.found": "{track} — {service} (q={quality})",
   "status.notFound": "{track} — lyrics not found",
   "status.wrong": "{track} — lyrics hidden (wrong lyrics)",
+  "status.instrumental": "{track} — instrumental (no lyrics)",
   "status.manual": "{track} — manual selection ({service})",
   "status.edited": "{track} — user edit applied"
 }

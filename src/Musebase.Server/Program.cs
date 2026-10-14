@@ -147,6 +147,10 @@ app.MapGet(Routes.Api + "/lyrics", (HttpRequest request, string? title, string? 
     if (store.IsAdTitle(title!))
         return Results.Json(new NotFoundBody("ad", false, 0, Ad: true), statusCode: 404);
 
+    // 연주곡으로 표시된 곡도 여기서 끝난다 — 기기는 제공자 검색도 업로드도 하지 않는다.
+    if (store.IsInstrumental(title!, artist ?? ""))
+        return Results.Json(new NotFoundBody("instrumental", false, 0, Instrumental: true), statusCode: 404);
+
     var found = store.Get(title!, artist ?? "");
     var device = AdminEndpoints.DeviceOf(request, admin);
 
@@ -207,6 +211,9 @@ app.MapPut(Routes.Api + "/lyrics", async (HttpRequest request) =>
     // 차단의 실효는 이 줄에 있고, 조회 쪽 힌트는 헛도는 검색을 아끼기 위한 것이다.
     if (store.IsAdTitle(incoming.Title))
         return Results.Json(new ApiError("ad"), statusCode: StatusCodes.Status202Accepted);
+    // 연주곡으로 표시된 곡의 가사는 받지 않는다(구버전 앱이 표시를 몰라도 여기서 막힌다).
+    if (store.IsInstrumental(incoming.Title, incoming.Artist))
+        return Results.Json(new ApiError("instrumental"), statusCode: StatusCodes.Status202Accepted);
 
     // 어느 기기가 올렸는지 남긴다(관리자 화면의 "올린 기기").
     var saved = store.Upsert(incoming, updatedBy: AdminEndpoints.DeviceOf(request, admin), out var rejection);
@@ -335,6 +342,19 @@ app.MapPost(Routes.Api + "/song/cover", async (HttpRequest request, string? titl
 
     var links = await extras.ResolveAsync(entry);
     return Results.Ok(SongExtrasBody.From(links, await extras.LoveAsync(entry), await extras.SpotifyAsync(entry)));
+});
+
+// 앱에서 "연주곡으로 표시" — 그 곡의 가사를 지우고 이후 조회에 instrumental로 답한다. on=0이면 해제.
+// 가사 행이 없어도 된다(가사를 못 찾은 연주곡도 표시해 두면 기기마다 헛검색하지 않는다).
+app.MapPost(Routes.Api + "/instrumental", (HttpRequest request, string? title, string? artist, string? on) =>
+{
+    if (!Authorized(request)) return Unauthorized();
+    if (string.IsNullOrWhiteSpace(title)) return Results.Json(new ApiError("title required"), statusCode: 400);
+
+    var instrumental = on != "0";
+    if (instrumental) store.AddInstrumental(title!, artist ?? "", AdminEndpoints.DeviceOf(request, admin));
+    else store.RemoveInstrumental(LyricsStore.ExactKey(title!, artist ?? ""));
+    return Results.Ok(new InstrumentalBody(instrumental));
 });
 
 app.MapPost(Routes.Api + "/song/love", async (HttpRequest request, string? title, string? artist, string? on) =>

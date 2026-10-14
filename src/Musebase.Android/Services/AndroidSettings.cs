@@ -35,6 +35,7 @@ public sealed class AndroidSettings
     private const string KeyPlaybackSource = "PlaybackSource";
     private const string KeyIncludeVideoApps = "IncludeVideoApps";
     private const string KeyPreferredSources = "PreferredSources";
+    private const string KeyInstrumentalTracks = "InstrumentalTracks";
     private const string KeyLyricsServerEndpoint = "LyricsServerEndpoint";
     private const string KeyLyricsServerToken = "LyricsServerToken";
     private const string KeyAdMuteEnabled = "AdMuteEnabled";
@@ -335,6 +336,23 @@ public sealed class AndroidSettings
             return raw!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
         set => Put(KeyPreferredSources, value is null ? null : string.Join(",", value));
+    }
+
+    /// <summary>
+    /// "연주곡"으로 표시해 가사를 찾지 않을 트랙 키 목록(서버 표시의 로컬 사본 — 오프라인에서도 지킨다).
+    /// 키에 쉼표가 들어갈 수 있어 줄바꿈으로 이어 저장한다.
+    /// </summary>
+    public IReadOnlyList<string> InstrumentalTracks
+    {
+        get
+        {
+            var raw = _prefs.GetString(KeyInstrumentalTracks, null);
+            if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
+            return raw!.Split('
+', StringSplitOptions.RemoveEmptyEntries);
+        }
+        set => Put(KeyInstrumentalTracks, value is null || value.Count == 0 ? null : string.Join("
+", value));
     }
 
     /// <summary>
