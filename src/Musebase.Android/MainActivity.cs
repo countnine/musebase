@@ -952,8 +952,8 @@ public sealed class MainActivity : Activity
             .SetTitle(marked ? "연주곡 표시 해제" : "연주곡으로 표시")!
             .SetMessage(marked
                 ? "이 곡의 연주곡 표시를 지우고 가사를 다시 찾습니다."
-                : "이 곡의 가사를 지우고 앞으로 찾지 않습니다(가사 서버의 다른 기기도).
-다시 이 버튼으로 되돌릴 수 있습니다.")!
+                : "이 곡의 가사를 지우고 앞으로 찾지 않습니다(가사 서버의 다른 기기도). "
+                  + "다시 이 버튼으로 되돌릴 수 있습니다.")!
             .SetPositiveButton(marked ? "해제" : "표시", (_, _) =>
             {
                 coordinator.SetCurrentInstrumental(!marked);

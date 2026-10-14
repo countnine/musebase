@@ -36,6 +36,7 @@ public sealed class AndroidSettings
     private const string KeyIncludeVideoApps = "IncludeVideoApps";
     private const string KeyPreferredSources = "PreferredSources";
     private const string KeyInstrumentalTracks = "InstrumentalTracks";
+    private const char LineBreak = (char)10;
     private const string KeyLyricsServerEndpoint = "LyricsServerEndpoint";
     private const string KeyLyricsServerToken = "LyricsServerToken";
     private const string KeyAdMuteEnabled = "AdMuteEnabled";
@@ -348,11 +349,9 @@ public sealed class AndroidSettings
         {
             var raw = _prefs.GetString(KeyInstrumentalTracks, null);
             if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
-            return raw!.Split('
-', StringSplitOptions.RemoveEmptyEntries);
+            return raw!.Split(LineBreak, StringSplitOptions.RemoveEmptyEntries);
         }
-        set => Put(KeyInstrumentalTracks, value is null || value.Count == 0 ? null : string.Join("
-", value));
+        set => Put(KeyInstrumentalTracks, value is null || value.Count == 0 ? null : string.Join(LineBreak, value));
     }
 
     /// <summary>
