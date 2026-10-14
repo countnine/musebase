@@ -101,11 +101,18 @@ public sealed record ApiError([property: JsonPropertyName("error")] string Error
 /// 광고는 곡이 아니라서 검색이 늘 헛돌고 서버에는 쓰레기 행이 쌓인다.
 /// 구버전 클라이언트는 이 필드를 모르고 평범한 미스로 처리한다(그래도 서버가 업로드를 막는다).
 /// </param>
+/// <param name="Instrumental">
+/// 이 곡은 <b>연주곡으로 표시</b>돼 있다(곡 단위). 클라이언트는 제공자 검색도 업로드도 하지 않는다.
+/// </param>
 public sealed record NotFoundBody(
     [property: JsonPropertyName("error")] string Error,
     bool Pending,
     int RetryAfterMs,
-    bool Ad = false);
+    bool Ad = false,
+    bool Instrumental = false);
+
+/// <summary><c>POST /v1/instrumental</c> 응답 — 지금 상태.</summary>
+public sealed record InstrumentalBody([property: JsonPropertyName("instrumental")] bool Instrumental);
 
 /// <summary>
 /// <c>POST /v1/meaning</c>이 <b>의미를 만들지 못했을 때</b>(202)의 본문.

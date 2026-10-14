@@ -12,6 +12,8 @@ public enum LyricsStatusKind
     Wrong,
     Manual,
     Edited,
+    /// <summary>연주곡 — 사람이 표시했거나(앱·관리 화면), 제목이 연주곡인데 맞는 가사가 없었다.</summary>
+    Instrumental,
 }
 
 /// <summary>

@@ -117,12 +117,15 @@ public sealed class MainActivity : Activity
             () => StartActivity(new Intent(this, typeof(SearchActivity))));
         _meaningPill = BuildMeaningPill();
         var wrongButton = IconButton(global::Android.Resource.Drawable.IcMenuDelete, "틀린 가사로 표시", ConfirmMarkWrong);
+        var instrumentalButton = IconButton(
+            global::Android.Resource.Drawable.IcLockSilentModeOff, "연주곡으로 표시/해제", ConfirmToggleInstrumental);
         var settingsButton = IconButton(global::Android.Resource.Drawable.IcMenuPreferences, "설정",
             () => StartActivity(new Intent(this, typeof(SettingsActivity))));
         var quitButton = IconButton(global::Android.Resource.Drawable.IcMenuCloseClearCancel, "앱 종료", ConfirmQuit);
         iconBar.AddView(searchButton);
         iconBar.AddView(_meaningPill);
         iconBar.AddView(wrongButton);
+        iconBar.AddView(instrumentalButton);
         iconBar.AddView(_overlayButton);
         iconBar.AddView(_moveButton);
         iconBar.AddView(settingsButton);
@@ -926,6 +929,35 @@ public sealed class MainActivity : Activity
             {
                 MusebaseApp.Instance?.Coordinator.MarkWrongLyrics();
                 Toast.MakeText(this, "틀린 가사로 표시했습니다.", ToastLength.Short)?.Show();
+            })!
+            .SetNegativeButton("취소", (IDialogInterfaceOnClickListener?)null)!
+            .Show();
+    }
+
+    /// <summary>
+    /// 현재 곡을 "연주곡"으로 표시하거나 되돌린다(Windows 트레이·제어판의 같은 기능). 표시하면 가사를 지우고
+    /// 이 기기와 가사 서버 모두 다시 찾지 않는다 — 제목에 연주곡 표기가 없어 앱이 놓친 곡을 사람이 메운다.
+    /// </summary>
+    private void ConfirmToggleInstrumental()
+    {
+        var coordinator = MusebaseApp.Instance?.Coordinator;
+        if (coordinator?.CurrentTrack is null)
+        {
+            Toast.MakeText(this, "재생 중인 곡이 없습니다.", ToastLength.Short)?.Show();
+            return;
+        }
+
+        var marked = coordinator.IsCurrentInstrumental;
+        new AlertDialog.Builder(this)
+            .SetTitle(marked ? "연주곡 표시 해제" : "연주곡으로 표시")!
+            .SetMessage(marked
+                ? "이 곡의 연주곡 표시를 지우고 가사를 다시 찾습니다."
+                : "이 곡의 가사를 지우고 앞으로 찾지 않습니다(가사 서버의 다른 기기도). "
+                  + "다시 이 버튼으로 되돌릴 수 있습니다.")!
+            .SetPositiveButton(marked ? "해제" : "표시", (_, _) =>
+            {
+                coordinator.SetCurrentInstrumental(!marked);
+                Toast.MakeText(this, marked ? "연주곡 표시를 해제했습니다." : "연주곡으로 표시했습니다.", ToastLength.Short)?.Show();
             })!
             .SetNegativeButton("취소", (IDialogInterfaceOnClickListener?)null)!
             .Show();

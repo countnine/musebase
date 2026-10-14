@@ -11,6 +11,9 @@ public sealed record MissRow(
 /// <summary>광고로 표시해 차단한 제목 1건.</summary>
 public sealed record AdTitleRow(string TitleKey, string Title, string Artist, string AddedAt);
 
+/// <summary>연주곡으로 표시된 곡 한 줄(관리 화면 목록).</summary>
+public sealed record InstrumentalRow(string Key, string Title, string Artist, string AddedAt, string? AddedBy);
+
 /// <summary>기기별 활동.</summary>
 public sealed record DeviceRow(string Device, int Lookups, int Hits, string LastAt);
 
@@ -153,6 +156,8 @@ public sealed record DashboardModel(
     string Csrf,
     /// <summary>광고로 표시해 차단한 제목들(되돌릴 수 있어야 하므로 화면에 보여 준다).</summary>
     IReadOnlyList<AdTitleRow>? AdTitles = null,
+    /// <summary>연주곡으로 표시한 곡들(되돌릴 수 있어야 하므로 화면에 보여 준다).</summary>
+    IReadOnlyList<InstrumentalRow>? Instrumentals = null,
     /// <summary>Last.fm 계정 연결 상태 — 쓸 수 없는 구성이면 <c>null</c>이라 카드를 아예 안 그린다.</summary>
     LastFmLink? LastFm = null,
     /// <summary>지금 쓰는 의미 생성 엔진·모델(카드에 표시 + 화면에서 변경).</summary>

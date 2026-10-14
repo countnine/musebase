@@ -150,6 +150,14 @@ internal static class Program
                 settings.Save();
             };
 
+            // "연주곡" 목록도 같은 방식으로 — 서버 표시의 로컬 사본(오프라인·서버 없는 경우).
+            foreach (var key in settings.InstrumentalTracks) coordinator.InstrumentalTrackKeys.Add(key);
+            coordinator.InstrumentalTracksChanged += () =>
+            {
+                settings.InstrumentalTracks = coordinator.InstrumentalTrackKeys.ToList();
+                settings.Save();
+            };
+
             var overlay = new OverlayWindow(settings);
             overlay.SetUserVisible(settings.OverlayVisible);
 
@@ -333,6 +341,13 @@ internal static class Program
                 editorWindow.Show();
             }
             void MarkWrong() => coordinator.MarkWrongLyrics();
+            // 연주곡 표시 토글 — 표시하면 가사를 지우고 이 기기·서버 모두 다시 찾지 않는다.
+            void ToggleInstrumental()
+            {
+                if (coordinator.CurrentTrack is null) return;
+                coordinator.SetCurrentInstrumental(!coordinator.IsCurrentInstrumental);
+                miniWindow?.RefreshLyricsFeatures();
+            }
             void OpenMeaning()
             {
                 if (coordinator.CurrentTrack is null) return;
@@ -386,6 +401,10 @@ internal static class Program
             // 현재 가사가 틀렸을 때: 표시 중단 + 캐시 제거 + 재검색 억제
             var wrongItem = new MenuItem { Header = Loc.T("tray.wrong") };
             wrongItem.Click += (_, _) => MarkWrong();
+
+            // 연주곡인데 가사가 붙었을 때(또는 가사 없는 연주곡을 기억해 둘 때)
+            var instrumentalItem = new MenuItem { Header = Loc.T("tray.instrumental") };
+            instrumentalItem.Click += (_, _) => ToggleInstrumental();
 
             var openMiniItem = new MenuItem { Header = Loc.T("mini.open") };
             openMiniItem.Click += (_, _) => miniWindow?.ShowFromTray();
@@ -647,6 +666,8 @@ internal static class Program
                 editItem.IsEnabled = hasLyrics;
                 exportItem.IsEnabled = hasLyrics;
                 wrongItem.IsEnabled = hasLyrics;
+                instrumentalItem.IsEnabled = coordinator.CurrentTrack is not null;
+                instrumentalItem.Header = Loc.T(coordinator.IsCurrentInstrumental ? "tray.instrumental.undo" : "tray.instrumental");
                 // 의미는 가사가 없어도 볼 수 있다(서버에 곡만 있으면 된다).
                 meaningItem.IsEnabled = coordinator.CurrentTrack is not null;
                 RebuildSourceMenu();
@@ -657,6 +678,7 @@ internal static class Program
             menu.Items.Add(exportItem);
             menu.Items.Add(meaningItem);
             menu.Items.Add(wrongItem);
+            menu.Items.Add(instrumentalItem);
             menu.Items.Add(new Separator());
             menu.Items.Add(overlayToggle);
             menu.Items.Add(moveToggle);
@@ -715,6 +737,8 @@ internal static class Program
                 OpenLyricsEditor: OpenLyricsEditor,
                 MarkWrong: MarkWrong,
                 HasLyrics: HasLyrics,
+                InstrumentalState: () => coordinator.CurrentTrack is null ? null : coordinator.IsCurrentInstrumental,
+                ToggleInstrumental: ToggleInstrumental,
                 CloseToTray: () => settings.MiniWindowCloseToTray,
                 // 가사 서버가 없으면 전부 null이라 커버·좋아요 자리가 조용히 비워진다.
                 OpenMeaning: OpenMeaning,
@@ -822,6 +846,7 @@ internal static class Program
         LyricsStatusKind.Wrong => Loc.T("status.short.wrong"),
         LyricsStatusKind.Manual => Loc.T("status.short.manual", ("service", s.Service ?? "")),
         LyricsStatusKind.Edited => Loc.T("status.short.edited"),
+        LyricsStatusKind.Instrumental => Loc.T("status.short.instrumental"),
         _ => "",
     };
 
@@ -836,6 +861,7 @@ internal static class Program
                 LyricsStatusKind.Wrong => Loc.T("status.wrong", ("track", s.Track ?? "")),
                 LyricsStatusKind.Manual => Loc.T("status.manual", ("track", s.Track ?? ""), ("service", s.Service ?? "")),
                 LyricsStatusKind.Edited => Loc.T("status.edited", ("track", s.Track ?? "")),
+                LyricsStatusKind.Instrumental => Loc.T("status.instrumental", ("track", s.Track ?? "")),
                 _ => "",
             };
 

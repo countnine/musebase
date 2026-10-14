@@ -159,6 +159,20 @@ public sealed class LyricsCoordinator : IDisposable
     /// <summary>억제 목록 변경 알림(설정 영속화용)</summary>
     public event Action? SuppressedTracksChanged;
 
+    /// <summary>
+    /// "연주곡"으로 표시된 트랙 키 집합 — 가사를 찾지도 표시하지도 않는다. 소비자가 설정과 동기화한다.
+    /// "틀린 가사"와 달리 <b>서버에도 알려</b> 다른 기기도 찾지 않게 한다(서버가 진실의 원천,
+    /// 이 집합은 오프라인·서버 없는 기기를 위한 사본).
+    /// </summary>
+    public HashSet<string> InstrumentalTrackKeys { get; } = new();
+
+    /// <summary>연주곡 목록 변경 알림(설정 영속화용)</summary>
+    public event Action? InstrumentalTracksChanged;
+
+    /// <summary>지금 곡이 연주곡으로 표시돼 있는가(UI 토글 표시용).</summary>
+    public bool IsCurrentInstrumental =>
+        CurrentTrack is { } t && InstrumentalTrackKeys.Contains(LyricsCacheStore.MakeKey(t.Title, t.Artist));
+
     public LyricsCoordinator(INowPlayingSource nowPlaying, IEngineDispatcher dispatcher, LyricsSearchService? search = null)
     {
         _nowPlaying = nowPlaying;
@@ -235,8 +249,15 @@ public sealed class LyricsCoordinator : IDisposable
             return;
         }
 
+        // 연주곡으로 표시된 곡은 찾지 않는다(이 기기나 서버에서 사람이 표시했다).
+        if (InstrumentalTrackKeys.Contains(LyricsCacheStore.MakeKey(track.Title, track.Artist)))
+        {
+            RaiseStatus(new LyricsStatus(LyricsStatusKind.Instrumental, track.ToString()));
+            return;
+        }
+
         // 1) 캐시 히트면 네트워크 검색 생략 (번역 포함 저장분이라 오프라인도 동작)
-        if (Cache?.Get(track.Title, track.Artist) is { } cached)
+        if (Cache?.Get(track.Title, track.Artist) is { } cached && !IsVocalForInstrumental(track, cached))
         {
             CurrentLyrics = cached;
             _lastLineIndex = int.MinValue;
@@ -276,7 +297,7 @@ public sealed class LyricsCoordinator : IDisposable
             yielding = result is { Pending: true, Lyrics: null } && CanShareTranslation;
             if (yielding) _yieldRetryMs = Math.Clamp(result.RetryAfterMs, 1000, 5000);
 
-            if (result.Lyrics is { } remote)
+            if (result.Lyrics is { } remote && !IsVocalForInstrumental(track, remote))
             {
                 CurrentLyrics = remote;
                 _lastLineIndex = int.MinValue;
@@ -308,6 +329,15 @@ public sealed class LyricsCoordinator : IDisposable
                 RaiseStatus(new LyricsStatus(LyricsStatusKind.NotFound, track.ToString()));
                 return;
             }
+
+            // 다른 기기나 관리 화면에서 연주곡으로 표시한 곡 — 이 기기에도 기억해 두고 끝낸다.
+            if (result.IsInstrumental)
+            {
+                RememberInstrumental(track, true);
+                Cache?.Remove(track.Title, track.Artist);
+                RaiseStatus(new LyricsStatus(LyricsStatusKind.Instrumental, track.ToString()));
+                return;
+            }
         }
 
         RaiseStatus(new LyricsStatus(LyricsStatusKind.Searching, track.ToString()));
@@ -319,11 +349,20 @@ public sealed class LyricsCoordinator : IDisposable
             var request = LyricsSearchRequest.ByInfo(
                 track.Title, track.Artist, track.Duration?.TotalSeconds ?? 0, limit: 3);
             var diagnostics = new SearchDiagnostics();
+            // 제목이 연주곡이면(…(Instrumental), - Inst.) 후보도 연주곡 표기일 때만 받는다. 정제 검색이
+            // 괄호를 떼고 보컬 원곡 가사를 찾아와 연주곡 위에 가사가 붙던 문제를 막는다.
+            var instrumentalTitle = InstrumentalTitle.Looks(track.Title);
+            var skippedVocal = 0;
 
             // 첫 결과 우선 표시 후 더 좋은 후보로 교체 (지연 체감 최소화)
             await foreach (var lyrics in _search.SearchAsync(request, cts.Token, diagnostics))
             {
                 if (cts.Token.IsCancellationRequested) return;
+                if (instrumentalTitle && !InstrumentalTitle.Looks(lyrics.IdTags.GetValueOrDefault(Lyrics.TagTitle)))
+                {
+                    skippedVocal++;
+                    continue;
+                }
                 if (CurrentLyrics is null || lyrics.Quality() > CurrentLyrics.Quality())
                 {
                     CurrentLyrics = lyrics;
@@ -353,7 +392,14 @@ public sealed class LyricsCoordinator : IDisposable
                 }
             }
 
-            if (CurrentLyrics is null)
+            if (CurrentLyrics is null && instrumentalTitle)
+            {
+                // 연주곡일 가능성이 높다 — "가사 없음" 대신 그렇게 알린다. 표시(기억)는 하지 않는다:
+                // 제목만 본 추정이라, 다음에 맞는 가사가 생기면 받아야 한다.
+                Log?.Invoke($"[instrumental] 연주곡 제목 — 원곡 가사 후보 {skippedVocal}개를 건너뛰었습니다: {track}");
+                RaiseStatus(new LyricsStatus(LyricsStatusKind.Instrumental, track.ToString()));
+            }
+            else if (CurrentLyrics is null)
             {
                 RaiseStatus(new LyricsStatus(LyricsStatusKind.NotFound, track.ToString()));
                 if (!cts.Token.IsCancellationRequested)
@@ -436,6 +482,59 @@ public sealed class LyricsCoordinator : IDisposable
         SuppressedTracksChanged?.Invoke();
     }
 
+    /// <summary>
+    /// 지금 곡을 <b>연주곡으로 표시</b>한다(또는 되돌린다). 표시하면 가사를 지우고 이 기기와 서버 모두에서
+    /// 다시 찾지 않는다 — 제목에 연주곡 표기가 없어 추정이 놓친 곡을 사람이 메운다.
+    /// 되돌리면 곧바로 다시 찾는다.
+    /// </summary>
+    public void SetCurrentInstrumental(bool instrumental)
+    {
+        if (CurrentTrack is not { } track) return;
+
+        RememberInstrumental(track, instrumental);
+        _ = RemoteCache?.SetInstrumentalAsync(track.Title, track.Artist, instrumental);
+
+        if (instrumental)
+        {
+            try { Cache?.Remove(track.Title, track.Artist); }
+            catch (Exception e) { Log?.Invoke($"[instrumental] 캐시 제거 실패: {e.Message}"); }
+
+            _searchCts?.Cancel();
+            CurrentLyrics = null;
+            _lastLineIndex = int.MinValue;
+            _currentLine = null;
+            _currentLineStartedAt = null;
+            CurrentLineChanged?.Invoke(null);
+            EmitState();
+            RaiseStatus(new LyricsStatus(LyricsStatusKind.Instrumental, track.ToString()));
+        }
+        else
+        {
+            _searchedTrackKey = null; // 같은 곡이라도 다시 찾게
+            OnTrackChanged(track);
+        }
+    }
+
+    /// <summary>
+    /// 연주곡 제목인데 가사는 원곡(보컬) 것인가 — 예전 규칙으로 캐시·서버에 붙어 버린 가사를 쓰지 않는다.
+    /// 사용자가 고친 가사는 존중한다.
+    /// </summary>
+    private bool IsVocalForInstrumental(TrackInfo track, Lyrics lyrics)
+    {
+        if (!InstrumentalTitle.Looks(track.Title)) return false;
+        if (lyrics.Metadata.ServiceName == HttpRemoteLyricsCache.EditedServiceName) return false;
+        if (InstrumentalTitle.Looks(lyrics.IdTags.GetValueOrDefault(Lyrics.TagTitle))) return false;
+        Log?.Invoke($"[instrumental] 연주곡 제목에 원곡 가사가 붙어 있어 쓰지 않습니다: {track}");
+        return true;
+    }
+
+    private void RememberInstrumental(TrackInfo track, bool instrumental)
+    {
+        var key = LyricsCacheStore.MakeKey(track.Title, track.Artist);
+        var changed = instrumental ? InstrumentalTrackKeys.Add(key) : InstrumentalTrackKeys.Remove(key);
+        if (changed) InstrumentalTracksChanged?.Invoke();
+    }
+
     private void Unsuppress(TrackInfo? track)
     {
         if (track is null) return;
@@ -451,6 +550,11 @@ public sealed class LyricsCoordinator : IDisposable
         _searchCts = cts;
 
         Unsuppress(CurrentTrack); // 사용자가 직접 고른 가사이므로 억제 해제
+        if (CurrentTrack is { } picked && InstrumentalTrackKeys.Contains(LyricsCacheStore.MakeKey(picked.Title, picked.Artist)))
+        {
+            RememberInstrumental(picked, false); // 직접 고른 가사가 있으니 연주곡이 아니다
+            _ = RemoteCache?.SetInstrumentalAsync(picked.Title, picked.Artist, false);
+        }
 
         CurrentLyrics = lyrics;
         _lastLineIndex = int.MinValue;

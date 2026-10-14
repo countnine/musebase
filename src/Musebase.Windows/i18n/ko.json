@@ -112,6 +112,8 @@
   "tray.export": "가사 내보내기 (.lrc)…",
   "tray.meaning": "이 곡의 의미…",
   "tray.wrong": "가사 없음으로 표시 (틀린 가사)",
+  "tray.instrumental": "연주곡으로 표시 (가사 찾지 않음)",
+  "tray.instrumental.undo": "연주곡 표시 해제 (가사 다시 찾기)",
   "tray.settings": "설정…",
   "tray.exit": "종료",
   "tray.update.check": "업데이트 확인… (v{version})",
@@ -168,6 +170,8 @@
   "mini.search": "가사 검색",
   "mini.openLyrics": "가사 열기",
   "mini.wrong": "틀린 가사",
+  "mini.instrumental": "연주곡으로 표시",
+  "mini.instrumental.undo": "연주곡 표시 해제",
   "mini.love.off": "♡ 좋아요",
   "mini.love.unknown": "Last.fm 상태를 확인하지 못했습니다 — 누르면 좋아요로 켭니다",
   "mini.love.on": "♥ 좋아요",
@@ -247,6 +251,7 @@
   "status.short.found": "{service} (q={quality})",
   "status.short.notFound": "가사를 찾지 못함",
   "status.short.wrong": "가사 숨김(틀린 가사)",
+  "status.short.instrumental": "연주곡 — 가사 없음",
   "status.short.manual": "수동 선택 ({service})",
   "status.short.edited": "사용자 편집 반영",
   "status.hidden.user": "{track} — 가사 숨김(사용자 표시)",
@@ -255,6 +260,7 @@
   "status.found": "{track} — {service} (q={quality})",
   "status.notFound": "{track} — 가사를 찾지 못함",
   "status.wrong": "{track} — 가사 숨김(틀린 가사)",
+  "status.instrumental": "{track} — 연주곡(가사 없음)",
   "status.manual": "{track} — 수동 선택 ({service})",
   "status.edited": "{track} — 사용자 편집 반영"
 }

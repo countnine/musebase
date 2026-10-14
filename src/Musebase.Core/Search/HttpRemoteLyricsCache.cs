@@ -122,6 +122,11 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
                 _log?.Invoke("[server] 광고로 표시된 제목 — 가사를 찾지 않습니다");
                 return RemoteLyricsResult.Ad;
             }
+            if (body is { Instrumental: true })
+            {
+                _log?.Invoke("[server] 연주곡으로 표시된 곡 — 가사를 찾지 않습니다");
+                return RemoteLyricsResult.Instrumental;
+            }
             if (body is not { Pending: true }) return RemoteLyricsResult.Miss;
             _log?.Invoke($"[server] 다른 기기도 이 곡을 찾는 중 — 번역을 양보합니다({body.RetryAfterMs}ms)");
             return new RemoteLyricsResult(null, true, body.RetryAfterMs, []);
@@ -278,6 +283,24 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     public Task<SongExtras?> SetLovedAsync(
         string title, string artist, bool loved, CancellationToken ct = default) =>
         ExtrasAsync(HttpMethod.Post, "v1/song/love", title, artist, loved ? "1" : "0", ct);
+
+    public async Task<bool> SetInstrumentalAsync(
+        string title, string artist, bool instrumental, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return false;
+        try
+        {
+            using var response = await SendExtrasAsync(
+                HttpMethod.Post, "v1/instrumental", title, artist, instrumental ? "1" : "0", ct).ConfigureAwait(false);
+            _log?.Invoke($"[server] 연주곡 {(instrumental ? "표시" : "해제")}: {title} → {(int)response.StatusCode}");
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception e)
+        {
+            _log?.Invoke($"[server] 연주곡 {(instrumental ? "표시" : "해제")} 실패: {e.Message}");
+            return false;
+        }
+    }
 
     /// <summary>요청 한 번. 상태 코드를 호출자가 봐야 하므로 응답을 그대로 돌려준다.</summary>
     private async Task<HttpResponseMessage> SendExtrasAsync(
@@ -474,6 +497,9 @@ public sealed class HttpRemoteLyricsCache : IRemoteLyricsCache
     {
         /// <summary>이 제목은 광고로 표시돼 있다 — 제공자 검색도 업로드도 하지 않는다.</summary>
         public bool Ad { get; init; }
+
+        /// <summary>이 곡은 연주곡으로 표시돼 있다 — 제공자 검색도 업로드도 하지 않는다.</summary>
+        public bool Instrumental { get; init; }
 
         public string? Error { get; init; }
         public bool Pending { get; init; }

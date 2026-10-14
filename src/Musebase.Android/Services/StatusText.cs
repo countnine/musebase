@@ -21,6 +21,7 @@ internal static class StatusText
         LyricsStatusKind.Wrong => "틀린 가사로 표시됨",
         LyricsStatusKind.Manual => $"가사: 수동 선택 · {status.Service}",
         LyricsStatusKind.Edited => "가사: 사용자 편집",
+        LyricsStatusKind.Instrumental => "연주곡 — 가사 없음",
         _ => "",
     };
 
